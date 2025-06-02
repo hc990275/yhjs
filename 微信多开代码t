@@ -1,0 +1,15 @@
+@echo off
+REM 设置要启动的微信实例数量
+set instances=3
+
+REM 循环启动指定数量的微信实例
+set i=1
+:loop
+if %i% leq %instances% (
+    REM 启动微信实例
+    start "" "F:\Program Files (x86)\Tencent\WeChat\WeChat.exe"
+    set /a i=%i%+1
+    goto loop
+)
+
+exit
