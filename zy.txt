@@ -1,2 +1,2 @@
-hysteria2://a200b175-9c4f-478d-aff4-16763dbeb911@51.75.118.151:20029/?sni=www.bing.com&insecure=1#hy2芬兰
-vless://a200b175-9c4f-478d-aff4-16763dbeb911@51.75.118.151:443?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.nazhumi.com&fp=firefox&pbk=jrju20DxOtRgsHkWwxS1pQKkdlqXwF3ISnm5tIJ-9ng&type=tcp#vless芬兰
+hysteria2://a200b175-9c4f-478d-aff4-16763dbeb911@51.75.118.151:20029/?sni=www.bing.com&insecure=1#hy2法国卡塔
+vless://a200b175-9c4f-478d-aff4-16763dbeb911@51.75.118.151:20029?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.nazhumi.com&fp=firefox&pbk=jrju20DxOtRgsHkWwxS1pQKkdlqXwF3ISnm5tIJ-9ng&type=tcp#vless法国卡塔
