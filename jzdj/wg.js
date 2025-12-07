@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 V8.1 (自动更新+云端隔离+自由缩放)
+// @name          代驾调度系统助手 V8.2 (精准缩放+数值设置)
 // @namespace     http://tampermonkey.net/
-// @version       8.1
-// @description   配置了自动更新地址；UI尺寸翻倍+支持拖拽缩放；接入在线黑名单库自动更新；保留一体化设计与极速填单功能。
+// @version       8.2
+// @description   将缩放功能改为数值输入，仅在订单指派页显示；支持精准设置界面倍率 (0.5-3.0倍)。
 // @author        郭 + You + Gemini Consultant
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @updateURL     https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251
@@ -39,7 +39,6 @@
             PRESETS: [2, 3, 5, 10, 20],
             RAPID_INTERVAL: 500
         },
-        // 在线隔离库地址
         BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=nfpvws&t=1765094235754",
         CLIPBOARD: { MAX_HISTORY: 6 }
     };
@@ -53,12 +52,9 @@
         countdown: 0,
         timerId: null,
         rapidTimer: null,
-        // UI 状态
         uiPos: JSON.parse(GM_getValue('uiPos', '{"top":"80px","left":"20px"}')),
-        uiScale: parseFloat(GM_getValue('uiScale', '1.0')), // 默认缩放比例
-        // 数据
+        uiScale: parseFloat(GM_getValue('uiScale', '1.0')), // 默认1倍
         history: JSON.parse(GM_getValue('clipHistory', '{"phones":[], "addrs":[]}')),
-        // 默认黑名单 (如果云端挂了用这个)
         blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信') 
     };
 
@@ -73,7 +69,6 @@
             state.refreshInterval = GM_getValue('driverInterval', CONFIG.DRIVER.DEFAULT_INTERVAL);
         } else if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000; 
-            // 每次进入调度页，尝试静默更新一次黑名单
             fetchOnlineBlacklist(true);
         }
 
@@ -95,7 +90,6 @@
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
 
-    // [逻辑] 云端黑名单同步
     const fetchOnlineBlacklist = (silent = false) => {
         if(!silent) log('正在同步云端隔离库...', 'info');
         GM_xmlhttpRequest({
@@ -105,7 +99,6 @@
                 if (response.status === 200) {
                     const text = response.responseText;
                     if (text && text.length > 0) {
-                        // 简单的清洗：把换行、空格都统一成逗号
                         const cleanList = text.replace(/[\r\n\s]+/g, ',').replace(/，/g, ',');
                         state.blacklist = cleanList;
                         GM_setValue('blacklist', cleanList);
@@ -122,12 +115,10 @@
             },
             onerror: function(err) {
                 if(!silent) alert('同步失败，网络错误。');
-                console.error('[助手] 黑名单更新失败', err);
             }
         });
     };
 
-    // [逻辑] 刷新系统
     const startRapidRefresh = () => {
         if (state.rapidTimer) return;
         state.rapidTimer = setInterval(() => {
@@ -171,7 +162,6 @@
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
 
-    // [逻辑] 剪贴板处理
     const processClipboard = async () => {
         try {
             const text = await navigator.clipboard.readText();
@@ -191,12 +181,11 @@
                     log('捕获电话: ' + pureNum, 'success');
                 }
             } else {
-                // 隔离库检查 (支持云端数据)
                 const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                 const isBlocked = blockers.some(keyword => cleanText.includes(keyword));
 
                 if (isBlocked) {
-                    log('已拦截垃圾信息 (隔离库)', 'error');
+                    log('已拦截垃圾信息', 'error');
                     return; 
                 }
 
@@ -275,7 +264,6 @@
         const widget = document.createElement('div');
         widget.id = 'gj-widget';
         applyPos(widget, state.uiPos);
-        // 应用缩放
         widget.style.transform = `scale(${state.uiScale})`;
         widget.style.transformOrigin = 'top left';
 
@@ -361,11 +349,6 @@
                     <input type="number" id="gj-input-interval" value="${state.refreshInterval}" class="gj-input-mini">
                     <button id="gj-btn-set" class="btn-xs">OK</button>
                 </div>
-                <!-- 缩放控制 -->
-                <div class="gj-zoom-row">
-                    <span>🔍 缩放:</span>
-                    <input type="range" id="gj-zoom-slider" min="0.8" max="2.0" step="0.1" value="${state.uiScale}">
-                </div>
             `;
         } else if (isDispatchPage()) {
             const buttonsHtml = CONFIG.DISPATCH.PRESETS.map(num => 
@@ -381,11 +364,12 @@
                 <div class="gj-grid-btns">${buttonsHtml}</div>
                 
                 <div class="gj-bottom-controls">
-                    <div style="flex:1">
-                        <span style="font-size:11px">🔍 缩放</span>
-                        <input type="range" id="gj-zoom-slider" min="0.8" max="2.0" step="0.1" value="${state.uiScale}" style="width:50px;vertical-align:middle;">
+                    <div style="flex:1; display:flex; align-items:center; gap:5px;">
+                        <span style="font-size:11px">🔍缩放:</span>
+                        <input type="number" id="gj-scale-input" value="${state.uiScale}" step="0.1" min="0.5" max="3.0" style="width:40px;text-align:center;border:1px solid #ddd;border-radius:4px;font-size:12px;">
+                        <button id="btn-set-scale" class="btn-xs">确定</button>
                     </div>
-                    <button id="btn-sync-cloud" class="btn-xs">☁️ 同步隔离库</button>
+                    <button id="btn-sync-cloud" class="btn-xs">☁️ 隔离库</button>
                 </div>
             `;
         } else {
@@ -411,18 +395,20 @@
     };
 
     const bindEvents = () => {
-        // 绑定缩放滑块 (通用)
-        const zoomSlider = document.getElementById('gj-zoom-slider');
-        if (zoomSlider) {
-            zoomSlider.addEventListener('input', (e) => {
-                const val = parseFloat(e.target.value);
-                state.uiScale = val;
-                GM_setValue('uiScale', val);
-                document.getElementById('gj-widget').style.transform = `scale(${val})`;
-            });
-        }
-
         if (isDispatchPage()) {
+            // 缩放控制 (仅在调度页)
+            document.getElementById('btn-set-scale')?.addEventListener('click', () => {
+                const val = parseFloat(document.getElementById('gj-scale-input').value);
+                if(val && val >= 0.5 && val <= 3.0) {
+                    state.uiScale = val;
+                    GM_setValue('uiScale', val);
+                    document.getElementById('gj-widget').style.transform = `scale(${val})`;
+                    log(`界面已缩放至 ${val} 倍`, 'success');
+                } else {
+                    alert('请输入 0.5 到 3.0 之间的数值');
+                }
+            });
+
             document.querySelectorAll('.btn-preset').forEach(btn => 
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
             );
@@ -432,7 +418,6 @@
             document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
                 if(state.history.phones[0]) fillInput('phone', state.history.phones[0]);
             });
-            // 手动同步云端
             document.getElementById('btn-sync-cloud')?.addEventListener('click', () => fetchOnlineBlacklist(false));
         }
         
@@ -482,7 +467,7 @@
         });
         document.addEventListener('mousemove', e => {
             if (!isDragging) return;
-            // 考虑 transform scale 的影响，移动距离需要除以 scale
+            // 考虑 transform scale 的影响
             const dx = (e.clientX - startX) / state.uiScale;
             const dy = (e.clientY - startY) / state.uiScale;
             el.style.left = (rect.left + dx) + 'px';
@@ -504,11 +489,10 @@
                 position: fixed; z-index: 10000;
                 display: flex; align-items: flex-start;
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                font-size: 14px; user-select: none; /* 基础字体调大 */
-                /* 默认不设置宽度，由内容撑开，通过scale缩放 */
+                font-size: 14px; user-select: none;
             }
             #gj-main-col {
-                width: 240px; background: #fff; border-radius: 8px; /* 宽度加倍 */
+                width: 240px; background: #fff; border-radius: 8px; 
                 box-shadow: 0 5px 15px rgba(0,0,0,0.2); border: 1px solid #ebeef5; overflow: hidden;
             }
             #gj-side-col {
@@ -517,7 +501,7 @@
             .gj-header {
                 padding: 10px 12px; background: #F5F7FA; border-bottom: 1px solid #EBEEF5;
                 display: flex; justify-content: space-between; align-items: center;
-                cursor: grab; font-weight: bold; color: #606266; font-size: 15px; /* 标题字大 */
+                cursor: grab; font-weight: bold; color: #606266; font-size: 15px; 
             }
             .gj-side-box {
                 background: #fff; border-radius: 8px; border: 1px solid #ebeef5; overflow: hidden;
@@ -560,7 +544,6 @@
             .gj-label-sm { font-size: 12px; color: #999; margin-top: 8px; }
             .gj-toggle { cursor: pointer; padding: 0 8px; font-size: 14px; }
             .gj-bottom-controls { display:flex; justify-content:space-between; align-items:center; margin-top:10px; padding-top:8px; border-top:1px dashed #eee; }
-            .gj-zoom-row { display:flex; align-items:center; justify-content:center; margin-top:8px; font-size:12px; color:#666; }
         `);
     };
 
