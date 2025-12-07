@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       9.0
-// @description   启动自动比对云端版本号；发现新版自动提示更新；保留所有V8系列功能（隔离库、剪贴板、精准缩放）。
+// @version       9.1
+// @description   启动自动比对云端版本号；发现新版自动提示更新；保留所有V8系列功能（隔离库、剪贴板、精准缩放）；支持剪贴板批量解析。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @updateURL     https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251
@@ -50,7 +50,8 @@
             // 3. 隔离库地址
             BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=nfpvws&t=1765094235754"
         },
-        CLIPBOARD: { MAX_HISTORY: 6 }
+        // 增加历史记录容量，因为现在支持批量复制了
+        CLIPBOARD: { MAX_HISTORY: 10 }
     };
 
     // --------------- 2. 全局状态 ---------------
@@ -68,7 +69,7 @@
         blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信'),
         // 版本检测状态
         currentVersion: GM_info.script.version,
-        newVersionAvailable: null // 如果检测到新版，这里会变成版本号字符串
+        newVersionAvailable: null 
     };
 
     // --------------- 3. 核心逻辑 ---------------
@@ -103,7 +104,7 @@
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
 
-    // [逻辑] 版本检测 (核心新增)
+    // [逻辑] 版本检测
     const checkAppVersion = () => {
         log(`当前版本 V${state.currentVersion}, 正在检查更新...`, 'info');
         GM_xmlhttpRequest({
@@ -111,15 +112,14 @@
             url: CONFIG.CLOUD.VERSION_CHECK_URL,
             onload: function(response) {
                 if (response.status === 200) {
-                    const cloudVerStr = response.responseText.trim(); // 获取云端版本号
+                    const cloudVerStr = response.responseText.trim(); 
                     const cloudVer = parseFloat(cloudVerStr);
                     const localVer = parseFloat(state.currentVersion);
 
-                    // 简单比对：如果云端大于本地
                     if (!isNaN(cloudVer) && cloudVer > localVer) {
                         state.newVersionAvailable = cloudVerStr;
                         log(`发现新版本: V${cloudVerStr}`, 'success');
-                        updateUI(); // 刷新UI显示更新按钮
+                        updateUI(); 
                     } else {
                         log('当前已是最新版', 'info');
                     }
@@ -195,42 +195,85 @@
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
 
+    // [逻辑核心修改]：支持批量剪贴板处理
     const processClipboard = async () => {
         try {
             const text = await navigator.clipboard.readText();
             if (!text || !text.trim()) return;
 
-            const cleanText = text.trim();
-            const lastAddr = state.history.addrs[0];
-            const lastPhone = state.history.phones[0];
+            const fullText = text.trim();
+            const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
+            let hasUpdate = false;
 
-            const pureNum = cleanText.replace(/\D/g, '');
-            const isPhone = /^1\d{10}$/.test(pureNum);
-
-            if (isPhone) {
-                if (pureNum !== lastPhone) {
-                    state.history.phones.unshift(pureNum);
-                    if (state.history.phones.length > CONFIG.CLIPBOARD.MAX_HISTORY) state.history.phones.pop();
-                    log('捕获电话: ' + pureNum, 'success');
-                }
-            } else {
-                const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
-                const isBlocked = blockers.some(keyword => cleanText.includes(keyword));
-
-                if (isBlocked) {
-                    log('拦截垃圾信息', 'error');
-                    return; 
-                }
-
-                if (cleanText !== lastAddr) {
-                    state.history.addrs.unshift(cleanText);
-                    if (state.history.addrs.length > CONFIG.CLIPBOARD.MAX_HISTORY) state.history.addrs.pop();
-                    log('捕获地址', 'info');
-                }
+            // 1. 提取所有手机号 (全局匹配)
+            const phoneRegex = /(?:^|[^\d])(1\d{10})(?:$|[^\d])/g;
+            let phoneMatch;
+            const phonesFound = [];
+            
+            // 使用临时文本进行正则匹配，不破坏原文本顺序
+            let tempTextForPhone = fullText;
+            while ((phoneMatch = phoneRegex.exec(tempTextForPhone)) !== null) {
+                phonesFound.push(phoneMatch[1]);
             }
-            GM_setValue('clipHistory', JSON.stringify(state.history));
-            updateListsUI(); 
-        } catch (e) {}
+
+            // 将找到的手机号依次存入 (保留顺序，文本后面的会最新插入到数组头部)
+            phonesFound.forEach(num => {
+                if (state.history.phones[0] !== num) { // 防止完全重复刷屏
+                    // 如果已经存在但不是最新的，先删除旧的
+                    const existIdx = state.history.phones.indexOf(num);
+                    if (existIdx > -1) state.history.phones.splice(existIdx, 1);
+                    
+                    state.history.phones.unshift(num);
+                    hasUpdate = true;
+                    log('捕获电话: ' + num, 'success');
+                }
+            });
+
+            // 2. 提取地址 (去除手机号后，按行/逗号分割)
+            // 将所有识别到的手机号替换为空格，避免干扰地址识别
+            let addrText = fullText.replace(phoneRegex, ' ').trim();
+            
+            // 按照 换行符、逗号、分号 进行分割
+            const segments = addrText.split(/[\r\n,;，；]+/);
+
+            segments.forEach(seg => {
+                const cleanSeg = seg.trim();
+                // 过滤过短字符、纯数字、黑名单
+                if (!cleanSeg || cleanSeg.length < 2) return;
+                if (/^\d+$/.test(cleanSeg)) return; 
+                
+                const isBlocked = blockers.some(keyword => cleanSeg.includes(keyword));
+                if (isBlocked) {
+                    // log('拦截无用信息', 'info'); // 减少日志刷屏
+                    return;
+                }
+
+                if (state.history.addrs[0] !== cleanSeg) {
+                     // 去重逻辑
+                    const existIdx = state.history.addrs.indexOf(cleanSeg);
+                    if (existIdx > -1) state.history.addrs.splice(existIdx, 1);
+
+                    state.history.addrs.unshift(cleanSeg);
+                    hasUpdate = true;
+                    log('捕获地址: ' + cleanSeg.substring(0, 8) + '...', 'info');
+                }
+            });
+
+            // 3. 限制长度
+            if (state.history.phones.length > CONFIG.CLIPBOARD.MAX_HISTORY) {
+                state.history.phones = state.history.phones.slice(0, CONFIG.CLIPBOARD.MAX_HISTORY);
+            }
+            if (state.history.addrs.length > CONFIG.CLIPBOARD.MAX_HISTORY) {
+                state.history.addrs = state.history.addrs.slice(0, CONFIG.CLIPBOARD.MAX_HISTORY);
+            }
+
+            if (hasUpdate) {
+                GM_setValue('clipHistory', JSON.stringify(state.history));
+                updateListsUI();
+            }
+        } catch (e) {
+            console.error(e);
+        }
     };
 
     const fillInput = (type, value) => {
@@ -257,7 +300,7 @@
             input.style.transition = 'background 0.3s';
             input.style.backgroundColor = '#e1f3d8';
             setTimeout(() => input.style.backgroundColor = '', 500);
-            log(`已填: ${value.substring(0,8)}...`, 'success');
+            log(`已填: ${value.substring(0,12)}...`, 'success');
         } else {
             alert(`找不到${type==='address'?'地址':'电话'}框`);
         }
@@ -313,14 +356,14 @@
             <div id="gj-side-col" style="display:none;">
                 <div class="gj-side-box">
                     <div class="gj-side-header green">
-                        <span>📍 地址库</span>
+                        <span>📍 地址库 (点击填)</span>
                         <span class="btn-icon" id="btn-refresh-addr">↻</span>
                     </div>
                     <div class="gj-list-body" id="list-addr-body"></div>
                 </div>
                 <div class="gj-side-box" style="margin-top:5px;">
                     <div class="gj-side-header red">
-                        <span>📞 电话库</span>
+                        <span>📞 电话库 (点击填)</span>
                         <span class="btn-icon" id="btn-refresh-phone">↻</span>
                     </div>
                     <div class="gj-list-body" id="list-phone-body"></div>
@@ -339,7 +382,6 @@
             updateUI();
         });
 
-        // 更新按钮点击事件
         widget.querySelector('#gj-update-bar').addEventListener('click', () => {
             if (confirm(`检测到新版本 V${state.newVersionAvailable}，是否前往更新？`)) {
                 GM_openInTab(CONFIG.CLOUD.SCRIPT_DOWNLOAD_URL, { active: true });
@@ -362,7 +404,6 @@
         else if (isDispatchPage()) titleSpan.textContent = CONFIG.DISPATCH.TITLE;
         else titleSpan.textContent = "助手待机";
 
-        // 更新提示条显示
         const updateBar = document.getElementById('gj-update-bar');
         if (state.newVersionAvailable) {
             updateBar.style.display = 'block';
@@ -433,7 +474,7 @@
 
     const updateListsUI = () => {
         const renderItem = (item, type) => 
-            `<div class="gj-list-item" title="${item}" data-val="${item}" data-type="${type}">${item}</div>`;
+            `<div class="gj-list-item" title="${item} 点击填写" data-val="${item}" data-type="${type}">${item}</div>`;
         const addrBody = document.getElementById('list-addr-body');
         const phoneBody = document.getElementById('list-phone-body');
         if(addrBody) {
@@ -517,7 +558,6 @@
         });
         document.addEventListener('mousemove', e => {
             if (!isDragging) return;
-            // 考虑 transform scale 的影响
             const dx = (e.clientX - startX) / state.uiScale;
             const dy = (e.clientY - startY) / state.uiScale;
             el.style.left = (rect.left + dx) + 'px';
@@ -599,7 +639,7 @@
 
     const init = () => {
         addStyles();
-        checkAppVersion(); // 启动时检查新版
+        checkAppVersion(); 
         checkPage();
         window.addEventListener('hashchange', checkPage);
         document.addEventListener('visibilitychange', () => {
