@@ -1,13 +1,14 @@
 // ==UserScript==
-// @name          代驾调度系统助手 V7.0 (一体化座舱版)
+// @name          代驾调度系统助手 V8.0 (云端隔离库+自由缩放)
 // @namespace     http://tampermonkey.net/
-// @version       7.0
-// @description   UI全面美化：地址/电话库紧贴主面板右侧；自动截断长文本；修复电话识别Bug；页面标题自定义命名。
+// @version       8.0
+// @description   UI尺寸翻倍+支持拖拽缩放；接入在线黑名单库自动更新；保留一体化设计与极速填单功能。
 // @author        郭 + You + Gemini Consultant
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
 // @grant         GM_getValue
 // @grant         GM_addStyle
+// @grant         GM_xmlhttpRequest
 // @grant         unsafeWindow
 // ==/UserScript==
 
@@ -26,7 +27,7 @@
         DRIVER: {
             HASH: '#/driverAll',
             TITLE: '司机调度',
-            DEFAULT_INTERVAL: 30,
+            DEFAULT_INTERVAL: 30, 
             BUTTON_SELECTOR: '.el-icon-refresh',
             ALT_SELECTOR: 'button i.el-icon-refresh'
         },
@@ -36,9 +37,8 @@
             PRESETS: [2, 3, 5, 10, 20],
             RAPID_INTERVAL: 500
         },
-        CLIPBOARD: {
-            MAX_HISTORY: 6 // 列表显示条数（不用太多，够用就行）
-        }
+        BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=nfpvws&t=1765094235754",
+        CLIPBOARD: { MAX_HISTORY: 6 }
     };
 
     // --------------- 2. 全局状态 ---------------
@@ -46,15 +46,17 @@
         currentHash: window.location.hash,
         isCollapsed: GM_getValue('uiCollapsed', false),
         manualPause: GM_getValue('manualPause', false),
-        refreshInterval: 20,
+        refreshInterval: 20, 
         countdown: 0,
         timerId: null,
         rapidTimer: null,
-        // UI 位置记忆 (只记主坐标即可，因为是一体的)
+        // UI 状态
         uiPos: JSON.parse(GM_getValue('uiPos', '{"top":"80px","left":"20px"}')),
+        uiScale: parseFloat(GM_getValue('uiScale', '1.0')), // 默认缩放比例
         // 数据
         history: JSON.parse(GM_getValue('clipHistory', '{"phones":[], "addrs":[]}')),
-        blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信')
+        // 默认黑名单 (如果云端挂了用这个)
+        blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信') 
     };
 
     // --------------- 3. 核心逻辑 ---------------
@@ -62,18 +64,18 @@
     const checkPage = () => {
         state.currentHash = window.location.hash;
 
-        // 设置刷新间隔 & 标题逻辑
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
         } else if (isDriverPage()) {
             state.refreshInterval = GM_getValue('driverInterval', CONFIG.DRIVER.DEFAULT_INTERVAL);
         } else if (isDispatchPage()) {
-            state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
+            state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000; 
+            // 每次进入调度页，尝试静默更新一次黑名单
+            fetchOnlineBlacklist(true);
         }
 
-        updateUI(); // 重绘或更新UI
-
-        // 极速刷新控制
+        updateUI(); 
+        
         if (isDispatchPage()) {
              if (!state.manualPause) startRapidRefresh();
         } else {
@@ -89,6 +91,38 @@
     const isOrderPage = () => state.currentHash.includes(CONFIG.ORDER.HASH);
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
+
+    // [逻辑] 云端黑名单同步
+    const fetchOnlineBlacklist = (silent = false) => {
+        if(!silent) log('正在同步云端隔离库...', 'info');
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: CONFIG.BLACKLIST_URL,
+            onload: function(response) {
+                if (response.status === 200) {
+                    const text = response.responseText;
+                    if (text && text.length > 0) {
+                        // 简单的清洗：把换行、空格都统一成逗号
+                        const cleanList = text.replace(/[\r\n\s]+/g, ',').replace(/，/g, ',');
+                        state.blacklist = cleanList;
+                        GM_setValue('blacklist', cleanList);
+                        if(!silent) {
+                            alert(`✅ 云端同步成功！\n当前隔离词库已更新。`);
+                            log('云端隔离库已更新', 'success');
+                        } else {
+                            console.log('[助手] 云端黑名单静默更新成功');
+                        }
+                    }
+                } else {
+                    if(!silent) alert('同步失败，服务器返回错误。');
+                }
+            },
+            onerror: function(err) {
+                if(!silent) alert('同步失败，网络错误。');
+                console.error('[助手] 黑名单更新失败', err);
+            }
+        });
+    };
 
     // [逻辑] 刷新系统
     const startRapidRefresh = () => {
@@ -114,7 +148,7 @@
 
         if (btn) {
             btn.click();
-            state.countdown = state.refreshInterval;
+            state.countdown = state.refreshInterval; 
         }
     };
 
@@ -125,16 +159,16 @@
         state.timerId = setInterval(() => {
             if (state.manualPause) return;
             state.countdown--;
-            updateStatusText();
+            updateStatusText(); 
             if (state.countdown <= 0) {
                 performAction("定时触发");
-                state.countdown = state.refreshInterval;
+                state.countdown = state.refreshInterval; 
             }
         }, 1000);
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
 
-    // [逻辑] 剪贴板处理 (修复电话逻辑)
+    // [逻辑] 剪贴板处理
     const processClipboard = async () => {
         try {
             const text = await navigator.clipboard.readText();
@@ -144,58 +178,50 @@
             const lastAddr = state.history.addrs[0];
             const lastPhone = state.history.phones[0];
 
-            // 1. 提取纯数字 (修复：先去除非数字字符)
             const pureNum = cleanText.replace(/\D/g, '');
-
-            // 2. 判断逻辑：必须是11位数字，且以1开头
             const isPhone = /^1\d{10}$/.test(pureNum);
 
             if (isPhone) {
-                // 存入电话库
-                // 防抖：如果和上一条一样，不存
                 if (pureNum !== lastPhone) {
                     state.history.phones.unshift(pureNum);
                     if (state.history.phones.length > CONFIG.CLIPBOARD.MAX_HISTORY) state.history.phones.pop();
                     log('捕获电话: ' + pureNum, 'success');
                 }
             } else {
-                // 隔离库检查 (黑名单)
+                // 隔离库检查 (支持云端数据)
                 const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                 const isBlocked = blockers.some(keyword => cleanText.includes(keyword));
 
                 if (isBlocked) {
-                    log('已拦截垃圾信息', 'error');
-                    return;
+                    log('已拦截垃圾信息 (隔离库)', 'error');
+                    return; 
                 }
 
-                // 存入地址库
                 if (cleanText !== lastAddr) {
                     state.history.addrs.unshift(cleanText);
                     if (state.history.addrs.length > CONFIG.CLIPBOARD.MAX_HISTORY) state.history.addrs.pop();
                     log('捕获地址', 'info');
                 }
             }
-
             GM_setValue('clipHistory', JSON.stringify(state.history));
-            updateListsUI(); // 局部刷新列表
-
+            updateListsUI(); 
         } catch (e) {}
     };
 
     const fillInput = (type, value) => {
         let input = null;
         if (type === 'address') {
-             input = document.querySelector('input[id="tipinput"]') ||
+             input = document.querySelector('input[id="tipinput"]') || 
                      document.querySelector('input[placeholder*="搜索"]') ||
                      document.querySelector('input[placeholder*="请输入关键字"]');
-             if (!input) { // 兜底查找
+             if (!input) {
                  const inputs = document.querySelectorAll('input');
                  for (let i = 0; i < inputs.length; i++) {
                      if (!inputs[i].closest('.el-form-item')) { input = inputs[i]; break; }
                  }
              }
         } else if (type === 'phone') {
-             input = document.querySelector('input[placeholder*="用户电话"]') ||
+             input = document.querySelector('input[placeholder*="用户电话"]') || 
                      document.querySelector('input[placeholder*="电话"]');
         }
 
@@ -203,7 +229,6 @@
             input.value = value;
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
-            // 动画反馈
             input.style.transition = 'background 0.3s';
             input.style.backgroundColor = '#e1f3d8';
             setTimeout(() => input.style.backgroundColor = '', 500);
@@ -214,16 +239,16 @@
     };
 
     const setSliderValue = (targetValue) => {
-        const MAX_VAL = 20;
+        const MAX_VAL = 20; 
         const calibrationMap = { 2: 1, 3: 2, 5: 4, 10: 10, 20: 20 };
         const calcValue = calibrationMap[targetValue] !== undefined ? calibrationMap[targetValue] : targetValue;
-
-        const sliderDiv = document.querySelector('.el-slider');
+        
+        const sliderDiv = document.querySelector('.el-slider'); 
         if (!sliderDiv) return;
         const runway = sliderDiv.querySelector('.el-slider__runway');
         if (runway) {
             const rect = runway.getBoundingClientRect();
-            let percentage = calcValue / MAX_VAL;
+            let percentage = calcValue / MAX_VAL; 
             if (percentage > 1) percentage = 1; if (percentage < 0) percentage = 0;
             const clientX = rect.left + (rect.width * percentage);
             const clientY = rect.top + (rect.height / 2);
@@ -238,7 +263,7 @@
         }
     };
 
-    // --------------- 4. UI 界面 (一体化设计) ---------------
+    // --------------- 4. UI 界面 ---------------
 
     const createWidget = () => {
         const old = document.getElementById('gj-widget');
@@ -247,18 +272,19 @@
         const widget = document.createElement('div');
         widget.id = 'gj-widget';
         applyPos(widget, state.uiPos);
+        // 应用缩放
+        widget.style.transform = `scale(${state.uiScale})`;
+        widget.style.transformOrigin = 'top left';
 
-        // 主框架：左侧控制 + 右侧数据库 (仅在指派页显示右侧)
         widget.innerHTML = `
             <div id="gj-main-col">
                 <div class="gj-header">
-                    <span id="gj-title-text">...</span>
+                    <span id="gj-title-text" style="font-size:14px">...</span>
                     <span class="gj-toggle">${state.isCollapsed ? '▼' : '▲'}</span>
                 </div>
                 <div id="gj-main-content" style="display: ${state.isCollapsed ? 'none' : 'block'}"></div>
             </div>
             <div id="gj-side-col" style="display:none;">
-                <!-- 地址库 -->
                 <div class="gj-side-box">
                     <div class="gj-side-header green">
                         <span>📍 地址库</span>
@@ -266,7 +292,6 @@
                     </div>
                     <div class="gj-list-body" id="list-addr-body"></div>
                 </div>
-                <!-- 电话库 -->
                 <div class="gj-side-box" style="margin-top:5px;">
                     <div class="gj-side-header red">
                         <span>📞 电话库</span>
@@ -280,8 +305,7 @@
         document.body.appendChild(widget);
         addStyles();
         setupDrag(widget);
-
-        // 折叠事件
+        
         widget.querySelector('.gj-toggle').addEventListener('click', (e) => {
             e.stopPropagation();
             state.isCollapsed = !state.isCollapsed;
@@ -289,7 +313,6 @@
             updateUI();
         });
 
-        // 绑定手动刷新按钮
         widget.querySelector('#btn-refresh-addr').addEventListener('click', processClipboard);
         widget.querySelector('#btn-refresh-phone').addEventListener('click', processClipboard);
 
@@ -300,28 +323,24 @@
         let widget = document.getElementById('gj-widget');
         if (!widget) widget = createWidget();
 
-        // 1. 设置标题
         const titleSpan = document.getElementById('gj-title-text');
         if (isOrderPage()) titleSpan.textContent = CONFIG.ORDER.TITLE;
         else if (isDriverPage()) titleSpan.textContent = CONFIG.DRIVER.TITLE;
         else if (isDispatchPage()) titleSpan.textContent = CONFIG.DISPATCH.TITLE;
         else titleSpan.textContent = "助手待机";
 
-        // 2. 控制内容显隐
         const mainContent = document.getElementById('gj-main-content');
         const sideCol = document.getElementById('gj-side-col');
-
+        
         mainContent.style.display = state.isCollapsed ? 'none' : 'block';
-
-        // 侧边栏（地址/电话库）仅在“订单指派”页面且未折叠时显示
+        
         if (isDispatchPage() && !state.isCollapsed) {
             sideCol.style.display = 'block';
-            updateListsUI(); // 刷新列表内容
+            updateListsUI(); 
         } else {
             sideCol.style.display = 'none';
         }
 
-        // 3. 渲染主控台内容
         renderMainContent(mainContent);
         updateStatusText();
     };
@@ -335,16 +354,21 @@
                 <div class="gj-timer-box">${state.countdown}s</div>
                 <button id="gj-btn-toggle" class="${btnClass}">${btnText}</button>
                 <div class="gj-row">
-                    <span style="font-size:11px;color:#666;">间隔:</span>
+                    <span>间隔:</span>
                     <input type="number" id="gj-input-interval" value="${state.refreshInterval}" class="gj-input-mini">
                     <button id="gj-btn-set" class="btn-xs">OK</button>
                 </div>
+                <!-- 缩放控制 -->
+                <div class="gj-zoom-row">
+                    <span>🔍 缩放:</span>
+                    <input type="range" id="gj-zoom-slider" min="0.8" max="2.0" step="0.1" value="${state.uiScale}">
+                </div>
             `;
         } else if (isDispatchPage()) {
-            const buttonsHtml = CONFIG.DISPATCH.PRESETS.map(num =>
+            const buttonsHtml = CONFIG.DISPATCH.PRESETS.map(num => 
                 `<button class="btn-preset" data-val="${num}">${num}</button>`
             ).join('');
-
+            
             html = `
                 <div class="gj-group">
                     <button id="btn-auto-addr" class="btn-big green">填最新地址</button>
@@ -352,13 +376,13 @@
                 </div>
                 <div class="gj-label-sm">⚡ AI距离 (极速)</div>
                 <div class="gj-grid-btns">${buttonsHtml}</div>
-                <div style="margin-top:8px;text-align:right;">
-                    <span id="btn-blacklist-cfg" class="link-btn">⚙️ 隔离库</span>
-                </div>
-                <!-- 隔离设置 (隐藏式) -->
-                <div id="gj-blacklist-area" style="display:none; margin-top:5px; border-top:1px dashed #ddd; padding-top:5px;">
-                    <textarea id="blacklist-input" rows="3" style="width:100%;font-size:10px;border:1px solid #eee;">${state.blacklist}</textarea>
-                    <button id="btn-save-blacklist" class="btn-xs full">保存设置</button>
+                
+                <div class="gj-bottom-controls">
+                    <div style="flex:1">
+                        <span style="font-size:11px">🔍 缩放</span>
+                        <input type="range" id="gj-zoom-slider" min="0.8" max="2.0" step="0.1" value="${state.uiScale}" style="width:50px;vertical-align:middle;">
+                    </div>
+                    <button id="btn-sync-cloud" class="btn-xs">☁️ 同步隔离库</button>
                 </div>
             `;
         } else {
@@ -369,12 +393,10 @@
     };
 
     const updateListsUI = () => {
-        const renderItem = (item, type) =>
+        const renderItem = (item, type) => 
             `<div class="gj-list-item" title="${item}" data-val="${item}" data-type="${type}">${item}</div>`;
-
         const addrBody = document.getElementById('list-addr-body');
         const phoneBody = document.getElementById('list-phone-body');
-
         if(addrBody) {
             addrBody.innerHTML = state.history.addrs.map(i => renderItem(i, 'address')).join('') || '<div class="gj-empty">- 空 -</div>';
             addrBody.querySelectorAll('.gj-list-item').forEach(el => el.addEventListener('click', () => fillInput('address', el.dataset.val)));
@@ -386,8 +408,19 @@
     };
 
     const bindEvents = () => {
+        // 绑定缩放滑块 (通用)
+        const zoomSlider = document.getElementById('gj-zoom-slider');
+        if (zoomSlider) {
+            zoomSlider.addEventListener('input', (e) => {
+                const val = parseFloat(e.target.value);
+                state.uiScale = val;
+                GM_setValue('uiScale', val);
+                document.getElementById('gj-widget').style.transform = `scale(${val})`;
+            });
+        }
+
         if (isDispatchPage()) {
-            document.querySelectorAll('.btn-preset').forEach(btn =>
+            document.querySelectorAll('.btn-preset').forEach(btn => 
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
             );
             document.getElementById('btn-auto-addr')?.addEventListener('click', () => {
@@ -396,16 +429,10 @@
             document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
                 if(state.history.phones[0]) fillInput('phone', state.history.phones[0]);
             });
-            // 隔离设置
-            const area = document.getElementById('gj-blacklist-area');
-            document.getElementById('btn-blacklist-cfg')?.addEventListener('click', () => area.style.display = area.style.display==='none'?'block':'none');
-            document.getElementById('btn-save-blacklist')?.addEventListener('click', () => {
-                const val = document.getElementById('blacklist-input').value;
-                state.blacklist = val; GM_setValue('blacklist', val);
-                area.style.display = 'none'; log('隔离库已更新', 'success');
-            });
+            // 手动同步云端
+            document.getElementById('btn-sync-cloud')?.addEventListener('click', () => fetchOnlineBlacklist(false));
         }
-
+        
         if (document.getElementById('gj-btn-toggle')) {
             document.getElementById('gj-btn-toggle').addEventListener('click', () => {
                 state.manualPause = !state.manualPause;
@@ -443,7 +470,7 @@
     };
 
     const setupDrag = (el) => {
-        const header = el.querySelector('.gj-header'); // 只允许拖动左侧主标题栏
+        const header = el.querySelector('.gj-header'); 
         let isDragging = false, startX, startY, rect;
         header.addEventListener('mousedown', e => {
             isDragging = true; startX = e.clientX; startY = e.clientY;
@@ -452,8 +479,11 @@
         });
         document.addEventListener('mousemove', e => {
             if (!isDragging) return;
-            el.style.left = (rect.left + e.clientX - startX) + 'px';
-            el.style.top = (rect.top + e.clientY - startY) + 'px';
+            // 考虑 transform scale 的影响，移动距离需要除以 scale
+            const dx = (e.clientX - startX) / state.uiScale;
+            const dy = (e.clientY - startY) / state.uiScale;
+            el.style.left = (rect.left + dx) + 'px';
+            el.style.top = (rect.top + dy) + 'px';
             el.style.right = 'auto'; el.style.bottom = 'auto';
         });
         document.addEventListener('mouseup', () => {
@@ -471,79 +501,53 @@
                 position: fixed; z-index: 10000;
                 display: flex; align-items: flex-start;
                 font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-                font-size: 13px; user-select: none;
+                font-size: 14px; user-select: none; /* 基础字体调大 */
+                /* 默认不设置宽度，由内容撑开，通过scale缩放 */
             }
             #gj-main-col {
-                width: 140px; background: #fff; border-radius: 6px;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15); border: 1px solid #ebeef5; overflow: hidden;
+                width: 240px; background: #fff; border-radius: 8px; /* 宽度加倍 */
+                box-shadow: 0 5px 15px rgba(0,0,0,0.2); border: 1px solid #ebeef5; overflow: hidden;
             }
             #gj-side-col {
-                width: 160px; margin-left: 5px; display: flex; flex-direction: column; gap: 5px;
+                width: 220px; margin-left: 5px; display: flex; flex-direction: column; gap: 5px;
             }
             .gj-header {
-                padding: 8px 10px; background: #F5F7FA; border-bottom: 1px solid #EBEEF5;
+                padding: 10px 12px; background: #F5F7FA; border-bottom: 1px solid #EBEEF5;
                 display: flex; justify-content: space-between; align-items: center;
-                cursor: grab; font-weight: bold; color: #606266; font-size: 12px;
+                cursor: grab; font-weight: bold; color: #606266; font-size: 15px; /* 标题字大 */
             }
             .gj-side-box {
-                background: #fff; border-radius: 6px; border: 1px solid #ebeef5; overflow: hidden;
+                background: #fff; border-radius: 8px; border: 1px solid #ebeef5; overflow: hidden;
                 box-shadow: 0 2px 8px rgba(0,0,0,0.1);
             }
             .gj-side-header {
-                padding: 5px 8px; font-size: 11px; font-weight: bold; display: flex; justify-content: space-between;
+                padding: 6px 10px; font-size: 13px; font-weight: bold; display: flex; justify-content: space-between;
             }
             .green { background: #f0f9eb; color: #67c23a; }
             .red { background: #fef0f0; color: #f56c6c; }
-
-            #gj-main-content { padding: 10px; }
-            .gj-timer-box { font-size: 26px; font-weight: bold; color: #409EFF; text-align: center; margin-bottom: 5px; }
-            .gj-row { display: flex; align-items: center; justify-content: center; margin-top: 5px; gap: 3px; }
-            .gj-input-mini { width: 35px; border: 1px solid #dcdfe6; border-radius: 3px; text-align: center; padding: 2px; }
-
-            .btn-pause, .btn-resume { width: 100%; border: none; padding: 5px; border-radius: 4px; cursor: pointer; color: white; font-weight: bold;}
+            
+            #gj-main-content { padding: 12px; }
+            .gj-timer-box { font-size: 36px; font-weight: bold; color: #409EFF; text-align: center; margin-bottom: 8px; }
+            .gj-row { display: flex; align-items: center; justify-content: center; margin-top: 8px; gap: 5px; }
+            .gj-input-mini { width: 50px; border: 1px solid #dcdfe6; border-radius: 4px; text-align: center; padding: 4px; font-size:14px;}
+            
+            .btn-pause, .btn-resume { width: 100%; border: none; padding: 8px; border-radius: 6px; cursor: pointer; color: white; font-weight: bold; font-size: 14px;}
             .btn-pause { background: #F56C6C; } .btn-resume { background: #67C23A; }
-
-            .btn-big { width: 100%; border: 1px solid; border-radius: 4px; padding: 6px; margin-bottom: 5px; cursor: pointer; font-weight: bold; font-size: 12px; }
+            
+            .btn-big { width: 100%; border: 1px solid; border-radius: 6px; padding: 10px; margin-bottom: 6px; cursor: pointer; font-weight: bold; font-size: 14px; }
             .btn-big.green { background: #f0f9eb; border-color: #c2e7b0; color: #67c23a; }
             .btn-big.green:hover { background: #67c23a; color: white; }
             .btn-big.red { background: #fef0f0; border-color: #fbc4c4; color: #f56c6c; }
             .btn-big.red:hover { background: #f56c6c; color: white; }
 
-            .gj-grid-btns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 4px; margin-top: 3px; }
-            .btn-preset { background: #ECF5FF; border: 1px solid #B3D8FF; color: #409EFF; padding: 4px 0; border-radius: 4px; cursor: pointer; font-size: 11px; }
+            .gj-grid-btns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 5px; }
+            .btn-preset { background: #ECF5FF; border: 1px solid #B3D8FF; color: #409EFF; padding: 8px 0; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight:bold;}
             .btn-preset:hover { background: #409EFF; color: white; }
 
-            .gj-list-body { max-height: 150px; overflow-y: auto; background: #fff; }
+            .gj-list-body { max-height: 200px; overflow-y: auto; background: #fff; }
             .gj-list-item {
-                padding: 4px 8px; border-bottom: 1px solid #f0f0f0; cursor: pointer; font-size: 12px; color: #555;
-                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 160px;
+                padding: 6px 10px; border-bottom: 1px solid #f0f0f0; cursor: pointer; font-size: 13px; color: #333;
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 210px;
             }
             .gj-list-item:hover { background: #ecf5ff; color: #409EFF; }
-            .gj-empty { text-align: center; color: #ccc; padding: 5px; font-size: 11px; }
-
-            .btn-icon { cursor: pointer; font-size: 12px; padding: 0 3px; }
-            .btn-icon:hover { font-weight: bold; }
-            .btn-xs { font-size: 10px; padding: 1px 5px; border: 1px solid #ddd; background: #fff; border-radius: 3px; cursor: pointer; }
-            .btn-xs.full { width: 100%; margin-top: 3px; }
-            .gj-label-sm { font-size: 10px; color: #999; margin-top: 5px; }
-            .link-btn { font-size: 10px; color: #909399; cursor: pointer; text-decoration: underline; }
-            .gj-toggle { cursor: pointer; padding: 0 5px; }
-        `);
-    };
-
-    const init = () => {
-        checkPage();
-        window.addEventListener('hashchange', checkPage);
-        document.addEventListener('visibilitychange', () => {
-            if (!document.hidden) {
-                if ((isOrderPage() || isDriverPage()) && !state.manualPause) performAction("切屏回刷");
-                if (isDispatchPage()) processClipboard();
-            }
-        });
-        window.addEventListener('focus', () => { if (isDispatchPage()) processClipboard(); });
-        setTimeout(checkPage, 1000);
-    };
-
-    if (document.readyState === 'complete' || document.readyState === 'interactive') init();
-    else window.addEventListener('load', init);
-})();
+            .gj-empty { text-align: center; color: #ccc; padding: 10px; f
