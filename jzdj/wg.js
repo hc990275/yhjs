@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 V8.2 (精准缩放+数值设置)
+// @name          代驾调度系统助手 V8.3 (云端版本检测+自动更新)
 // @namespace     http://tampermonkey.net/
-// @version       8.2
-// @description   将缩放功能改为数值输入，仅在订单指派页显示；支持精准设置界面倍率 (0.5-3.0倍)。
+// @version       8.3
+// @description   启动自动比对云端版本号；发现新版自动提示更新；保留所有V8系列功能（隔离库、剪贴板、精准缩放）。
 // @author        郭 + You + Gemini Consultant
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @updateURL     https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251
@@ -11,6 +11,8 @@
 // @grant         GM_getValue
 // @grant         GM_addStyle
 // @grant         GM_xmlhttpRequest
+// @grant         GM_info
+// @grant         GM_openInTab
 // @grant         unsafeWindow
 // ==/UserScript==
 
@@ -39,7 +41,15 @@
             PRESETS: [2, 3, 5, 10, 20],
             RAPID_INTERVAL: 500
         },
-        BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=nfpvws&t=1765094235754",
+        // 云端配置
+        CLOUD: {
+            // 1. 版本号检测地址 (只读取数字)
+            VERSION_CHECK_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fbb?sign=65b8wq&t=1765094665264",
+            // 2. 脚本下载地址 (代码文件)
+            SCRIPT_DOWNLOAD_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251",
+            // 3. 隔离库地址
+            BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=nfpvws&t=1765094235754"
+        },
         CLIPBOARD: { MAX_HISTORY: 6 }
     };
 
@@ -53,9 +63,12 @@
         timerId: null,
         rapidTimer: null,
         uiPos: JSON.parse(GM_getValue('uiPos', '{"top":"80px","left":"20px"}')),
-        uiScale: parseFloat(GM_getValue('uiScale', '1.0')), // 默认1倍
+        uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
         history: JSON.parse(GM_getValue('clipHistory', '{"phones":[], "addrs":[]}')),
-        blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信') 
+        blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信'),
+        // 版本检测状态
+        currentVersion: GM_info.script.version,
+        newVersionAvailable: null // 如果检测到新版，这里会变成版本号字符串
     };
 
     // --------------- 3. 核心逻辑 ---------------
@@ -90,11 +103,37 @@
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
 
-    const fetchOnlineBlacklist = (silent = false) => {
-        if(!silent) log('正在同步云端隔离库...', 'info');
+    // [逻辑] 版本检测 (核心新增)
+    const checkAppVersion = () => {
+        log(`当前版本 V${state.currentVersion}, 正在检查更新...`, 'info');
         GM_xmlhttpRequest({
             method: "GET",
-            url: CONFIG.BLACKLIST_URL,
+            url: CONFIG.CLOUD.VERSION_CHECK_URL,
+            onload: function(response) {
+                if (response.status === 200) {
+                    const cloudVerStr = response.responseText.trim(); // 获取云端版本号
+                    const cloudVer = parseFloat(cloudVerStr);
+                    const localVer = parseFloat(state.currentVersion);
+
+                    // 简单比对：如果云端大于本地
+                    if (!isNaN(cloudVer) && cloudVer > localVer) {
+                        state.newVersionAvailable = cloudVerStr;
+                        log(`发现新版本: V${cloudVerStr}`, 'success');
+                        updateUI(); // 刷新UI显示更新按钮
+                    } else {
+                        log('当前已是最新版', 'info');
+                    }
+                }
+            }
+        });
+    };
+
+    // [逻辑] 云端黑名单同步
+    const fetchOnlineBlacklist = (silent = false) => {
+        if(!silent) log('同步隔离库...', 'info');
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: CONFIG.CLOUD.BLACKLIST_URL,
             onload: function(response) {
                 if (response.status === 200) {
                     const text = response.responseText;
@@ -103,22 +142,16 @@
                         state.blacklist = cleanList;
                         GM_setValue('blacklist', cleanList);
                         if(!silent) {
-                            alert(`✅ 云端同步成功！\n当前隔离词库已更新。`);
-                            log('云端隔离库已更新', 'success');
-                        } else {
-                            console.log('[助手] 云端黑名单静默更新成功');
+                            alert(`✅ 同步成功！`);
+                            log('隔离库已更新', 'success');
                         }
                     }
-                } else {
-                    if(!silent) alert('同步失败，服务器返回错误。');
                 }
-            },
-            onerror: function(err) {
-                if(!silent) alert('同步失败，网络错误。');
             }
         });
     };
 
+    // [逻辑] 刷新系统
     const startRapidRefresh = () => {
         if (state.rapidTimer) return;
         state.rapidTimer = setInterval(() => {
@@ -185,7 +218,7 @@
                 const isBlocked = blockers.some(keyword => cleanText.includes(keyword));
 
                 if (isBlocked) {
-                    log('已拦截垃圾信息', 'error');
+                    log('拦截垃圾信息', 'error');
                     return; 
                 }
 
@@ -224,7 +257,7 @@
             input.style.transition = 'background 0.3s';
             input.style.backgroundColor = '#e1f3d8';
             setTimeout(() => input.style.backgroundColor = '', 500);
-            log(`已填入: ${value.substring(0,8)}...`, 'success');
+            log(`已填: ${value.substring(0,8)}...`, 'success');
         } else {
             alert(`找不到${type==='address'?'地址':'电话'}框`);
         }
@@ -234,7 +267,6 @@
         const MAX_VAL = 20; 
         const calibrationMap = { 2: 1, 3: 2, 5: 4, 10: 10, 20: 20 };
         const calcValue = calibrationMap[targetValue] !== undefined ? calibrationMap[targetValue] : targetValue;
-        
         const sliderDiv = document.querySelector('.el-slider'); 
         if (!sliderDiv) return;
         const runway = sliderDiv.querySelector('.el-slider__runway');
@@ -269,6 +301,9 @@
 
         widget.innerHTML = `
             <div id="gj-main-col">
+                <div id="gj-update-bar" style="display:none; background:#f56c6c; color:white; padding:8px; text-align:center; font-weight:bold; cursor:pointer;">
+                    🚀 发现新版本 V<span id="gj-new-ver"></span> (点击更新)
+                </div>
                 <div class="gj-header">
                     <span id="gj-title-text" style="font-size:14px">...</span>
                     <span class="gj-toggle">${state.isCollapsed ? '▼' : '▲'}</span>
@@ -304,6 +339,13 @@
             updateUI();
         });
 
+        // 更新按钮点击事件
+        widget.querySelector('#gj-update-bar').addEventListener('click', () => {
+            if (confirm(`检测到新版本 V${state.newVersionAvailable}，是否前往更新？`)) {
+                GM_openInTab(CONFIG.CLOUD.SCRIPT_DOWNLOAD_URL, { active: true });
+            }
+        });
+
         widget.querySelector('#btn-refresh-addr').addEventListener('click', processClipboard);
         widget.querySelector('#btn-refresh-phone').addEventListener('click', processClipboard);
 
@@ -319,6 +361,15 @@
         else if (isDriverPage()) titleSpan.textContent = CONFIG.DRIVER.TITLE;
         else if (isDispatchPage()) titleSpan.textContent = CONFIG.DISPATCH.TITLE;
         else titleSpan.textContent = "助手待机";
+
+        // 更新提示条显示
+        const updateBar = document.getElementById('gj-update-bar');
+        if (state.newVersionAvailable) {
+            updateBar.style.display = 'block';
+            document.getElementById('gj-new-ver').textContent = state.newVersionAvailable;
+        } else {
+            updateBar.style.display = 'none';
+        }
 
         const mainContent = document.getElementById('gj-main-content');
         const sideCol = document.getElementById('gj-side-col');
@@ -371,6 +422,7 @@
                     </div>
                     <button id="btn-sync-cloud" class="btn-xs">☁️ 隔离库</button>
                 </div>
+                <div style="font-size:9px;color:#ccc;text-align:center;margin-top:4px;">当前 V${state.currentVersion}</div>
             `;
         } else {
             html = `<div style="padding:10px;color:#999;text-align:center;">非工作区</div>`;
@@ -396,14 +448,12 @@
 
     const bindEvents = () => {
         if (isDispatchPage()) {
-            // 缩放控制 (仅在调度页)
             document.getElementById('btn-set-scale')?.addEventListener('click', () => {
                 const val = parseFloat(document.getElementById('gj-scale-input').value);
                 if(val && val >= 0.5 && val <= 3.0) {
                     state.uiScale = val;
                     GM_setValue('uiScale', val);
                     document.getElementById('gj-widget').style.transform = `scale(${val})`;
-                    log(`界面已缩放至 ${val} 倍`, 'success');
                 } else {
                     alert('请输入 0.5 到 3.0 之间的数值');
                 }
@@ -549,6 +599,7 @@
 
     const init = () => {
         addStyles();
+        checkAppVersion(); // 启动时检查新版
         checkPage();
         window.addEventListener('hashchange', checkPage);
         document.addEventListener('visibilitychange', () => {
