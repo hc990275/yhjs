@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name          代驾订单/司机列表自动调度 (高级控制 - 长条 - 状态和图标 - 右上角固定 - 简化状态显示)
+// @name          代驾订单/司机列表自动调度 (UI美化版 - 可拖拽 - 可折叠)
 // @namespace     http://tampermonkey.net/
-// @version       1.9 // 版本号增加，方便识别更新，表示UI和状态显示调整
-// @description   在指定页面自动执行操作 (搜索/刷新), 可自定义订单刷新时间, 快捷设置, 手动启停, 增加状态显示及图标控制 (长条显示在右上角)
-// @author        郭 + You (合并) + Gemini
+// @version       2.0
+// @description   功能不变，界面大升级：支持任意拖拽、折叠隐藏、记忆位置、更现代的UI风格。
+// @author        郭 + You + Gemini (UI Optimization)
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
 // @grant         GM_getValue
@@ -29,150 +29,82 @@
     };
     const QUICK_INTERVALS_SECONDS = [1, 2, 5, 10, 20, 40];
 
-    // --------------- 变量 ---------------
+    // --------------- 状态变量 ---------------
     let searchTimer = null;
     let refreshTimer = null;
     let intervalInput = null;
-    let statusSpan = null; // 这个现在是状态和控制按钮的组合显示区域
+    let statusSpan = null;
     let manualStopActive = GM_getValue('manualStopActive', false);
-    let currentAutoActionStatus = 'stopped'; // 'searching', 'refreshing', 'stopped'
+    let currentAutoActionStatus = 'stopped';
+    let isCollapsed = GM_getValue('uiCollapsed', false); // UI折叠状态
 
-    // --------------- 函数 ---------------
+    // --------------- UI 逻辑 ---------------
 
-    // --- UI & Settings Functions ---
-    const applyNewSearchInterval = (seconds) => {
-        if (isNaN(seconds) || seconds < 1) {
-            const originalStatusText = statusSpan.textContent;
-            const originalStatusColor = statusSpan.style.color;
-            statusSpan.textContent = '无效值!';
-            statusSpan.style.color = 'red';
-            setTimeout(() => {
-                statusSpan.textContent = originalStatusText;
-                statusSpan.style.color = originalStatusColor;
-            }, 3000);
-            return false;
-        }
-
-        const newIntervalMs = seconds * 1000;
-        CONFIG.SEARCH.REFRESH_INTERVAL = newIntervalMs;
-        GM_setValue('searchInterval_ms', newIntervalMs);
-        if (intervalInput) intervalInput.value = seconds;
-
-        const originalStatusText = statusSpan.textContent;
-        const originalStatusColor = statusSpan.style.color;
-        statusSpan.textContent = `已设为 ${seconds} 秒`;
-        statusSpan.style.color = 'green';
-        console.log(`[设置] 订单刷新间隔已更新为: ${seconds} 秒`);
-        setTimeout(() => {
-            statusSpan.textContent = originalStatusText;
-            statusSpan.style.color = originalStatusColor;
-            updateStatusDisplay(); // 恢复到当前工作状态显示
-        }, 3000);
-
-
-        if (!manualStopActive && isTargetPage(CONFIG.SEARCH.PAGE_HASH) && document.visibilityState === 'visible') {
-            stopAutoSearch();
-            startAutoSearch(true);
-            console.log('[系统] 自动搜索已按新间隔重启');
-        } else {
-            if (manualStopActive) console.log('[系统] 间隔已更新, 但自动操作当前为手动停止状态.');
-            else if (!isTargetPage(CONFIG.SEARCH.PAGE_HASH)) console.log('[系统] 间隔已更新, 但当前不在订单页面.');
-            else console.log('[系统] 间隔已更新, 但页面当前不可见.');
-        }
-        return true;
-    };
-
-    const updateStatusDisplay = () => {
-        if (!statusSpan) return;
-
-        let statusText = '';
-        let statusColor = '';
-        let iconClass = '';
-        let buttonText = '';
-
-        if (manualStopActive) {
-            statusText = '已暂停';
-            statusColor = '#909399'; // 灰色
-            buttonText = '点我继续刷新';
-            iconClass = 'el-icon-video-play'; // 播放图标
-        } else if (currentAutoActionStatus === 'searching') {
-            statusText = `正在刷新订单 (${CONFIG.SEARCH.REFRESH_INTERVAL / 1000}s)`;
-            statusColor = '#409EFF'; // 蓝色
-            buttonText = '点我停止刷新';
-            iconClass = 'el-icon-video-pause'; // 暂停图标
-        } else if (currentAutoActionStatus === 'refreshing') {
-            statusText = `正在刷新司机列表 (${CONFIG.REFRESH.INTERVAL / 1000}s)`;
-            statusColor = '#67C23A'; // 绿色
-            buttonText = '点我停止刷新';
-            iconClass = 'el-icon-video-pause'; // 暂停图标
-        } else { // 脚本处于非活动页面或未启动状态
-            statusText = '未运行'; // 简化状态，避免“空闲/停止”
-            statusColor = '#F56C6C'; // 红色
-            buttonText = '点我继续刷新';
-            iconClass = 'el-icon-video-play'; // 播放图标
-        }
-
-        statusSpan.innerHTML = ''; // 清空内容
-        statusSpan.style.color = statusColor;
-
-        const button = document.createElement('button');
-        button.id = 'toggleAutoActionsBtn';
-        button.classList.add(manualStopActive ? 'active-resume' : 'active-stop');
-        const icon = document.createElement('i');
-        icon.className = iconClass;
-        button.appendChild(icon);
-        button.appendChild(document.createTextNode(' ' + buttonText));
-
-        button.addEventListener('click', () => {
-            manualStopActive = !manualStopActive;
-            GM_setValue('manualStopActive', manualStopActive);
-            if (manualStopActive) {
-                stopAllTimersAndLog("手动停止");
-            } else {
-                console.log("[控制] 手动恢复自动操作。重新评估页面状态。");
-                handleCurrentPageOrVisibilityState();
-            }
-            updateStatusDisplay(); // 更新显示状态
-        });
-
-        statusSpan.appendChild(button);
-        const statusTextNode = document.createTextNode(` | 状态: ${statusText}`);
-        statusSpan.appendChild(statusTextNode);
-    };
-
-
+    // 1. 创建 UI 容器
     const createSettingsUI = () => {
+        // 移除旧容器（防止重复）
+        const oldContainer = document.getElementById('custom-script-controls-container');
+        if (oldContainer) oldContainer.remove();
+
         const container = document.createElement('div');
         container.id = 'custom-script-controls-container';
 
+        // 恢复上次保存的位置
+        const savedPos = JSON.parse(GM_getValue('uiPosition', '{"top":"20px","right":"20px"}'));
+        container.style.top = savedPos.top;
+        container.style.right = savedPos.right;
+        if(savedPos.left) container.style.left = savedPos.left; // 兼容拖拽后的 left
+
+        // 构建 HTML 结构 (Header + Content)
         let quickButtonsHTML = QUICK_INTERVALS_SECONDS.map(s =>
             `<button class="quick-interval-btn" data-seconds="${s}">${s}s</button>`
         ).join('');
 
+        const toggleIcon = isCollapsed ? '▼' : '▲';
+        const displayStyle = isCollapsed ? 'none' : 'block';
+
         container.innerHTML = `
-            <div id="top-row-controls">
-                <div id="interval-config-group">
-                    <label for="searchIntervalInput">订单刷新 (秒):</label>
-                    <input type="number" id="searchIntervalInput" min="1">
-                    <button id="setSearchIntervalBtn">设置</button>
-                </div>
-                <div id="master-control-group">
-                    <span id="intervalStatus"></span>
+            <div id="panel-header">
+                <span class="header-title">🚕 自动调度控制台</span>
+                <div class="header-controls">
+                    <span id="collapse-btn" title="折叠/展开">${toggleIcon}</span>
                 </div>
             </div>
-            <div id="quick-set-buttons-group">
-                <span>快捷: </span>${quickButtonsHTML}
+            <div id="panel-content" style="display: ${displayStyle};">
+                <div class="control-row">
+                    <div class="input-group">
+                        <label>刷新间隔(秒)</label>
+                        <input type="number" id="searchIntervalInput" min="1">
+                        <button id="setSearchIntervalBtn" class="primary-btn">应用</button>
+                    </div>
+                </div>
+
+                <div class="control-row quick-row">
+                    <span class="label-text">快捷:</span>
+                    <div class="btn-group">${quickButtonsHTML}</div>
+                </div>
+
+                <div class="status-bar">
+                   <div id="intervalStatus"></div>
+                </div>
             </div>
         `;
+
         document.body.appendChild(container);
-        addCustomStyles(); // 应用样式
+        addCustomStyles();
+        makeDraggable(container); // 启用拖拽
 
+        // 绑定元素
         intervalInput = document.getElementById('searchIntervalInput');
-        statusSpan = document.getElementById('intervalStatus'); // 状态和按钮结合的区域
+        statusSpan = document.getElementById('intervalStatus');
         const setSearchIntervalBtn = document.getElementById('setSearchIntervalBtn');
+        const collapseBtn = document.getElementById('collapse-btn');
+        const panelContent = document.getElementById('panel-content');
 
+        // 初始化数值
         intervalInput.value = CONFIG.SEARCH.REFRESH_INTERVAL / 1000;
 
+        // 事件监听
         setSearchIntervalBtn.addEventListener('click', () => {
             applyNewSearchInterval(parseInt(intervalInput.value, 10));
         });
@@ -184,291 +116,379 @@
             });
         });
 
-        updateStatusDisplay(); // 初始化状态显示
+        // 折叠逻辑
+        collapseBtn.addEventListener('click', () => {
+            isCollapsed = !isCollapsed;
+            GM_setValue('uiCollapsed', isCollapsed);
+            panelContent.style.display = isCollapsed ? 'none' : 'block';
+            collapseBtn.textContent = isCollapsed ? '▼' : '▲';
+        });
+
+        updateStatusDisplay();
     };
 
+    // 2. 拖拽功能实现
+    const makeDraggable = (element) => {
+        const header = element.querySelector('#panel-header');
+        let isDragging = false;
+        let startX, startY, initialLeft, initialTop;
+
+        header.addEventListener('mousedown', (e) => {
+            isDragging = true;
+            startX = e.clientX;
+            startY = e.clientY;
+            const rect = element.getBoundingClientRect();
+            initialLeft = rect.left;
+            initialTop = rect.top;
+            header.style.cursor = 'grabbing';
+            e.preventDefault(); // 防止选中文本
+        });
+
+        document.addEventListener('mousemove', (e) => {
+            if (!isDragging) return;
+            const dx = e.clientX - startX;
+            const dy = e.clientY - startY;
+
+            // 计算新位置
+            const newLeft = initialLeft + dx;
+            const newTop = initialTop + dy;
+
+            element.style.left = `${newLeft}px`;
+            element.style.top = `${newTop}px`;
+            element.style.right = 'auto'; // 清除 right 属性，避免冲突
+        });
+
+        document.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false;
+                header.style.cursor = 'grab';
+                // 保存位置
+                const pos = {
+                    left: element.style.left,
+                    top: element.style.top,
+                    right: 'auto'
+                };
+                GM_setValue('uiPosition', JSON.stringify(pos));
+            }
+        });
+    };
+
+    // 3. 样式表 (CSS)
     const addCustomStyles = () => {
         GM_addStyle(`
             #custom-script-controls-container {
                 position: fixed;
-                top: 24px;
-                right: 640px !important;
-                left: auto;
-                transform: none;
-                background-color: #ffffff;
-                padding: 8px 12px;
-                border: 1px solid #cccccc;
-                border-radius: 8px;
                 z-index: 10000;
+                background-color: #fff;
+                border-radius: 8px;
+                box-shadow: 0 4px 15px rgba(0,0,0,0.15);
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
                 font-size: 13px;
-                box-shadow: 0 3px 10px rgba(0,0,0,0.12);
-                display: flex; /* 主容器变为 flex 列 */
-                flex-direction: column; /* 子元素垂直堆叠 */
-                align-items: flex-start; /* 子元素左对齐 */
-                width: auto;
-                max-width: 95vw;
+                width: 280px;
+                border: 1px solid #ebeef5;
+                transition: height 0.3s ease;
+                overflow: hidden;
             }
 
-            #top-row-controls {
+            /* 标题栏 (拖拽区) */
+            #panel-header {
+                background-color: #f5f7fa;
+                padding: 10px 15px;
+                border-bottom: 1px solid #ebeef5;
                 display: flex;
-                flex-wrap: nowrap;
+                justify-content: space-between;
                 align-items: center;
-                margin-bottom: 8px; /* 上行与快捷按钮组之间的间距 */
-                width: 100%; /* 占据父容器的全部宽度 */
-                justify-content: space-between; /* 将停止/继续按钮推到最右边 */
+                cursor: grab;
+                user-select: none;
+            }
+            .header-title { font-weight: bold; color: #606266; }
+            #collapse-btn { cursor: pointer; color: #909399; font-size: 12px; padding: 2px 5px;}
+            #collapse-btn:hover { color: #409EFF; background: #ecf5ff; border-radius: 4px; }
+
+            /* 内容区 */
+            #panel-content { padding: 15px; }
+
+            .control-row { margin-bottom: 12px; display: flex; align-items: center; }
+            .input-group { display: flex; align-items: center; width: 100%; }
+            .input-group label { margin-right: 8px; color: #606266; white-space: nowrap; }
+
+            input[type="number"] {
+                flex: 1;
+                padding: 6px;
+                border: 1px solid #dcdfe6;
+                border-radius: 4px;
+                margin-right: 8px;
+                outline: none;
+                transition: border-color 0.2s;
+            }
+            input[type="number"]:focus { border-color: #409EFF; }
+
+            button {
+                border: none;
+                cursor: pointer;
+                border-radius: 4px;
+                font-size: 12px;
+                padding: 6px 12px;
+                transition: all 0.2s;
             }
 
-            #interval-config-group {
+            .primary-btn { background-color: #409EFF; color: white; }
+            .primary-btn:hover { background-color: #66b1ff; }
+
+            /* 快捷按钮组 */
+            .quick-row { flex-wrap: wrap; margin-bottom: 15px; }
+            .label-text { color: #909399; margin-right: 8px; font-size: 12px; }
+            .btn-group { display: flex; gap: 5px; flex-wrap: wrap; }
+            .quick-interval-btn {
+                background-color: #f4f4f5;
+                color: #606266;
+                border: 1px solid #dcdfe6;
+                padding: 4px 8px;
+            }
+            .quick-interval-btn:hover { color: #409EFF; border-color: #c6e2ff; background-color: #ecf5ff; }
+
+            /* 状态栏 & 底部按钮 */
+            .status-bar {
+                border-top: 1px solid #ebeef5;
+                padding-top: 10px;
                 display: flex;
-                align-items: center;
-                margin-right: 12px; /* 组内间距 */
-                padding: 0 5px;
+                justify-content: center;
             }
 
-            #master-control-group {
-                display: flex;
-                align-items: center;
-                padding: 0 5px;
-            }
+            #intervalStatus { width: 100%; }
 
-            #quick-set-buttons-group {
+            /* 状态显示内部布局 */
+            .status-wrapper {
                 display: flex;
-                align-items: center;
-                padding: 0 5px;
+                flex-direction: column;
+                gap: 8px;
+            }
+            .status-text { font-weight: bold; text-align: center; display: block; margin-bottom: 5px;}
+
+            /* 大号启停按钮 */
+            .action-btn {
                 width: 100%;
-                margin-top: 5px; /* 快捷按钮组上方的间距 */
-            }
-
-            #custom-script-controls-container label { margin-right: 5px; font-weight: bold; white-space: nowrap; }
-            #custom-script-controls-container input[type="number"] {
-                width: 50px; padding: 5px; font-size: 13px; border: 1px solid #bbb;
-                border-radius: 4px; margin-right: 5px; text-align: center;
-            }
-            #custom-script-controls-container button {
-                margin: 0 2px;
-                padding: 5px 8px;
-                font-size: 13px; border: 1px solid #b0b0b0;
-                border-radius: 4px; background-color: #f0f0f0; cursor: pointer; transition: background-color 0.2s;
-                white-space: nowrap;
-                display: flex;
-                align-items: center;
-            }
-            #custom-script-controls-container button i {
-                margin-right: 4px;
-            }
-            #custom-script-controls-container button:hover { background-color: #e0e0e0; }
-            #custom-script-controls-container #setSearchIntervalBtn { background-color: #e6f3ff; border-color: #b3d9ff;}
-            #custom-script-controls-container #setSearchIntervalBtn:hover { background-color: #d1e9ff; }
-            #custom-script-controls-container .quick-interval-btn { background-color: #f9f9f9; }
-
-            /* 调整 #toggleAutoActionsBtn 样式，因为它现在是动态创建到 #intervalStatus 内部 */
-            #intervalStatus #toggleAutoActionsBtn.active-stop { background-color: #ffe0e0; border-color: #ffc0c0; }
-            #intervalStatus #toggleAutoActionsBtn.active-stop:hover { background-color: #ffcfcf; }
-            #intervalStatus #toggleAutoActionsBtn.active-resume { background-color: #e0ffe0; border-color: #c0ffc0; }
-            #intervalStatus #toggleAutoActionsBtn.active-resume:hover { background-color: #cffccf; }
-
-            #intervalStatus {
-                display: flex; /* 让按钮和文本在同一行 */
-                align-items: center;
-                margin-left: 8px;
+                padding: 8px 0;
                 font-weight: bold;
-                min-width: 220px; /* 确保有足够空间显示按钮和状态文本 */
-                white-space: nowrap;
-                text-align: left;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                gap: 5px;
             }
-            #quick-set-buttons-group > span { white-space: nowrap; margin-right: 3px; }
+            .action-btn.is-active { background-color: #f56c6c; color: white; } /* 停止红色 */
+            .action-btn.is-active:hover { background-color: #f78989; }
 
-            /* Element UI 图标的基础样式，确保图标能显示 */
-            /* 实际的 Unicode 编码可能需要根据Element UI版本核对 */
-            .el-icon-video-play:before { content: "\\e628"; font-family: 'element-icons'; }
-            .el-icon-video-pause:before { content: "\\e62a"; font-family: 'element-icons'; }
-            /* 如果页面没有加载 Element UI 的字体，可能需要添加以下 @font-face 规则：*/
-            /*
-            @font-face {
+            .action-btn.is-paused { background-color: #67c23a; color: white; } /* 恢复绿色 */
+            .action-btn.is-paused:hover { background-color: #85ce61; }
+
+            /* Element UI 图标字体hack (如果网页没加载element字体) */
+             @font-face {
               font-family: 'element-icons';
               src: url('https://unpkg.com/element-ui/lib/theme-chalk/fonts/element-icons.woff') format('woff'),
                    url('https://unpkg.com/element-ui/lib/theme-chalk/fonts/element-icons.ttf') format('truetype');
-              font-weight: normal;
-              font-style: normal;
             }
-            */
+            [class^="el-icon-"], [class*=" el-icon-"] { font-family: 'element-icons' !important; }
         `);
     };
 
-    // --- Core Logic Control ---
+    // --------------- 核心逻辑 (逻辑部分保持稳健，适配新UI) ---------------
+
+    const applyNewSearchInterval = (seconds) => {
+        if (isNaN(seconds) || seconds < 1) {
+            alert('请输入有效的秒数！');
+            return false;
+        }
+
+        const newIntervalMs = seconds * 1000;
+        CONFIG.SEARCH.REFRESH_INTERVAL = newIntervalMs;
+        GM_setValue('searchInterval_ms', newIntervalMs);
+        if (intervalInput) intervalInput.value = seconds;
+
+        // 视觉反馈
+        const btn = document.getElementById('setSearchIntervalBtn');
+        const originText = btn.textContent;
+        btn.textContent = "已保存";
+        btn.style.backgroundColor = "#67C23A";
+        setTimeout(() => {
+            btn.textContent = originText;
+            btn.style.backgroundColor = ""; // 恢复
+        }, 1500);
+
+        console.log(`[设置] 间隔更新为: ${seconds} 秒`);
+
+        // 重启逻辑
+        if (!manualStopActive && isTargetPage(CONFIG.SEARCH.PAGE_HASH) && document.visibilityState === 'visible') {
+            stopAutoSearch();
+            startAutoSearch(true);
+        }
+        updateStatusDisplay();
+        return true;
+    };
+
+    const updateStatusDisplay = () => {
+        if (!statusSpan) return;
+
+        let statusText = '';
+        let statusColor = '';
+        let btnText = '';
+        let btnClass = '';
+        let iconClass = '';
+
+        if (manualStopActive) {
+            statusText = '🔴 已手动暂停';
+            statusColor = '#909399';
+            btnText = '恢复自动刷新';
+            btnClass = 'is-paused'; // 绿色按钮用于恢复
+            iconClass = 'el-icon-video-play';
+        } else if (currentAutoActionStatus === 'searching') {
+            statusText = `🔵 订单刷新中 (${CONFIG.SEARCH.REFRESH_INTERVAL / 1000}s)`;
+            statusColor = '#409EFF';
+            btnText = '暂停刷新';
+            btnClass = 'is-active'; // 红色按钮用于停止
+            iconClass = 'el-icon-video-pause';
+        } else if (currentAutoActionStatus === 'refreshing') {
+            statusText = `🟢 司机列表刷新中 (${CONFIG.REFRESH.INTERVAL / 1000}s)`;
+            statusColor = '#67C23A';
+            btnText = '暂停刷新';
+            btnClass = 'is-active';
+            iconClass = 'el-icon-video-pause';
+        } else {
+            statusText = '⚪ 待机中 (非目标页)';
+            statusColor = '#F56C6C';
+            btnText = '强制开始'; // 实际上点击只是切换手动状态，逻辑由页面检测决定
+            btnClass = 'is-paused';
+            iconClass = 'el-icon-video-play';
+        }
+
+        statusSpan.innerHTML = `
+            <div class="status-wrapper">
+                <span class="status-text" style="color:${statusColor}">${statusText}</span>
+                <button id="toggleBtn" class="action-btn ${btnClass}">
+                    <i class="${iconClass}"></i> ${btnText}
+                </button>
+            </div>
+        `;
+
+        document.getElementById('toggleBtn').addEventListener('click', () => {
+            manualStopActive = !manualStopActive;
+            GM_setValue('manualStopActive', manualStopActive);
+            if (manualStopActive) {
+                stopAllTimersAndLog("手动停止");
+            } else {
+                handleCurrentPageOrVisibilityState();
+            }
+            updateStatusDisplay();
+        });
+    };
+
+    // --- 定时器与页面逻辑 (保持原逻辑) ---
     const stopAllTimersAndLog = (reason) => {
-        const wasSearching = searchTimer !== null;
-        const wasRefreshing = refreshTimer !== null;
         stopAutoSearch();
         stopAutoRefresh();
-        if (wasSearching || wasRefreshing) {
-            console.log(`[系统] ${reason}. 相关定时器已停止。`);
-        }
         currentAutoActionStatus = 'stopped';
         updateStatusDisplay();
+        if(reason) console.log(`[系统] 停止原因: ${reason}`);
     };
 
     const handleCurrentPageOrVisibilityState = () => {
         if (manualStopActive) {
-            stopAllTimersAndLog("手动停止已激活");
-            updateStatusDisplay(); // 确保状态显示为“已暂停”
+            stopAllTimersAndLog();
             return;
         }
         if (document.hidden) {
-            stopAllTimersAndLog("页面不可见");
+            stopAllTimersAndLog("页面隐藏");
             return;
         }
+
         if (isTargetPage(CONFIG.SEARCH.PAGE_HASH)) {
-            stopAutoRefresh(); // 在订单页面时停止司机列表刷新
-            if (!searchTimer) {
-                console.log('[系统] 当前在订单页面。尝试启动自动搜索。');
-                startAutoSearch();
-            }
-            currentAutoActionStatus = 'searching';
+            stopAutoRefresh();
+            if (!searchTimer) startAutoSearch();
         } else if (isTargetPage(CONFIG.REFRESH.PAGE_HASHES)) {
-            stopAutoSearch(); // 在司机列表页面时停止订单搜索
-            if (!refreshTimer) {
-                console.log('[系统] 当前在司机页面。尝试启动自动刷新。');
-                startAutoRefresh();
-            }
-            currentAutoActionStatus = 'refreshing';
-        } else {
-            stopAllTimersAndLog("不在目标页面");
-        }
-        updateStatusDisplay();
-    };
-
-    // --- Generic Functions ---
-    const isTargetPage = (pageHashes) => {
-        const currentHash = window.location.hash;
-        if (Array.isArray(pageHashes)) {
-            return pageHashes.includes(currentHash);
-        }
-        return currentHash === pageHashes;
-    };
-
-    const safeClick = (selector, actionName) => {
-        try {
-            const element = document.querySelector(selector);
-            if (element) {
-                element.click();
-                console.log(`[成功] 已执行 ${actionName} ${new Date().toLocaleTimeString()}`);
-                return true;
-            } else {
-                console.warn(`[警告] ${actionName} 按钮未找到 (选择器: ${selector})`);
-                return false;
-            }
-        } catch (e) {
-            console.error(`[错误] ${actionName} 失败:`, e);
-            return false;
-        }
-    };
-
-    // --- Search Related Functions ---
-    const findSearchButton = () => {
-        if (!isTargetPage(CONFIG.SEARCH.PAGE_HASH)) return null;
-        const button = document.querySelector(CONFIG.SEARCH.BUTTON_SELECTOR)?.closest('button');
-        // 检查按钮是否可见且可交互
-        if (button && getComputedStyle(button).display !== 'none' && button.offsetParent !== null) {
-            return button;
-        }
-        return null;
-    };
-
-    const doSearchClick = () => {
-        if (!isTargetPage(CONFIG.SEARCH.PAGE_HASH)) {
             stopAutoSearch();
-            updateStatusDisplay(); // 页面改变时更新状态
-            return;
-        }
-        const button = findSearchButton();
-        if (button) {
-            button.click();
-            console.log(`[成功] 已执行搜索 ${new Date().toLocaleTimeString()} (间隔: ${CONFIG.SEARCH.REFRESH_INTERVAL / 1000}s)`);
+            if (!refreshTimer) startAutoRefresh();
         } else {
-            console.warn('[警告] 搜索按钮未找到, 将在下次间隔时重试...');
+            stopAllTimersAndLog("非目标页面");
         }
     };
 
-    const startAutoSearch = (isIntervalChange = false) => {
+    const isTargetPage = (hashes) => {
+        const current = window.location.hash;
+        return Array.isArray(hashes) ? hashes.includes(current) : current === hashes;
+    };
+
+    const safeClick = (selector) => {
+        const el = document.querySelector(selector);
+        if (el) { el.click(); return true; }
+        return false;
+    };
+
+    // 搜索逻辑
+    const doSearchClick = () => {
+        if (!isTargetPage(CONFIG.SEARCH.PAGE_HASH)) { stopAutoSearch(); return; }
+
+        // 尝试查找按钮
+        let btn = document.querySelector(CONFIG.SEARCH.BUTTON_SELECTOR);
+        // 如果找不到，尝试找父级button（兼容element ui结构）
+        if(!btn) {
+             const icon = document.querySelector('.el-icon-search');
+             if(icon) btn = icon.closest('button');
+        }
+
+        if (btn && btn.offsetParent !== null) {
+            btn.click();
+            console.log(`[搜索] ${new Date().toLocaleTimeString()}`);
+        }
+    };
+
+    const startAutoSearch = (immediate = false) => {
         if (searchTimer) return;
         if (!isTargetPage(CONFIG.SEARCH.PAGE_HASH)) return;
-        if (manualStopActive || document.hidden) return;
 
-        console.log(`[系统] 启动自动搜索，间隔: ${CONFIG.SEARCH.REFRESH_INTERVAL / 1000} 秒`);
+        console.log(`[系统] 启动搜索 (间隔 ${CONFIG.SEARCH.REFRESH_INTERVAL}ms)`);
         searchTimer = setInterval(doSearchClick, CONFIG.SEARCH.REFRESH_INTERVAL);
-        setTimeout(doSearchClick, isIntervalChange ? 100 : 1000); // 立即点击或稍后点击
-        console.log('[系统] 自动搜索已启动');
+        if (immediate) setTimeout(doSearchClick, 500);
+
         currentAutoActionStatus = 'searching';
         updateStatusDisplay();
     };
 
     const stopAutoSearch = () => {
-        if (searchTimer) {
-            clearInterval(searchTimer);
-            searchTimer = null;
-            console.log('[系统] 自动搜索已停止');
-            // 不需要在这里设置 currentAutoActionStatus 为 stopped，因为 handleCurrentPageOrVisibilityState 会统一处理
-        }
+        if (searchTimer) { clearInterval(searchTimer); searchTimer = null; }
     };
 
-    // --- Refresh Related Functions ---
-    const doRefreshClick = () => safeClick(CONFIG.REFRESH.REFRESH_ICON_SELECTOR, '刷新');
+    // 刷新逻辑
+    const doRefreshClick = () => safeClick(CONFIG.REFRESH.REFRESH_ICON_SELECTOR);
 
     const startAutoRefresh = () => {
         if (refreshTimer) return;
-        if (!isTargetPage(CONFIG.REFRESH.PAGE_HASHES)) return;
-        if (manualStopActive || document.hidden) return;
-
         refreshTimer = setInterval(doRefreshClick, CONFIG.REFRESH.INTERVAL);
-        setTimeout(doRefreshClick, 1000);
-        console.log('[系统] 自动刷新已启动');
         currentAutoActionStatus = 'refreshing';
         updateStatusDisplay();
     };
 
     const stopAutoRefresh = () => {
-        if (refreshTimer) {
-            clearInterval(refreshTimer);
-            refreshTimer = null;
-            console.log('[系统] 自动刷新已停止');
-            // 不需要在这里设置 currentAutoActionStatus 为 stopped，因为 handleCurrentPageOrVisibilityState 会统一处理
-        }
+        if (refreshTimer) { clearInterval(refreshTimer); refreshTimer = null; }
     };
 
     // --------------- 初始化 ---------------
     const init = () => {
         createSettingsUI();
+
+        // Hash 和 可见性监听
         window.addEventListener('hashchange', () => {
-            console.log('[系统] Hash 改变为:', window.location.hash);
-            stopAllTimersAndLog("Hash 改变"); // 立即停止所有定时器
-            // 为订单页面添加小延迟，确保元素加载完成
-            if (isTargetPage(CONFIG.SEARCH.PAGE_HASH)) {
-                setTimeout(handleCurrentPageOrVisibilityState, CONFIG.SEARCH.INIT_DELAY);
-            } else {
-                handleCurrentPageOrVisibilityState();
-            }
+            stopAllTimersAndLog();
+            setTimeout(handleCurrentPageOrVisibilityState, 1500); // 留出Vue渲染时间
         });
-        document.addEventListener('visibilitychange', () => {
-            console.log(`[系统] 页面可见性改变为: ${document.hidden ? '隐藏' : '可见'}`);
-            handleCurrentPageOrVisibilityState();
-        });
-        console.log('[系统] 初始页面检查, Hash:', window.location.hash);
-        // 初始检查，为订单页面添加延迟
-        if (isTargetPage(CONFIG.SEARCH.PAGE_HASH)) {
-            setTimeout(handleCurrentPageOrVisibilityState, CONFIG.SEARCH.INIT_DELAY);
-        } else {
-            handleCurrentPageOrVisibilityState();
-        }
-        console.log('[系统] 脚本初始化完成');
+        document.addEventListener('visibilitychange', handleCurrentPageOrVisibilityState);
+
+        // 初始运行
+        setTimeout(handleCurrentPageOrVisibilityState, 1500);
+        console.log('[系统] 增强版UI脚本已加载');
     };
 
-    // --------------- 启动 ---------------
-    // 使用 'load' 事件确保 DOM 和资源加载完成，并添加少量延迟
     if (document.readyState === 'complete' || document.readyState === 'interactive') {
         setTimeout(init, 500);
     } else {
         window.addEventListener('load', () => setTimeout(init, 500), { once: true });
     }
-
 })();
