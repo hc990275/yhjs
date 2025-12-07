@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手
+// @name          代驾调度系统助手 (本地完整版+清空功能)
 // @namespace     http://tampermonkey.net/
-// @version       9.0
-// @description   启动自动比对云端版本号；发现新版自动提示更新；保留所有V8系列功能（隔离库、剪贴板、精准缩放）。
+// @version       9.2
+// @description   启动自动比对云端版本号；发现新版自动提示更新；保留所有V8系列功能；新增一键清空输入框功能。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @updateURL     https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251
@@ -43,11 +43,8 @@
         },
         // 云端配置
         CLOUD: {
-            // 1. 版本号检测地址 (只读取数字)
             VERSION_CHECK_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fbb?sign=65b8wq&t=1765094665264",
-            // 2. 脚本下载地址 (代码文件)
             SCRIPT_DOWNLOAD_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251",
-            // 3. 隔离库地址
             BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=nfpvws&t=1765094235754"
         },
         CLIPBOARD: { MAX_HISTORY: 6 }
@@ -66,9 +63,8 @@
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
         history: JSON.parse(GM_getValue('clipHistory', '{"phones":[], "addrs":[]}')),
         blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信'),
-        // 版本检测状态
         currentVersion: GM_info.script.version,
-        newVersionAvailable: null // 如果检测到新版，这里会变成版本号字符串
+        newVersionAvailable: null 
     };
 
     // --------------- 3. 核心逻辑 ---------------
@@ -103,7 +99,6 @@
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
 
-    // [逻辑] 版本检测 (核心新增)
     const checkAppVersion = () => {
         log(`当前版本 V${state.currentVersion}, 正在检查更新...`, 'info');
         GM_xmlhttpRequest({
@@ -111,15 +106,14 @@
             url: CONFIG.CLOUD.VERSION_CHECK_URL,
             onload: function(response) {
                 if (response.status === 200) {
-                    const cloudVerStr = response.responseText.trim(); // 获取云端版本号
+                    const cloudVerStr = response.responseText.trim(); 
                     const cloudVer = parseFloat(cloudVerStr);
                     const localVer = parseFloat(state.currentVersion);
 
-                    // 简单比对：如果云端大于本地
                     if (!isNaN(cloudVer) && cloudVer > localVer) {
                         state.newVersionAvailable = cloudVerStr;
                         log(`发现新版本: V${cloudVerStr}`, 'success');
-                        updateUI(); // 刷新UI显示更新按钮
+                        updateUI(); 
                     } else {
                         log('当前已是最新版', 'info');
                     }
@@ -128,7 +122,6 @@
         });
     };
 
-    // [逻辑] 云端黑名单同步
     const fetchOnlineBlacklist = (silent = false) => {
         if(!silent) log('同步隔离库...', 'info');
         GM_xmlhttpRequest({
@@ -151,7 +144,6 @@
         });
     };
 
-    // [逻辑] 刷新系统
     const startRapidRefresh = () => {
         if (state.rapidTimer) return;
         state.rapidTimer = setInterval(() => {
@@ -261,6 +253,29 @@
         } else {
             alert(`找不到${type==='address'?'地址':'电话'}框`);
         }
+    };
+
+    // [新增] 强力清空功能
+    const clearAllInputs = () => {
+        const inputs = document.querySelectorAll('input[type="text"], textarea');
+        let count = 0;
+        inputs.forEach(input => {
+            const placeholder = (input.placeholder || '').toLowerCase();
+            const parentText = input.closest('.el-form-item')?.innerText?.toLowerCase() || '';
+            
+            // 关键词匹配：电话、手机、地址、位置
+            if (/电话|手机|地址|位置|起点|终点/.test(placeholder) || 
+                /电话|手机|地址|位置/.test(parentText)) {
+                
+                // Vue 兼容性清空
+                input.value = '';
+                input.dispatchEvent(new Event('input', { bubbles: true }));
+                input.dispatchEvent(new Event('change', { bubbles: true }));
+                count++;
+            }
+        });
+        if(count > 0) log(`已清空 ${count} 个填写项`, 'success');
+        else log('未找到可清空的输入框', 'info');
     };
 
     const setSliderValue = (targetValue) => {
@@ -406,10 +421,12 @@
                 `<button class="btn-preset" data-val="${num}">${num}</button>`
             ).join('');
             
+            // [修改] 在这里增加了清空按钮
             html = `
                 <div class="gj-group">
                     <button id="btn-auto-addr" class="btn-big green">填最新地址</button>
                     <button id="btn-auto-phone" class="btn-big red">填最新电话</button>
+                    <button id="btn-clear-all" class="btn-big gray" style="background:#f4f4f5; border-color:#d3d4d6; color:#909399; margin-top:2px;">🗑️ 一键清空</button>
                 </div>
                 <div class="gj-label-sm">⚡ AI距离 (极速)</div>
                 <div class="gj-grid-btns">${buttonsHtml}</div>
@@ -468,6 +485,9 @@
             document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
                 if(state.history.phones[0]) fillInput('phone', state.history.phones[0]);
             });
+            // [新增] 绑定清空事件
+            document.getElementById('btn-clear-all')?.addEventListener('click', clearAllInputs);
+            
             document.getElementById('btn-sync-cloud')?.addEventListener('click', () => fetchOnlineBlacklist(false));
         }
         
@@ -517,7 +537,6 @@
         });
         document.addEventListener('mousemove', e => {
             if (!isDragging) return;
-            // 考虑 transform scale 的影响
             const dx = (e.clientX - startX) / state.uiScale;
             const dy = (e.clientY - startY) / state.uiScale;
             el.style.left = (rect.left + dx) + 'px';
@@ -576,6 +595,8 @@
             .btn-big.green:hover { background: #67c23a; color: white; }
             .btn-big.red { background: #fef0f0; border-color: #fbc4c4; color: #f56c6c; }
             .btn-big.red:hover { background: #f56c6c; color: white; }
+            .btn-big.gray { background: #f4f4f5; border-color: #d3d4d6; color: #909399; }
+            .btn-big.gray:hover { background: #909399; color: white; border-color: #909399; }
 
             .gj-grid-btns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 5px; }
             .btn-preset { background: #ECF5FF; border: 1px solid #B3D8FF; color: #409EFF; padding: 8px 0; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight:bold;}
@@ -599,7 +620,7 @@
 
     const init = () => {
         addStyles();
-        checkAppVersion(); // 启动时检查新版
+        checkAppVersion(); 
         checkPage();
         window.addEventListener('hashchange', checkPage);
         document.addEventListener('visibilitychange', () => {
