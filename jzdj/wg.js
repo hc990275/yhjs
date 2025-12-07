@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name          代驾调度系统助手 V8.4 (云端版本检测+自动更新)
+// @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       8.4
+// @version       9.0
 // @description   启动自动比对云端版本号；发现新版自动提示更新；保留所有V8系列功能（隔离库、剪贴板、精准缩放）。
-// @author        郭 + You + Gemini Consultant
+// @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @updateURL     https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251
 // @downloadURL   https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251
