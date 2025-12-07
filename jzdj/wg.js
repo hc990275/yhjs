@@ -2,7 +2,7 @@
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
 // @version       9.1
-// @description   启动自动比对云端版本号；根据时间段自动设置初始距离(2km/3km)；移除电话库，地址库双列显示；保留剪贴板智能解析。
+// @description   启动自动比对云端版本号；根据时间段自动设置初始距离；恢复“填最新电话”按钮（后台记录）；每次进入派单页强制同步隔离库；地址库双列显示。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @updateURL     https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251
@@ -47,7 +47,7 @@
             SCRIPT_DOWNLOAD_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251",
             BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=nfpvws&t=1765094235754"
         },
-        CLIPBOARD: { MAX_HISTORY: 20 } // 地址库容量增加
+        CLIPBOARD: { MAX_HISTORY: 20 }
     };
 
     // --------------- 2. 全局状态 ---------------
@@ -61,12 +61,11 @@
         rapidTimer: null,
         uiPos: JSON.parse(GM_getValue('uiPos', '{"top":"80px","left":"20px"}')),
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
-        // 移除电话历史，只保留地址
-        history: JSON.parse(GM_getValue('clipHistory', '{"addrs":[]}')),
+        // 恢复 phones 数组以支持“填最新电话”
+        history: JSON.parse(GM_getValue('clipHistory', '{"phones":[], "addrs":[]}')),
         blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信'),
         currentVersion: GM_info.script.version,
         newVersionAvailable: null,
-        // 时间配置，默认值防止首次读取失败
         timeConfig: JSON.parse(GM_getValue('timeConfig', '{"start":"20:00", "end":"22:00"}'))
     };
 
@@ -81,9 +80,12 @@
             state.refreshInterval = GM_getValue('driverInterval', CONFIG.DRIVER.DEFAULT_INTERVAL);
         } else if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000; 
+            
+            // [修改] 每次进入派单页，强制同步隔离库
+            log('进入派单界面，正在同步隔离库...', 'info');
             fetchOnlineBlacklist(true);
-            // 每次切换到指派页面检测一次是否需要设置距离（针对页面内路由跳转的情况）
-            // 如果是F5刷新，init()里已经执行过了，这里多执行一次无妨，因为会有延时
+
+            // 延迟触发时间距离设置（防止页面元素未加载）
             setTimeout(applyDistanceByTime, 1500); 
         }
 
@@ -105,18 +107,15 @@
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
 
-    // [逻辑] 云端配置检测 (版本 + 时间段)
     const checkCloudConfig = () => {
-        log(`读取云端配置...`, 'info');
         GM_xmlhttpRequest({
             method: "GET",
             url: CONFIG.CLOUD.VERSION_CHECK_URL,
             onload: function(response) {
                 if (response.status === 200) {
                     const text = response.responseText.trim();
-                    const lines = text.split(/[\r\n]+/); // 按行分割
+                    const lines = text.split(/[\r\n]+/); 
                     
-                    // 1. 解析版本号
                     if (lines.length > 0) {
                         const cloudVerStr = lines[0].trim();
                         const cloudVer = parseFloat(cloudVerStr);
@@ -127,17 +126,15 @@
                         }
                     }
 
-                    // 2. 解析时间段
                     if (lines.length >= 3) {
                         const newTimeConfig = {
                             start: lines[1].trim(),
                             end: lines[2].trim()
                         };
-                        // 简单的格式校验
                         if (newTimeConfig.start.includes(':') && newTimeConfig.end.includes(':')) {
                             state.timeConfig = newTimeConfig;
                             GM_setValue('timeConfig', JSON.stringify(newTimeConfig));
-                            log(`时间段已更新: ${newTimeConfig.start} - ${newTimeConfig.end}`, 'success');
+                            // log(`时间段已更新: ${newTimeConfig.start} - ${newTimeConfig.end}`, 'success');
                         }
                     }
                 }
@@ -145,14 +142,13 @@
         });
     };
 
-    // [逻辑] 根据时间设置距离 (刷新页面时触发)
     const applyDistanceByTime = () => {
         if (!isDispatchPage()) return;
         
         const now = new Date();
         const currentH = now.getHours();
         const currentM = now.getMinutes();
-        const currentVal = currentH * 60 + currentM; // 当前分钟数
+        const currentVal = currentH * 60 + currentM; 
 
         const parseTime = (str) => {
             const parts = str.split(':');
@@ -162,10 +158,7 @@
         const startVal = parseTime(state.timeConfig.start);
         const endVal = parseTime(state.timeConfig.end);
 
-        // 逻辑：20:00(含) 到 22:00(不含) 之间
-        // 如果跨天（比如 23:00 到 02:00），逻辑需要调整，这里假设是同天的时间段
-        let targetKm = 3; // 默认3公里
-        
+        let targetKm = 3; 
         if (currentVal >= startVal && currentVal < endVal) {
             targetKm = 2;
             log(`当前是高峰时段 (${state.timeConfig.start}-${state.timeConfig.end})，自动设为 2km`, 'success');
@@ -173,14 +166,15 @@
             targetKm = 3;
             log(`当前是平时时段，自动设为 3km`, 'info');
         }
-
         setSliderValue(targetKm);
     };
 
     const fetchOnlineBlacklist = (silent = false) => {
+        // 添加时间戳防止缓存
+        const t = new Date().getTime();
         GM_xmlhttpRequest({
             method: "GET",
-            url: CONFIG.CLOUD.BLACKLIST_URL,
+            url: CONFIG.CLOUD.BLACKLIST_URL + (CONFIG.CLOUD.BLACKLIST_URL.includes('?') ? '&' : '?') + '_=' + t,
             onload: function(response) {
                 if (response.status === 200) {
                     const text = response.responseText;
@@ -188,7 +182,7 @@
                         const cleanList = text.replace(/[\r\n\s]+/g, ',').replace(/，/g, ',');
                         state.blacklist = cleanList;
                         GM_setValue('blacklist', cleanList);
-                        if(!silent) log('隔离库已更新', 'success');
+                        if(!silent) log('隔离库已同步', 'success');
                     }
                 }
             }
@@ -237,19 +231,37 @@
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
 
-    // [逻辑] 解析文本 (只提取地址)
+    // [逻辑] 解析文本 (同时提取地址和电话)
     const parseTextToHistory = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
         
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
         let hasUpdate = false;
 
-        // 1. 移除所有手机号 (避免干扰，但不存储)
+        // 1. 提取所有手机号 (存储以供按钮使用)
         const phoneRegex = /(?:^|[^\d])(1\d{10})(?:$|[^\d])/g;
-        let addrText = fullText.replace(phoneRegex, ' ').trim();
+        let phoneMatch;
+        let tempTextForPhone = fullText;
+        // 临时数组用于反转顺序
+        let phonesFound = [];
+        
+        while ((phoneMatch = phoneRegex.exec(tempTextForPhone)) !== null) {
+            phonesFound.push(phoneMatch[1]);
+        }
+        
+        // 倒序处理，确保第一个出现的在最新
+        phonesFound.reverse().forEach(num => {
+            if (!state.history.phones) state.history.phones = [];
+            const existIdx = state.history.phones.indexOf(num);
+            if (existIdx > -1) state.history.phones.splice(existIdx, 1);
+            state.history.phones.unshift(num);
+            hasUpdate = true;
+            log('提取电话: ' + num, 'success');
+        });
 
-        // 2. 提取地址
-        const segments = addrText.split(/[\r\n,;，；]+/); // 按常见分隔符切分
+        // 2. 提取地址 (移除手机号后分析)
+        let addrText = fullText.replace(phoneRegex, ' ').trim();
+        const segments = addrText.split(/[\r\n,;，；]+/); 
 
         segments.reverse().forEach(seg => {
             const cleanSeg = seg.trim();
@@ -257,9 +269,7 @@
             if (/^\d+$/.test(cleanSeg)) return; 
             if (blockers.some(keyword => cleanSeg.includes(keyword))) return;
 
-            // 兼容旧数据结构，如果没有addrs属性
             if (!state.history.addrs) state.history.addrs = [];
-
             const existIdx = state.history.addrs.indexOf(cleanSeg);
             if (existIdx > -1) state.history.addrs.splice(existIdx, 1);
             state.history.addrs.unshift(cleanSeg);
@@ -268,7 +278,8 @@
         });
 
         // 3. 截断长度
-        if (state.history.addrs.length > CONFIG.CLIPBOARD.MAX_HISTORY) state.history.addrs.length = CONFIG.CLIPBOARD.MAX_HISTORY;
+        if (state.history.phones && state.history.phones.length > CONFIG.CLIPBOARD.MAX_HISTORY) state.history.phones.length = CONFIG.CLIPBOARD.MAX_HISTORY;
+        if (state.history.addrs && state.history.addrs.length > CONFIG.CLIPBOARD.MAX_HISTORY) state.history.addrs.length = CONFIG.CLIPBOARD.MAX_HISTORY;
 
         return hasUpdate;
     };
@@ -295,7 +306,11 @@
                      if (!inputs[i].closest('.el-form-item')) { input = inputs[i]; break; }
                  }
              }
+        } else if (type === 'phone') {
+             input = document.querySelector('input[placeholder*="用户电话"]') || 
+                     document.querySelector('input[placeholder*="电话"]');
         }
+
         if (input) {
             input.value = value;
             input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -304,7 +319,7 @@
             input.style.backgroundColor = '#e1f3d8';
             setTimeout(() => input.style.backgroundColor = '', 500);
         } else {
-            alert(`找不到地址框`);
+            alert(`找不到${type==='address'?'地址':'电话'}框`);
         }
     };
 
@@ -328,9 +343,6 @@
                 runway.dispatchEvent(new MouseEvent('mousedown', eventOpts));
                 runway.dispatchEvent(new MouseEvent('mouseup', eventOpts));
                 runway.dispatchEvent(new MouseEvent('click', eventOpts));
-                
-                // 更新UI显示，不提示弹窗，只在控制台
-                // log(`已设置距离为 ${targetValue}km`, 'info');
             } catch (e) { }
         }
     };
@@ -366,7 +378,7 @@
                     </div>
                     <div class="gj-list-body" id="list-addr-body"></div>
                 </div>
-                <!-- 电话库已隐藏 -->
+                <!-- 电话库列表已隐藏，但后台在记录 -->
                 <div class="gj-side-box" style="margin-top:5px; padding:5px;">
                     <input id="gj-magic-input" placeholder="📋 在此粘贴... (自动解析)" style="width:100%; box-sizing:border-box; border:1px solid #ddd; border-radius:4px; padding:4px; font-size:12px;">
                 </div>
@@ -392,7 +404,6 @@
 
         widget.querySelector('#btn-refresh-addr').addEventListener('click', processClipboard);
 
-        // 万能框输入事件
         const magicInput = widget.querySelector('#gj-magic-input');
         magicInput.addEventListener('input', (e) => {
             const val = e.target.value;
@@ -463,11 +474,13 @@
                 `<button class="btn-preset" data-val="${num}">${num}</button>`
             ).join('');
             
+            // [修改] 恢复了红色电话按钮
             html = `
                 <div class="gj-group">
                     <button id="btn-auto-addr" class="btn-big green">📌 填最新地址</button>
+                    <button id="btn-auto-phone" class="btn-big red">📞 填最新电话</button>
                 </div>
-                <div class="gj-label-sm">⚡ AI距离 (F5刷新自动调 ${state.timeConfig.start}-${state.timeConfig.end})</div>
+                <div class="gj-label-sm">⚡ AI距离 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</div>
                 <div class="gj-grid-btns">${buttonsHtml}</div>
                 
                 <div class="gj-bottom-controls">
@@ -493,7 +506,6 @@
         const addrBody = document.getElementById('list-addr-body');
         
         if(addrBody) {
-            // 安全检查，确保 addrs 存在
             const list = state.history.addrs || [];
             addrBody.innerHTML = list.map(i => renderItem(i, 'address')).join('') || '<div class="gj-empty">- 空 -</div>';
             addrBody.querySelectorAll('.gj-list-item').forEach(el => el.addEventListener('click', () => fillInput('address', el.dataset.val)));
@@ -517,7 +529,11 @@
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
             );
             document.getElementById('btn-auto-addr')?.addEventListener('click', () => {
-                if(state.history.addrs[0]) fillInput('address', state.history.addrs[0]);
+                if(state.history.addrs && state.history.addrs[0]) fillInput('address', state.history.addrs[0]);
+            });
+            // [新增] 电话按钮事件
+            document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
+                if(state.history.phones && state.history.phones[0]) fillInput('phone', state.history.phones[0]);
             });
             document.getElementById('btn-sync-cloud')?.addEventListener('click', () => {
                 fetchOnlineBlacklist(false);
@@ -627,6 +643,8 @@
             .btn-big { width: 100%; border: 1px solid; border-radius: 6px; padding: 10px; margin-bottom: 6px; cursor: pointer; font-weight: bold; font-size: 14px; }
             .btn-big.green { background: #f0f9eb; border-color: #c2e7b0; color: #67c23a; }
             .btn-big.green:hover { background: #67c23a; color: white; }
+            .btn-big.red { background: #fef0f0; border-color: #fbc4c4; color: #f56c6c; }
+            .btn-big.red:hover { background: #f56c6c; color: white; }
 
             .gj-grid-btns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 5px; }
             .btn-preset { background: #ECF5FF; border: 1px solid #B3D8FF; color: #409EFF; padding: 8px 0; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight:bold;}
@@ -634,12 +652,12 @@
 
             /* 地址库双列布局 */
             .gj-list-body { 
-                height: 300px; /* 增加高度 */
+                height: 300px; 
                 overflow-y: auto; background: #fff; 
                 display: grid;
                 grid-template-columns: 1fr 1fr; /* 双列 */
                 gap: 1px;
-                background-color: #f0f0f0; /* 边框色 */
+                background-color: #f0f0f0; 
             }
             .gj-list-item {
                 background: #fff;
@@ -660,10 +678,9 @@
 
     const init = () => {
         addStyles();
-        checkCloudConfig(); // 启动时获取版本和时间配置
+        checkCloudConfig(); 
         checkPage();
         window.addEventListener('hashchange', checkPage);
-        // 首次加载如果是在指派页，延迟触发一下时间距离逻辑，确保DOM加载
         if(isDispatchPage()) setTimeout(applyDistanceByTime, 2000);
 
         document.addEventListener('visibilitychange', () => {
