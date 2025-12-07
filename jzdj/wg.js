@@ -1,10 +1,12 @@
 // ==UserScript==
-// @name          代驾调度系统助手 V8.0 (云端隔离库+自由缩放)
+// @name          代驾调度系统助手 V8.1 (自动更新+云端隔离+自由缩放)
 // @namespace     http://tampermonkey.net/
-// @version       8.0
-// @description   UI尺寸翻倍+支持拖拽缩放；接入在线黑名单库自动更新；保留一体化设计与极速填单功能。
+// @version       8.1
+// @description   配置了自动更新地址；UI尺寸翻倍+支持拖拽缩放；接入在线黑名单库自动更新；保留一体化设计与极速填单功能。
 // @author        郭 + You + Gemini Consultant
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
+// @updateURL     https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251
+// @downloadURL   https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251
 // @grant         GM_setValue
 // @grant         GM_getValue
 // @grant         GM_addStyle
@@ -37,6 +39,7 @@
             PRESETS: [2, 3, 5, 10, 20],
             RAPID_INTERVAL: 500
         },
+        // 在线隔离库地址
         BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=nfpvws&t=1765094235754",
         CLIPBOARD: { MAX_HISTORY: 6 }
     };
