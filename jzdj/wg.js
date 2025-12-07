@@ -179,7 +179,7 @@
         // 2. 长度不能超过 10
         state.history.addrs = state.history.addrs.filter(addr => {
             const isBlocked = blockers.some(keyword => addr.includes(keyword));
-            const isTooLong = addr.length > 15;
+            const isTooLong = addr.length > 20;
             return !isBlocked && !isTooLong;
         });
 
