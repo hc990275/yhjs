@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       9.1
-// @description   启动自动比对云端版本号；根据时间段自动设置初始距离；恢复“填最新电话”按钮（后台记录）；每次进入派单页强制同步隔离库；地址库双列显示。
+// @version       9.6
+// @description   启动自动比对云端版本号；根据时间段自动设置初始距离；每次进入派单页强制同步隔离库并自动清洗(屏蔽词+超长地址)；恢复“填最新电话”按钮；双列地址库。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @updateURL     https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251
@@ -42,7 +42,6 @@
             RAPID_INTERVAL: 500
         },
         CLOUD: {
-            // 云端文件格式：第一行版本号，第二行开始时间(HH:mm)，第三行结束时间(HH:mm)
             VERSION_CHECK_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fbb?sign=65b8wq&t=1765094665264",
             SCRIPT_DOWNLOAD_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251",
             BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=nfpvws&t=1765094235754"
@@ -61,7 +60,6 @@
         rapidTimer: null,
         uiPos: JSON.parse(GM_getValue('uiPos', '{"top":"80px","left":"20px"}')),
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
-        // 恢复 phones 数组以支持“填最新电话”
         history: JSON.parse(GM_getValue('clipHistory', '{"phones":[], "addrs":[]}')),
         blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信'),
         currentVersion: GM_info.script.version,
@@ -81,11 +79,11 @@
         } else if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000; 
             
-            // [修改] 每次进入派单页，强制同步隔离库
-            log('进入派单界面，正在同步隔离库...', 'info');
+            // 每次进入派单页，强制同步隔离库
+            log('进入派单界面，同步并清洗库...', 'info');
             fetchOnlineBlacklist(true);
 
-            // 延迟触发时间距离设置（防止页面元素未加载）
+            // 延迟触发时间距离设置
             setTimeout(applyDistanceByTime, 1500); 
         }
 
@@ -134,7 +132,6 @@
                         if (newTimeConfig.start.includes(':') && newTimeConfig.end.includes(':')) {
                             state.timeConfig = newTimeConfig;
                             GM_setValue('timeConfig', JSON.stringify(newTimeConfig));
-                            // log(`时间段已更新: ${newTimeConfig.start} - ${newTimeConfig.end}`, 'success');
                         }
                     }
                 }
@@ -161,16 +158,41 @@
         let targetKm = 3; 
         if (currentVal >= startVal && currentVal < endVal) {
             targetKm = 2;
-            log(`当前是高峰时段 (${state.timeConfig.start}-${state.timeConfig.end})，自动设为 2km`, 'success');
+            log(`高峰时段 (${state.timeConfig.start}-${state.timeConfig.end})，设为 2km`, 'success');
         } else {
             targetKm = 3;
-            log(`当前是平时时段，自动设为 3km`, 'info');
+            log(`平时时段，设为 3km`, 'info');
         }
         setSliderValue(targetKm);
     };
 
+    // [逻辑升级] 清洗历史记录 (屏蔽词 + 长度限制)
+    const cleanHistoryWithBlacklist = () => {
+        if (!state.history.addrs || state.history.addrs.length === 0) return;
+        
+        const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
+        
+        const originalCount = state.history.addrs.length;
+        
+        // 过滤：
+        // 1. 不包含任何屏蔽词
+        // 2. 长度不能超过 10
+        state.history.addrs = state.history.addrs.filter(addr => {
+            const isBlocked = blockers.some(keyword => addr.includes(keyword));
+            const isTooLong = addr.length > 10;
+            return !isBlocked && !isTooLong;
+        });
+
+        const newCount = state.history.addrs.length;
+        
+        if (originalCount !== newCount) {
+            GM_setValue('clipHistory', JSON.stringify(state.history));
+            updateListsUI();
+            log(`已清洗: 移除 ${originalCount - newCount} 条(违规/超长)地址`, 'warning');
+        }
+    };
+
     const fetchOnlineBlacklist = (silent = false) => {
-        // 添加时间戳防止缓存
         const t = new Date().getTime();
         GM_xmlhttpRequest({
             method: "GET",
@@ -182,7 +204,11 @@
                         const cleanList = text.replace(/[\r\n\s]+/g, ',').replace(/，/g, ',');
                         state.blacklist = cleanList;
                         GM_setValue('blacklist', cleanList);
-                        if(!silent) log('隔离库已同步', 'success');
+                        
+                        // 同步完成后，立即清洗
+                        cleanHistoryWithBlacklist();
+
+                        if(!silent) log('隔离库同步并清洗完成', 'success');
                     }
                 }
             }
@@ -231,25 +257,23 @@
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
 
-    // [逻辑] 解析文本 (同时提取地址和电话)
+    // [逻辑升级] 解析文本 (增加长度限制)
     const parseTextToHistory = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
         
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
         let hasUpdate = false;
 
-        // 1. 提取所有手机号 (存储以供按钮使用)
+        // 1. 提取手机号
         const phoneRegex = /(?:^|[^\d])(1\d{10})(?:$|[^\d])/g;
         let phoneMatch;
         let tempTextForPhone = fullText;
-        // 临时数组用于反转顺序
         let phonesFound = [];
         
         while ((phoneMatch = phoneRegex.exec(tempTextForPhone)) !== null) {
             phonesFound.push(phoneMatch[1]);
         }
         
-        // 倒序处理，确保第一个出现的在最新
         phonesFound.reverse().forEach(num => {
             if (!state.history.phones) state.history.phones = [];
             const existIdx = state.history.phones.indexOf(num);
@@ -259,7 +283,7 @@
             log('提取电话: ' + num, 'success');
         });
 
-        // 2. 提取地址 (移除手机号后分析)
+        // 2. 提取地址
         let addrText = fullText.replace(phoneRegex, ' ').trim();
         const segments = addrText.split(/[\r\n,;，；]+/); 
 
@@ -267,6 +291,11 @@
             const cleanSeg = seg.trim();
             if (!cleanSeg || cleanSeg.length < 2) return;
             if (/^\d+$/.test(cleanSeg)) return; 
+            
+            // 检查长度 > 10
+            if (cleanSeg.length > 10) return;
+
+            // 检查屏蔽词
             if (blockers.some(keyword => cleanSeg.includes(keyword))) return;
 
             if (!state.history.addrs) state.history.addrs = [];
@@ -378,7 +407,6 @@
                     </div>
                     <div class="gj-list-body" id="list-addr-body"></div>
                 </div>
-                <!-- 电话库列表已隐藏，但后台在记录 -->
                 <div class="gj-side-box" style="margin-top:5px; padding:5px;">
                     <input id="gj-magic-input" placeholder="📋 在此粘贴... (自动解析)" style="width:100%; box-sizing:border-box; border:1px solid #ddd; border-radius:4px; padding:4px; font-size:12px;">
                 </div>
@@ -474,7 +502,6 @@
                 `<button class="btn-preset" data-val="${num}">${num}</button>`
             ).join('');
             
-            // [修改] 恢复了红色电话按钮
             html = `
                 <div class="gj-group">
                     <button id="btn-auto-addr" class="btn-big green">📌 填最新地址</button>
@@ -531,7 +558,6 @@
             document.getElementById('btn-auto-addr')?.addEventListener('click', () => {
                 if(state.history.addrs && state.history.addrs[0]) fillInput('address', state.history.addrs[0]);
             });
-            // [新增] 电话按钮事件
             document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
                 if(state.history.phones && state.history.phones[0]) fillInput('phone', state.history.phones[0]);
             });
