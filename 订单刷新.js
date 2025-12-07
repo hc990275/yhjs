@@ -1,9 +1,9 @@
 // ==UserScript==
-// @name          ´ú¼İ¶©µ¥/Ë¾»úÁĞ±í×Ô¶¯µ÷¶È (¸ß¼¶¿ØÖÆ - ³¤Ìõ - ×´Ì¬ºÍÍ¼±ê - ÓÒÉÏ½Ç¹Ì¶¨ - ¼ò»¯×´Ì¬ÏÔÊ¾)
+// @name          ä»£é©¾è®¢å•/å¸æœºåˆ—è¡¨è‡ªåŠ¨è°ƒåº¦ (é«˜çº§æ§åˆ¶ - é•¿æ¡ - çŠ¶æ€å’Œå›¾æ ‡ - å³ä¸Šè§’å›ºå®š - ç®€åŒ–çŠ¶æ€æ˜¾ç¤º)
 // @namespace     http://tampermonkey.net/
-// @version       1.9 // °æ±¾ºÅÔö¼Ó£¬·½±ãÊ¶±ğ¸üĞÂ£¬±íÊ¾UIºÍ×´Ì¬ÏÔÊ¾µ÷Õû
-// @description   ÔÚÖ¸¶¨Ò³Ãæ×Ô¶¯Ö´ĞĞ²Ù×÷ (ËÑË÷/Ë¢ĞÂ), ¿É×Ô¶¨Òå¶©µ¥Ë¢ĞÂÊ±¼ä, ¿ì½İÉèÖÃ, ÊÖ¶¯ÆôÍ£, Ôö¼Ó×´Ì¬ÏÔÊ¾¼°Í¼±ê¿ØÖÆ (³¤ÌõÏÔÊ¾ÔÚÓÒÉÏ½Ç)
-// @author        ¹ù + You (ºÏ²¢) + Gemini
+// @version       1.9 // ç‰ˆæœ¬å·å¢åŠ ï¼Œæ–¹ä¾¿è¯†åˆ«æ›´æ–°ï¼Œè¡¨ç¤ºUIå’ŒçŠ¶æ€æ˜¾ç¤ºè°ƒæ•´
+// @description   åœ¨æŒ‡å®šé¡µé¢è‡ªåŠ¨æ‰§è¡Œæ“ä½œ (æœç´¢/åˆ·æ–°), å¯è‡ªå®šä¹‰è®¢å•åˆ·æ–°æ—¶é—´, å¿«æ·è®¾ç½®, æ‰‹åŠ¨å¯åœ, å¢åŠ çŠ¶æ€æ˜¾ç¤ºåŠå›¾æ ‡æ§åˆ¶ (é•¿æ¡æ˜¾ç¤ºåœ¨å³ä¸Šè§’)
+// @author        éƒ­ + You (åˆå¹¶) + Gemini
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
 // @grant         GM_getValue
@@ -13,7 +13,7 @@
 (function() {
     'use strict';
 
-    // --------------- ÅäÖÃ²ÎÊı ---------------
+    // --------------- é…ç½®å‚æ•° ---------------
     const CONFIG = {
         SEARCH: {
             REFRESH_INTERVAL: GM_getValue('searchInterval_ms', 20000),
@@ -29,22 +29,22 @@
     };
     const QUICK_INTERVALS_SECONDS = [1, 2, 5, 10, 20, 40];
 
-    // --------------- ±äÁ¿ ---------------
+    // --------------- å˜é‡ ---------------
     let searchTimer = null;
     let refreshTimer = null;
     let intervalInput = null;
-    let statusSpan = null; // Õâ¸öÏÖÔÚÊÇ×´Ì¬ºÍ¿ØÖÆ°´Å¥µÄ×éºÏÏÔÊ¾ÇøÓò
+    let statusSpan = null; // è¿™ä¸ªç°åœ¨æ˜¯çŠ¶æ€å’Œæ§åˆ¶æŒ‰é’®çš„ç»„åˆæ˜¾ç¤ºåŒºåŸŸ
     let manualStopActive = GM_getValue('manualStopActive', false);
     let currentAutoActionStatus = 'stopped'; // 'searching', 'refreshing', 'stopped'
 
-    // --------------- º¯Êı ---------------
+    // --------------- å‡½æ•° ---------------
 
     // --- UI & Settings Functions ---
     const applyNewSearchInterval = (seconds) => {
         if (isNaN(seconds) || seconds < 1) {
             const originalStatusText = statusSpan.textContent;
             const originalStatusColor = statusSpan.style.color;
-            statusSpan.textContent = 'ÎŞĞ§Öµ!';
+            statusSpan.textContent = 'æ— æ•ˆå€¼!';
             statusSpan.style.color = 'red';
             setTimeout(() => {
                 statusSpan.textContent = originalStatusText;
@@ -60,24 +60,24 @@
 
         const originalStatusText = statusSpan.textContent;
         const originalStatusColor = statusSpan.style.color;
-        statusSpan.textContent = `ÒÑÉèÎª ${seconds} Ãë`;
+        statusSpan.textContent = `å·²è®¾ä¸º ${seconds} ç§’`;
         statusSpan.style.color = 'green';
-        console.log(`[ÉèÖÃ] ¶©µ¥Ë¢ĞÂ¼ä¸ôÒÑ¸üĞÂÎª: ${seconds} Ãë`);
+        console.log(`[è®¾ç½®] è®¢å•åˆ·æ–°é—´éš”å·²æ›´æ–°ä¸º: ${seconds} ç§’`);
         setTimeout(() => {
             statusSpan.textContent = originalStatusText;
             statusSpan.style.color = originalStatusColor;
-            updateStatusDisplay(); // »Ö¸´µ½µ±Ç°¹¤×÷×´Ì¬ÏÔÊ¾
+            updateStatusDisplay(); // æ¢å¤åˆ°å½“å‰å·¥ä½œçŠ¶æ€æ˜¾ç¤º
         }, 3000);
 
 
         if (!manualStopActive && isTargetPage(CONFIG.SEARCH.PAGE_HASH) && document.visibilityState === 'visible') {
             stopAutoSearch();
             startAutoSearch(true);
-            console.log('[ÏµÍ³] ×Ô¶¯ËÑË÷ÒÑ°´ĞÂ¼ä¸ôÖØÆô');
+            console.log('[ç³»ç»Ÿ] è‡ªåŠ¨æœç´¢å·²æŒ‰æ–°é—´éš”é‡å¯');
         } else {
-            if (manualStopActive) console.log('[ÏµÍ³] ¼ä¸ôÒÑ¸üĞÂ, µ«×Ô¶¯²Ù×÷µ±Ç°ÎªÊÖ¶¯Í£Ö¹×´Ì¬.');
-            else if (!isTargetPage(CONFIG.SEARCH.PAGE_HASH)) console.log('[ÏµÍ³] ¼ä¸ôÒÑ¸üĞÂ, µ«µ±Ç°²»ÔÚ¶©µ¥Ò³Ãæ.');
-            else console.log('[ÏµÍ³] ¼ä¸ôÒÑ¸üĞÂ, µ«Ò³Ãæµ±Ç°²»¿É¼û.');
+            if (manualStopActive) console.log('[ç³»ç»Ÿ] é—´éš”å·²æ›´æ–°, ä½†è‡ªåŠ¨æ“ä½œå½“å‰ä¸ºæ‰‹åŠ¨åœæ­¢çŠ¶æ€.');
+            else if (!isTargetPage(CONFIG.SEARCH.PAGE_HASH)) console.log('[ç³»ç»Ÿ] é—´éš”å·²æ›´æ–°, ä½†å½“å‰ä¸åœ¨è®¢å•é¡µé¢.');
+            else console.log('[ç³»ç»Ÿ] é—´éš”å·²æ›´æ–°, ä½†é¡µé¢å½“å‰ä¸å¯è§.');
         }
         return true;
     };
@@ -91,28 +91,28 @@
         let buttonText = '';
 
         if (manualStopActive) {
-            statusText = 'ÒÑÔİÍ£';
-            statusColor = '#909399'; // »ÒÉ«
-            buttonText = '¼ÌĞøË¢ĞÂ';
-            iconClass = 'el-icon-video-play'; // ²¥·ÅÍ¼±ê
+            statusText = 'å·²æš‚åœ';
+            statusColor = '#909399'; // ç°è‰²
+            buttonText = 'ç‚¹æˆ‘ç»§ç»­åˆ·æ–°';
+            iconClass = 'el-icon-video-play'; // æ’­æ”¾å›¾æ ‡
         } else if (currentAutoActionStatus === 'searching') {
-            statusText = `ÕıÔÚË¢ĞÂ¶©µ¥ (${CONFIG.SEARCH.REFRESH_INTERVAL / 1000}s)`;
-            statusColor = '#409EFF'; // À¶É«
-            buttonText = 'Í£Ö¹Ë¢ĞÂ';
-            iconClass = 'el-icon-video-pause'; // ÔİÍ£Í¼±ê
+            statusText = `æ­£åœ¨åˆ·æ–°è®¢å• (${CONFIG.SEARCH.REFRESH_INTERVAL / 1000}s)`;
+            statusColor = '#409EFF'; // è“è‰²
+            buttonText = 'ç‚¹æˆ‘åœæ­¢åˆ·æ–°';
+            iconClass = 'el-icon-video-pause'; // æš‚åœå›¾æ ‡
         } else if (currentAutoActionStatus === 'refreshing') {
-            statusText = `ÕıÔÚË¢ĞÂË¾»úÁĞ±í (${CONFIG.REFRESH.INTERVAL / 1000}s)`;
-            statusColor = '#67C23A'; // ÂÌÉ«
-            buttonText = 'Í£Ö¹Ë¢ĞÂ';
-            iconClass = 'el-icon-video-pause'; // ÔİÍ£Í¼±ê
-        } else { // ½Å±¾´¦ÓÚ·Ç»î¶¯Ò³Ãæ»òÎ´Æô¶¯×´Ì¬
-            statusText = 'Î´ÔËĞĞ'; // ¼ò»¯×´Ì¬£¬±ÜÃâ¡°¿ÕÏĞ/Í£Ö¹¡±
-            statusColor = '#F56C6C'; // ºìÉ«
-            buttonText = '¼ÌĞøË¢ĞÂ';
-            iconClass = 'el-icon-video-play'; // ²¥·ÅÍ¼±ê
+            statusText = `æ­£åœ¨åˆ·æ–°å¸æœºåˆ—è¡¨ (${CONFIG.REFRESH.INTERVAL / 1000}s)`;
+            statusColor = '#67C23A'; // ç»¿è‰²
+            buttonText = 'ç‚¹æˆ‘åœæ­¢åˆ·æ–°';
+            iconClass = 'el-icon-video-pause'; // æš‚åœå›¾æ ‡
+        } else { // è„šæœ¬å¤„äºéæ´»åŠ¨é¡µé¢æˆ–æœªå¯åŠ¨çŠ¶æ€
+            statusText = 'æœªè¿è¡Œ'; // ç®€åŒ–çŠ¶æ€ï¼Œé¿å…â€œç©ºé—²/åœæ­¢â€
+            statusColor = '#F56C6C'; // çº¢è‰²
+            buttonText = 'ç‚¹æˆ‘ç»§ç»­åˆ·æ–°';
+            iconClass = 'el-icon-video-play'; // æ’­æ”¾å›¾æ ‡
         }
 
-        statusSpan.innerHTML = ''; // Çå¿ÕÄÚÈİ
+        statusSpan.innerHTML = ''; // æ¸…ç©ºå†…å®¹
         statusSpan.style.color = statusColor;
 
         const button = document.createElement('button');
@@ -127,16 +127,16 @@
             manualStopActive = !manualStopActive;
             GM_setValue('manualStopActive', manualStopActive);
             if (manualStopActive) {
-                stopAllTimersAndLog("ÊÖ¶¯Í£Ö¹");
+                stopAllTimersAndLog("æ‰‹åŠ¨åœæ­¢");
             } else {
-                console.log("[¿ØÖÆ] ÊÖ¶¯»Ö¸´×Ô¶¯²Ù×÷¡£ÖØĞÂÆÀ¹ÀÒ³Ãæ×´Ì¬¡£");
+                console.log("[æ§åˆ¶] æ‰‹åŠ¨æ¢å¤è‡ªåŠ¨æ“ä½œã€‚é‡æ–°è¯„ä¼°é¡µé¢çŠ¶æ€ã€‚");
                 handleCurrentPageOrVisibilityState();
             }
-            updateStatusDisplay(); // ¸üĞÂÏÔÊ¾×´Ì¬
+            updateStatusDisplay(); // æ›´æ–°æ˜¾ç¤ºçŠ¶æ€
         });
 
         statusSpan.appendChild(button);
-        const statusTextNode = document.createTextNode(` | ×´Ì¬: ${statusText}`);
+        const statusTextNode = document.createTextNode(` | çŠ¶æ€: ${statusText}`);
         statusSpan.appendChild(statusTextNode);
     };
 
@@ -152,23 +152,23 @@
         container.innerHTML = `
             <div id="top-row-controls">
                 <div id="interval-config-group">
-                    <label for="searchIntervalInput">¶©µ¥Ë¢ĞÂ (Ãë):</label>
+                    <label for="searchIntervalInput">è®¢å•åˆ·æ–° (ç§’):</label>
                     <input type="number" id="searchIntervalInput" min="1">
-                    <button id="setSearchIntervalBtn">ÉèÖÃ</button>
+                    <button id="setSearchIntervalBtn">è®¾ç½®</button>
                 </div>
                 <div id="master-control-group">
                     <span id="intervalStatus"></span>
                 </div>
             </div>
             <div id="quick-set-buttons-group">
-                <span>¿ì½İ: </span>${quickButtonsHTML}
+                <span>å¿«æ·: </span>${quickButtonsHTML}
             </div>
         `;
         document.body.appendChild(container);
-        addCustomStyles(); // Ó¦ÓÃÑùÊ½
+        addCustomStyles(); // åº”ç”¨æ ·å¼
 
         intervalInput = document.getElementById('searchIntervalInput');
-        statusSpan = document.getElementById('intervalStatus'); // ×´Ì¬ºÍ°´Å¥½áºÏµÄÇøÓò
+        statusSpan = document.getElementById('intervalStatus'); // çŠ¶æ€å’ŒæŒ‰é’®ç»“åˆçš„åŒºåŸŸ
         const setSearchIntervalBtn = document.getElementById('setSearchIntervalBtn');
 
         intervalInput.value = CONFIG.SEARCH.REFRESH_INTERVAL / 1000;
@@ -184,7 +184,7 @@
             });
         });
 
-        updateStatusDisplay(); // ³õÊ¼»¯×´Ì¬ÏÔÊ¾
+        updateStatusDisplay(); // åˆå§‹åŒ–çŠ¶æ€æ˜¾ç¤º
     };
 
     const addCustomStyles = () => {
@@ -202,9 +202,9 @@
                 z-index: 10000;
                 font-size: 13px;
                 box-shadow: 0 3px 10px rgba(0,0,0,0.12);
-                display: flex; /* Ö÷ÈİÆ÷±äÎª flex ÁĞ */
-                flex-direction: column; /* ×ÓÔªËØ´¹Ö±¶Ñµş */
-                align-items: flex-start; /* ×ÓÔªËØ×ó¶ÔÆë */
+                display: flex; /* ä¸»å®¹å™¨å˜ä¸º flex åˆ— */
+                flex-direction: column; /* å­å…ƒç´ å‚ç›´å †å  */
+                align-items: flex-start; /* å­å…ƒç´ å·¦å¯¹é½ */
                 width: auto;
                 max-width: 95vw;
             }
@@ -213,15 +213,15 @@
                 display: flex;
                 flex-wrap: nowrap;
                 align-items: center;
-                margin-bottom: 8px; /* ÉÏĞĞÓë¿ì½İ°´Å¥×éÖ®¼äµÄ¼ä¾à */
-                width: 100%; /* Õ¼¾İ¸¸ÈİÆ÷µÄÈ«²¿¿í¶È */
-                justify-content: space-between; /* ½«Í£Ö¹/¼ÌĞø°´Å¥ÍÆµ½×îÓÒ±ß */
+                margin-bottom: 8px; /* ä¸Šè¡Œä¸å¿«æ·æŒ‰é’®ç»„ä¹‹é—´çš„é—´è· */
+                width: 100%; /* å æ®çˆ¶å®¹å™¨çš„å…¨éƒ¨å®½åº¦ */
+                justify-content: space-between; /* å°†åœæ­¢/ç»§ç»­æŒ‰é’®æ¨åˆ°æœ€å³è¾¹ */
             }
 
             #interval-config-group {
                 display: flex;
                 align-items: center;
-                margin-right: 12px; /* ×éÄÚ¼ä¾à */
+                margin-right: 12px; /* ç»„å†…é—´è· */
                 padding: 0 5px;
             }
 
@@ -236,7 +236,7 @@
                 align-items: center;
                 padding: 0 5px;
                 width: 100%;
-                margin-top: 5px; /* ¿ì½İ°´Å¥×éÉÏ·½µÄ¼ä¾à */
+                margin-top: 5px; /* å¿«æ·æŒ‰é’®ç»„ä¸Šæ–¹çš„é—´è· */
             }
 
             #custom-script-controls-container label { margin-right: 5px; font-weight: bold; white-space: nowrap; }
@@ -261,28 +261,28 @@
             #custom-script-controls-container #setSearchIntervalBtn:hover { background-color: #d1e9ff; }
             #custom-script-controls-container .quick-interval-btn { background-color: #f9f9f9; }
 
-            /* µ÷Õû #toggleAutoActionsBtn ÑùÊ½£¬ÒòÎªËüÏÖÔÚÊÇ¶¯Ì¬´´½¨µ½ #intervalStatus ÄÚ²¿ */
+            /* è°ƒæ•´ #toggleAutoActionsBtn æ ·å¼ï¼Œå› ä¸ºå®ƒç°åœ¨æ˜¯åŠ¨æ€åˆ›å»ºåˆ° #intervalStatus å†…éƒ¨ */
             #intervalStatus #toggleAutoActionsBtn.active-stop { background-color: #ffe0e0; border-color: #ffc0c0; }
             #intervalStatus #toggleAutoActionsBtn.active-stop:hover { background-color: #ffcfcf; }
             #intervalStatus #toggleAutoActionsBtn.active-resume { background-color: #e0ffe0; border-color: #c0ffc0; }
             #intervalStatus #toggleAutoActionsBtn.active-resume:hover { background-color: #cffccf; }
 
             #intervalStatus {
-                display: flex; /* ÈÃ°´Å¥ºÍÎÄ±¾ÔÚÍ¬Ò»ĞĞ */
+                display: flex; /* è®©æŒ‰é’®å’Œæ–‡æœ¬åœ¨åŒä¸€è¡Œ */
                 align-items: center;
                 margin-left: 8px;
                 font-weight: bold;
-                min-width: 220px; /* È·±£ÓĞ×ã¹»¿Õ¼äÏÔÊ¾°´Å¥ºÍ×´Ì¬ÎÄ±¾ */
+                min-width: 220px; /* ç¡®ä¿æœ‰è¶³å¤Ÿç©ºé—´æ˜¾ç¤ºæŒ‰é’®å’ŒçŠ¶æ€æ–‡æœ¬ */
                 white-space: nowrap;
                 text-align: left;
             }
             #quick-set-buttons-group > span { white-space: nowrap; margin-right: 3px; }
 
-            /* Element UI Í¼±êµÄ»ù´¡ÑùÊ½£¬È·±£Í¼±êÄÜÏÔÊ¾ */
-            /* Êµ¼ÊµÄ Unicode ±àÂë¿ÉÄÜĞèÒª¸ù¾İElement UI°æ±¾ºË¶Ô */
+            /* Element UI å›¾æ ‡çš„åŸºç¡€æ ·å¼ï¼Œç¡®ä¿å›¾æ ‡èƒ½æ˜¾ç¤º */
+            /* å®é™…çš„ Unicode ç¼–ç å¯èƒ½éœ€è¦æ ¹æ®Element UIç‰ˆæœ¬æ ¸å¯¹ */
             .el-icon-video-play:before { content: "\\e628"; font-family: 'element-icons'; }
             .el-icon-video-pause:before { content: "\\e62a"; font-family: 'element-icons'; }
-            /* Èç¹ûÒ³ÃæÃ»ÓĞ¼ÓÔØ Element UI µÄ×ÖÌå£¬¿ÉÄÜĞèÒªÌí¼ÓÒÔÏÂ @font-face ¹æÔò£º*/
+            /* å¦‚æœé¡µé¢æ²¡æœ‰åŠ è½½ Element UI çš„å­—ä½“ï¼Œå¯èƒ½éœ€è¦æ·»åŠ ä»¥ä¸‹ @font-face è§„åˆ™ï¼š*/
             /*
             @font-face {
               font-family: 'element-icons';
@@ -302,7 +302,7 @@
         stopAutoSearch();
         stopAutoRefresh();
         if (wasSearching || wasRefreshing) {
-            console.log(`[ÏµÍ³] ${reason}. Ïà¹Ø¶¨Ê±Æ÷ÒÑÍ£Ö¹¡£`);
+            console.log(`[ç³»ç»Ÿ] ${reason}. ç›¸å…³å®šæ—¶å™¨å·²åœæ­¢ã€‚`);
         }
         currentAutoActionStatus = 'stopped';
         updateStatusDisplay();
@@ -310,30 +310,30 @@
 
     const handleCurrentPageOrVisibilityState = () => {
         if (manualStopActive) {
-            stopAllTimersAndLog("ÊÖ¶¯Í£Ö¹ÒÑ¼¤»î");
-            updateStatusDisplay(); // È·±£×´Ì¬ÏÔÊ¾Îª¡°ÒÑÔİÍ£¡±
+            stopAllTimersAndLog("æ‰‹åŠ¨åœæ­¢å·²æ¿€æ´»");
+            updateStatusDisplay(); // ç¡®ä¿çŠ¶æ€æ˜¾ç¤ºä¸ºâ€œå·²æš‚åœâ€
             return;
         }
         if (document.hidden) {
-            stopAllTimersAndLog("Ò³Ãæ²»¿É¼û");
+            stopAllTimersAndLog("é¡µé¢ä¸å¯è§");
             return;
         }
         if (isTargetPage(CONFIG.SEARCH.PAGE_HASH)) {
-            stopAutoRefresh(); // ÔÚ¶©µ¥Ò³ÃæÊ±Í£Ö¹Ë¾»úÁĞ±íË¢ĞÂ
+            stopAutoRefresh(); // åœ¨è®¢å•é¡µé¢æ—¶åœæ­¢å¸æœºåˆ—è¡¨åˆ·æ–°
             if (!searchTimer) {
-                console.log('[ÏµÍ³] µ±Ç°ÔÚ¶©µ¥Ò³Ãæ¡£³¢ÊÔÆô¶¯×Ô¶¯ËÑË÷¡£');
+                console.log('[ç³»ç»Ÿ] å½“å‰åœ¨è®¢å•é¡µé¢ã€‚å°è¯•å¯åŠ¨è‡ªåŠ¨æœç´¢ã€‚');
                 startAutoSearch();
             }
             currentAutoActionStatus = 'searching';
         } else if (isTargetPage(CONFIG.REFRESH.PAGE_HASHES)) {
-            stopAutoSearch(); // ÔÚË¾»úÁĞ±íÒ³ÃæÊ±Í£Ö¹¶©µ¥ËÑË÷
+            stopAutoSearch(); // åœ¨å¸æœºåˆ—è¡¨é¡µé¢æ—¶åœæ­¢è®¢å•æœç´¢
             if (!refreshTimer) {
-                console.log('[ÏµÍ³] µ±Ç°ÔÚË¾»úÒ³Ãæ¡£³¢ÊÔÆô¶¯×Ô¶¯Ë¢ĞÂ¡£');
+                console.log('[ç³»ç»Ÿ] å½“å‰åœ¨å¸æœºé¡µé¢ã€‚å°è¯•å¯åŠ¨è‡ªåŠ¨åˆ·æ–°ã€‚');
                 startAutoRefresh();
             }
             currentAutoActionStatus = 'refreshing';
         } else {
-            stopAllTimersAndLog("²»ÔÚÄ¿±êÒ³Ãæ");
+            stopAllTimersAndLog("ä¸åœ¨ç›®æ ‡é¡µé¢");
         }
         updateStatusDisplay();
     };
@@ -352,14 +352,14 @@
             const element = document.querySelector(selector);
             if (element) {
                 element.click();
-                console.log(`[³É¹¦] ÒÑÖ´ĞĞ ${actionName} ${new Date().toLocaleTimeString()}`);
+                console.log(`[æˆåŠŸ] å·²æ‰§è¡Œ ${actionName} ${new Date().toLocaleTimeString()}`);
                 return true;
             } else {
-                console.warn(`[¾¯¸æ] ${actionName} °´Å¥Î´ÕÒµ½ (Ñ¡ÔñÆ÷: ${selector})`);
+                console.warn(`[è­¦å‘Š] ${actionName} æŒ‰é’®æœªæ‰¾åˆ° (é€‰æ‹©å™¨: ${selector})`);
                 return false;
             }
         } catch (e) {
-            console.error(`[´íÎó] ${actionName} Ê§°Ü:`, e);
+            console.error(`[é”™è¯¯] ${actionName} å¤±è´¥:`, e);
             return false;
         }
     };
@@ -368,7 +368,7 @@
     const findSearchButton = () => {
         if (!isTargetPage(CONFIG.SEARCH.PAGE_HASH)) return null;
         const button = document.querySelector(CONFIG.SEARCH.BUTTON_SELECTOR)?.closest('button');
-        // ¼ì²é°´Å¥ÊÇ·ñ¿É¼ûÇÒ¿É½»»¥
+        // æ£€æŸ¥æŒ‰é’®æ˜¯å¦å¯è§ä¸”å¯äº¤äº’
         if (button && getComputedStyle(button).display !== 'none' && button.offsetParent !== null) {
             return button;
         }
@@ -378,15 +378,15 @@
     const doSearchClick = () => {
         if (!isTargetPage(CONFIG.SEARCH.PAGE_HASH)) {
             stopAutoSearch();
-            updateStatusDisplay(); // Ò³Ãæ¸Ä±äÊ±¸üĞÂ×´Ì¬
+            updateStatusDisplay(); // é¡µé¢æ”¹å˜æ—¶æ›´æ–°çŠ¶æ€
             return;
         }
         const button = findSearchButton();
         if (button) {
             button.click();
-            console.log(`[³É¹¦] ÒÑÖ´ĞĞËÑË÷ ${new Date().toLocaleTimeString()} (¼ä¸ô: ${CONFIG.SEARCH.REFRESH_INTERVAL / 1000}s)`);
+            console.log(`[æˆåŠŸ] å·²æ‰§è¡Œæœç´¢ ${new Date().toLocaleTimeString()} (é—´éš”: ${CONFIG.SEARCH.REFRESH_INTERVAL / 1000}s)`);
         } else {
-            console.warn('[¾¯¸æ] ËÑË÷°´Å¥Î´ÕÒµ½, ½«ÔÚÏÂ´Î¼ä¸ôÊ±ÖØÊÔ...');
+            console.warn('[è­¦å‘Š] æœç´¢æŒ‰é’®æœªæ‰¾åˆ°, å°†åœ¨ä¸‹æ¬¡é—´éš”æ—¶é‡è¯•...');
         }
     };
 
@@ -395,10 +395,10 @@
         if (!isTargetPage(CONFIG.SEARCH.PAGE_HASH)) return;
         if (manualStopActive || document.hidden) return;
 
-        console.log(`[ÏµÍ³] Æô¶¯×Ô¶¯ËÑË÷£¬¼ä¸ô: ${CONFIG.SEARCH.REFRESH_INTERVAL / 1000} Ãë`);
+        console.log(`[ç³»ç»Ÿ] å¯åŠ¨è‡ªåŠ¨æœç´¢ï¼Œé—´éš”: ${CONFIG.SEARCH.REFRESH_INTERVAL / 1000} ç§’`);
         searchTimer = setInterval(doSearchClick, CONFIG.SEARCH.REFRESH_INTERVAL);
-        setTimeout(doSearchClick, isIntervalChange ? 100 : 1000); // Á¢¼´µã»÷»òÉÔºóµã»÷
-        console.log('[ÏµÍ³] ×Ô¶¯ËÑË÷ÒÑÆô¶¯');
+        setTimeout(doSearchClick, isIntervalChange ? 100 : 1000); // ç«‹å³ç‚¹å‡»æˆ–ç¨åç‚¹å‡»
+        console.log('[ç³»ç»Ÿ] è‡ªåŠ¨æœç´¢å·²å¯åŠ¨');
         currentAutoActionStatus = 'searching';
         updateStatusDisplay();
     };
@@ -407,13 +407,13 @@
         if (searchTimer) {
             clearInterval(searchTimer);
             searchTimer = null;
-            console.log('[ÏµÍ³] ×Ô¶¯ËÑË÷ÒÑÍ£Ö¹');
-            // ²»ĞèÒªÔÚÕâÀïÉèÖÃ currentAutoActionStatus Îª stopped£¬ÒòÎª handleCurrentPageOrVisibilityState »áÍ³Ò»´¦Àí
+            console.log('[ç³»ç»Ÿ] è‡ªåŠ¨æœç´¢å·²åœæ­¢');
+            // ä¸éœ€è¦åœ¨è¿™é‡Œè®¾ç½® currentAutoActionStatus ä¸º stoppedï¼Œå› ä¸º handleCurrentPageOrVisibilityState ä¼šç»Ÿä¸€å¤„ç†
         }
     };
 
     // --- Refresh Related Functions ---
-    const doRefreshClick = () => safeClick(CONFIG.REFRESH.REFRESH_ICON_SELECTOR, 'Ë¢ĞÂ');
+    const doRefreshClick = () => safeClick(CONFIG.REFRESH.REFRESH_ICON_SELECTOR, 'åˆ·æ–°');
 
     const startAutoRefresh = () => {
         if (refreshTimer) return;
@@ -422,7 +422,7 @@
 
         refreshTimer = setInterval(doRefreshClick, CONFIG.REFRESH.INTERVAL);
         setTimeout(doRefreshClick, 1000);
-        console.log('[ÏµÍ³] ×Ô¶¯Ë¢ĞÂÒÑÆô¶¯');
+        console.log('[ç³»ç»Ÿ] è‡ªåŠ¨åˆ·æ–°å·²å¯åŠ¨');
         currentAutoActionStatus = 'refreshing';
         updateStatusDisplay();
     };
@@ -431,18 +431,18 @@
         if (refreshTimer) {
             clearInterval(refreshTimer);
             refreshTimer = null;
-            console.log('[ÏµÍ³] ×Ô¶¯Ë¢ĞÂÒÑÍ£Ö¹');
-            // ²»ĞèÒªÔÚÕâÀïÉèÖÃ currentAutoActionStatus Îª stopped£¬ÒòÎª handleCurrentPageOrVisibilityState »áÍ³Ò»´¦Àí
+            console.log('[ç³»ç»Ÿ] è‡ªåŠ¨åˆ·æ–°å·²åœæ­¢');
+            // ä¸éœ€è¦åœ¨è¿™é‡Œè®¾ç½® currentAutoActionStatus ä¸º stoppedï¼Œå› ä¸º handleCurrentPageOrVisibilityState ä¼šç»Ÿä¸€å¤„ç†
         }
     };
 
-    // --------------- ³õÊ¼»¯ ---------------
+    // --------------- åˆå§‹åŒ– ---------------
     const init = () => {
         createSettingsUI();
         window.addEventListener('hashchange', () => {
-            console.log('[ÏµÍ³] Hash ¸Ä±äÎª:', window.location.hash);
-            stopAllTimersAndLog("Hash ¸Ä±ä"); // Á¢¼´Í£Ö¹ËùÓĞ¶¨Ê±Æ÷
-            // Îª¶©µ¥Ò³ÃæÌí¼ÓĞ¡ÑÓ³Ù£¬È·±£ÔªËØ¼ÓÔØÍê³É
+            console.log('[ç³»ç»Ÿ] Hash æ”¹å˜ä¸º:', window.location.hash);
+            stopAllTimersAndLog("Hash æ”¹å˜"); // ç«‹å³åœæ­¢æ‰€æœ‰å®šæ—¶å™¨
+            // ä¸ºè®¢å•é¡µé¢æ·»åŠ å°å»¶è¿Ÿï¼Œç¡®ä¿å…ƒç´ åŠ è½½å®Œæˆ
             if (isTargetPage(CONFIG.SEARCH.PAGE_HASH)) {
                 setTimeout(handleCurrentPageOrVisibilityState, CONFIG.SEARCH.INIT_DELAY);
             } else {
@@ -450,21 +450,21 @@
             }
         });
         document.addEventListener('visibilitychange', () => {
-            console.log(`[ÏµÍ³] Ò³Ãæ¿É¼ûĞÔ¸Ä±äÎª: ${document.hidden ? 'Òş²Ø' : '¿É¼û'}`);
+            console.log(`[ç³»ç»Ÿ] é¡µé¢å¯è§æ€§æ”¹å˜ä¸º: ${document.hidden ? 'éšè—' : 'å¯è§'}`);
             handleCurrentPageOrVisibilityState();
         });
-        console.log('[ÏµÍ³] ³õÊ¼Ò³Ãæ¼ì²é, Hash:', window.location.hash);
-        // ³õÊ¼¼ì²é£¬Îª¶©µ¥Ò³ÃæÌí¼ÓÑÓ³Ù
+        console.log('[ç³»ç»Ÿ] åˆå§‹é¡µé¢æ£€æŸ¥, Hash:', window.location.hash);
+        // åˆå§‹æ£€æŸ¥ï¼Œä¸ºè®¢å•é¡µé¢æ·»åŠ å»¶è¿Ÿ
         if (isTargetPage(CONFIG.SEARCH.PAGE_HASH)) {
             setTimeout(handleCurrentPageOrVisibilityState, CONFIG.SEARCH.INIT_DELAY);
         } else {
             handleCurrentPageOrVisibilityState();
         }
-        console.log('[ÏµÍ³] ½Å±¾³õÊ¼»¯Íê³É');
+        console.log('[ç³»ç»Ÿ] è„šæœ¬åˆå§‹åŒ–å®Œæˆ');
     };
 
-    // --------------- Æô¶¯ ---------------
-    // Ê¹ÓÃ 'load' ÊÂ¼şÈ·±£ DOM ºÍ×ÊÔ´¼ÓÔØÍê³É£¬²¢Ìí¼ÓÉÙÁ¿ÑÓ³Ù
+    // --------------- å¯åŠ¨ ---------------
+    // ä½¿ç”¨ 'load' äº‹ä»¶ç¡®ä¿ DOM å’Œèµ„æºåŠ è½½å®Œæˆï¼Œå¹¶æ·»åŠ å°‘é‡å»¶è¿Ÿ
     if (document.readyState === 'complete' || document.readyState === 'interactive') {
         setTimeout(init, 500);
     } else {
