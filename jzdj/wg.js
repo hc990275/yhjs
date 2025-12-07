@@ -2,7 +2,7 @@
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
 // @version       9.1
-// @description   启动自动比对云端版本号；发现新版自动提示更新；保留所有V8系列功能（隔离库、剪贴板、精准缩放）；支持剪贴板批量解析。
+// @description   启动自动比对云端版本号；发现新版自动提示更新；保留所有V8系列功能（隔离库、剪贴板、精准缩放）；支持剪贴板批量解析与手动粘贴解析。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @updateURL     https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251
@@ -41,16 +41,11 @@
             PRESETS: [2, 3, 5, 10, 20],
             RAPID_INTERVAL: 500
         },
-        // 云端配置
         CLOUD: {
-            // 1. 版本号检测地址 (只读取数字)
             VERSION_CHECK_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fbb?sign=65b8wq&t=1765094665264",
-            // 2. 脚本下载地址 (代码文件)
             SCRIPT_DOWNLOAD_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251",
-            // 3. 隔离库地址
             BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=nfpvws&t=1765094235754"
         },
-        // 增加历史记录容量，因为现在支持批量复制了
         CLIPBOARD: { MAX_HISTORY: 10 }
     };
 
@@ -67,7 +62,6 @@
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
         history: JSON.parse(GM_getValue('clipHistory', '{"phones":[], "addrs":[]}')),
         blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信'),
-        // 版本检测状态
         currentVersion: GM_info.script.version,
         newVersionAvailable: null 
     };
@@ -104,7 +98,6 @@
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
 
-    // [逻辑] 版本检测
     const checkAppVersion = () => {
         log(`当前版本 V${state.currentVersion}, 正在检查更新...`, 'info');
         GM_xmlhttpRequest({
@@ -115,22 +108,16 @@
                     const cloudVerStr = response.responseText.trim(); 
                     const cloudVer = parseFloat(cloudVerStr);
                     const localVer = parseFloat(state.currentVersion);
-
                     if (!isNaN(cloudVer) && cloudVer > localVer) {
                         state.newVersionAvailable = cloudVerStr;
-                        log(`发现新版本: V${cloudVerStr}`, 'success');
                         updateUI(); 
-                    } else {
-                        log('当前已是最新版', 'info');
                     }
                 }
             }
         });
     };
 
-    // [逻辑] 云端黑名单同步
     const fetchOnlineBlacklist = (silent = false) => {
-        if(!silent) log('同步隔离库...', 'info');
         GM_xmlhttpRequest({
             method: "GET",
             url: CONFIG.CLOUD.BLACKLIST_URL,
@@ -151,7 +138,6 @@
         });
     };
 
-    // [逻辑] 刷新系统
     const startRapidRefresh = () => {
         if (state.rapidTimer) return;
         state.rapidTimer = setInterval(() => {
@@ -195,85 +181,65 @@
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
 
-    // [逻辑核心修改]：支持批量剪贴板处理
+    // [逻辑] 核心解析函数：输入文本，自动分拣电话和地址
+    const parseTextToHistory = (fullText) => {
+        if (!fullText || !fullText.trim()) return false;
+        
+        const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
+        let hasUpdate = false;
+
+        // 1. 提取所有手机号
+        const phoneRegex = /(?:^|[^\d])(1\d{10})(?:$|[^\d])/g;
+        let phoneMatch;
+        const phonesFound = [];
+        let tempTextForPhone = fullText;
+        while ((phoneMatch = phoneRegex.exec(tempTextForPhone)) !== null) {
+            phonesFound.push(phoneMatch[1]);
+        }
+
+        // 倒序插入，保证原来的第一条在最前面
+        phonesFound.reverse().forEach(num => {
+            // 去重移动到最前
+            const existIdx = state.history.phones.indexOf(num);
+            if (existIdx > -1) state.history.phones.splice(existIdx, 1);
+            state.history.phones.unshift(num);
+            hasUpdate = true;
+            log('提取电话: ' + num, 'success');
+        });
+
+        // 2. 提取地址 (移除手机号后分析)
+        let addrText = fullText.replace(phoneRegex, ' ').trim();
+        const segments = addrText.split(/[\r\n,;，；]+/); // 按常见分隔符切分
+
+        segments.reverse().forEach(seg => {
+            const cleanSeg = seg.trim();
+            if (!cleanSeg || cleanSeg.length < 2) return;
+            if (/^\d+$/.test(cleanSeg)) return; 
+            if (blockers.some(keyword => cleanSeg.includes(keyword))) return;
+
+            const existIdx = state.history.addrs.indexOf(cleanSeg);
+            if (existIdx > -1) state.history.addrs.splice(existIdx, 1);
+            state.history.addrs.unshift(cleanSeg);
+            hasUpdate = true;
+            log('提取地址: ' + cleanSeg.substring(0, 6) + '...', 'info');
+        });
+
+        // 3. 截断长度
+        if (state.history.phones.length > CONFIG.CLIPBOARD.MAX_HISTORY) state.history.phones.length = CONFIG.CLIPBOARD.MAX_HISTORY;
+        if (state.history.addrs.length > CONFIG.CLIPBOARD.MAX_HISTORY) state.history.addrs.length = CONFIG.CLIPBOARD.MAX_HISTORY;
+
+        return hasUpdate;
+    };
+
+    // [逻辑] 读取系统剪贴板
     const processClipboard = async () => {
         try {
             const text = await navigator.clipboard.readText();
-            if (!text || !text.trim()) return;
-
-            const fullText = text.trim();
-            const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
-            let hasUpdate = false;
-
-            // 1. 提取所有手机号 (全局匹配)
-            const phoneRegex = /(?:^|[^\d])(1\d{10})(?:$|[^\d])/g;
-            let phoneMatch;
-            const phonesFound = [];
-            
-            // 使用临时文本进行正则匹配，不破坏原文本顺序
-            let tempTextForPhone = fullText;
-            while ((phoneMatch = phoneRegex.exec(tempTextForPhone)) !== null) {
-                phonesFound.push(phoneMatch[1]);
-            }
-
-            // 将找到的手机号依次存入 (保留顺序，文本后面的会最新插入到数组头部)
-            phonesFound.forEach(num => {
-                if (state.history.phones[0] !== num) { // 防止完全重复刷屏
-                    // 如果已经存在但不是最新的，先删除旧的
-                    const existIdx = state.history.phones.indexOf(num);
-                    if (existIdx > -1) state.history.phones.splice(existIdx, 1);
-                    
-                    state.history.phones.unshift(num);
-                    hasUpdate = true;
-                    log('捕获电话: ' + num, 'success');
-                }
-            });
-
-            // 2. 提取地址 (去除手机号后，按行/逗号分割)
-            // 将所有识别到的手机号替换为空格，避免干扰地址识别
-            let addrText = fullText.replace(phoneRegex, ' ').trim();
-            
-            // 按照 换行符、逗号、分号 进行分割
-            const segments = addrText.split(/[\r\n,;，；]+/);
-
-            segments.forEach(seg => {
-                const cleanSeg = seg.trim();
-                // 过滤过短字符、纯数字、黑名单
-                if (!cleanSeg || cleanSeg.length < 2) return;
-                if (/^\d+$/.test(cleanSeg)) return; 
-                
-                const isBlocked = blockers.some(keyword => cleanSeg.includes(keyword));
-                if (isBlocked) {
-                    // log('拦截无用信息', 'info'); // 减少日志刷屏
-                    return;
-                }
-
-                if (state.history.addrs[0] !== cleanSeg) {
-                     // 去重逻辑
-                    const existIdx = state.history.addrs.indexOf(cleanSeg);
-                    if (existIdx > -1) state.history.addrs.splice(existIdx, 1);
-
-                    state.history.addrs.unshift(cleanSeg);
-                    hasUpdate = true;
-                    log('捕获地址: ' + cleanSeg.substring(0, 8) + '...', 'info');
-                }
-            });
-
-            // 3. 限制长度
-            if (state.history.phones.length > CONFIG.CLIPBOARD.MAX_HISTORY) {
-                state.history.phones = state.history.phones.slice(0, CONFIG.CLIPBOARD.MAX_HISTORY);
-            }
-            if (state.history.addrs.length > CONFIG.CLIPBOARD.MAX_HISTORY) {
-                state.history.addrs = state.history.addrs.slice(0, CONFIG.CLIPBOARD.MAX_HISTORY);
-            }
-
-            if (hasUpdate) {
+            if (parseTextToHistory(text)) {
                 GM_setValue('clipHistory', JSON.stringify(state.history));
                 updateListsUI();
             }
-        } catch (e) {
-            console.error(e);
-        }
+        } catch (e) {}
     };
 
     const fillInput = (type, value) => {
@@ -300,7 +266,7 @@
             input.style.transition = 'background 0.3s';
             input.style.backgroundColor = '#e1f3d8';
             setTimeout(() => input.style.backgroundColor = '', 500);
-            log(`已填: ${value.substring(0,12)}...`, 'success');
+            log(`已填: ${value.substring(0,10)}`, 'success');
         } else {
             alert(`找不到${type==='address'?'地址':'电话'}框`);
         }
@@ -356,17 +322,21 @@
             <div id="gj-side-col" style="display:none;">
                 <div class="gj-side-box">
                     <div class="gj-side-header green">
-                        <span>📍 地址库 (点击填)</span>
-                        <span class="btn-icon" id="btn-refresh-addr">↻</span>
+                        <span>📍 地址库</span>
+                        <span class="btn-icon" id="btn-refresh-addr" title="读取剪贴板">↻</span>
                     </div>
                     <div class="gj-list-body" id="list-addr-body"></div>
                 </div>
                 <div class="gj-side-box" style="margin-top:5px;">
                     <div class="gj-side-header red">
-                        <span>📞 电话库 (点击填)</span>
-                        <span class="btn-icon" id="btn-refresh-phone">↻</span>
+                        <span>📞 电话库</span>
+                        <span class="btn-icon" id="btn-refresh-phone" title="读取剪贴板">↻</span>
                     </div>
                     <div class="gj-list-body" id="list-phone-body"></div>
+                </div>
+                <!-- 新增：万能解析框 -->
+                <div class="gj-side-box" style="margin-top:5px; padding:5px;">
+                    <input id="gj-magic-input" placeholder="在此粘贴任意文本(支持历史粘贴)" style="width:100%; box-sizing:border-box; border:1px solid #ddd; border-radius:4px; padding:4px; font-size:12px;">
                 </div>
             </div>
         `;
@@ -390,6 +360,22 @@
 
         widget.querySelector('#btn-refresh-addr').addEventListener('click', processClipboard);
         widget.querySelector('#btn-refresh-phone').addEventListener('click', processClipboard);
+
+        // 万能框输入事件
+        const magicInput = widget.querySelector('#gj-magic-input');
+        magicInput.addEventListener('input', (e) => {
+            const val = e.target.value;
+            if (val && val.trim()) {
+                if (parseTextToHistory(val)) {
+                    GM_setValue('clipHistory', JSON.stringify(state.history));
+                    updateListsUI();
+                    e.target.value = ''; // 成功解析后清空，方便下次粘贴
+                    // 闪烁提示
+                    e.target.style.background = '#f0f9eb';
+                    setTimeout(() => e.target.style.background = '#fff', 300);
+                }
+            }
+        });
 
         return widget;
     };
@@ -459,7 +445,7 @@
                     <div style="flex:1; display:flex; align-items:center; gap:5px;">
                         <span style="font-size:11px">🔍缩放:</span>
                         <input type="number" id="gj-scale-input" value="${state.uiScale}" step="0.1" min="0.5" max="3.0" style="width:40px;text-align:center;border:1px solid #ddd;border-radius:4px;font-size:12px;">
-                        <button id="btn-set-scale" class="btn-xs">确定</button>
+                        <button id="btn-set-scale" class="btn-xs">OK</button>
                     </div>
                     <button id="btn-sync-cloud" class="btn-xs">☁️ 隔离库</button>
                 </div>
@@ -540,7 +526,6 @@
 
     const log = (text, type) => { console.log(`[助手] ${text}`); };
 
-    // --- 样式与拖拽 ---
     const applyPos = (el, pos) => {
         if (pos.left) { el.style.left = pos.left; el.style.right = 'auto'; }
         else { el.style.right = pos.right || '20px'; el.style.left = 'auto'; }
