@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       9.6
+// @version       9.1
 // @description   启动自动比对云端版本号；根据时间段自动设置初始距离；每次进入派单页强制同步隔离库并自动清洗(屏蔽词+超长地址)；恢复“填最新电话”按钮；双列地址库。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
