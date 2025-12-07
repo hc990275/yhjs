@@ -550,4 +550,31 @@
                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 210px;
             }
             .gj-list-item:hover { background: #ecf5ff; color: #409EFF; }
-            .gj-empty { text-align: center; color: #ccc; padding: 10px; f
+            .gj-empty { text-align: center; color: #ccc; padding: 10px; font-size: 12px; }
+            
+            .btn-icon { cursor: pointer; font-size: 14px; padding: 0 5px; }
+            .btn-xs { font-size: 12px; padding: 3px 8px; border: 1px solid #ddd; background: #fff; border-radius: 4px; cursor: pointer; }
+            .gj-label-sm { font-size: 12px; color: #999; margin-top: 8px; }
+            .gj-toggle { cursor: pointer; padding: 0 8px; font-size: 14px; }
+            .gj-bottom-controls { display:flex; justify-content:space-between; align-items:center; margin-top:10px; padding-top:8px; border-top:1px dashed #eee; }
+            .gj-zoom-row { display:flex; align-items:center; justify-content:center; margin-top:8px; font-size:12px; color:#666; }
+        `);
+    };
+
+    const init = () => {
+        addStyles();
+        checkPage();
+        window.addEventListener('hashchange', checkPage);
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                if ((isOrderPage() || isDriverPage()) && !state.manualPause) performAction("切屏回刷");
+                if (isDispatchPage()) processClipboard();
+            }
+        });
+        window.addEventListener('focus', () => { if (isDispatchPage()) processClipboard(); });
+        setTimeout(checkPage, 1000); 
+    };
+
+    if (document.readyState === 'complete' || document.readyState === 'interactive') init();
+    else window.addEventListener('load', init);
+})();
