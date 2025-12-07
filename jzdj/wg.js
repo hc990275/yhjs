@@ -2,7 +2,7 @@
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
 // @version       9.1
-// @description   启动自动比对云端版本号；根据时间段自动设置初始距离；每次进入派单页强制同步隔离库并自动清洗(屏蔽词+超长地址)；恢复“填最新电话”按钮；双列地址库。
+// @description   启动自动比对云端版本号；根据时间段自动设置初始距离；每次进入派单页强制同步隔离库并自动清洗现有地址库；恢复“填最新电话”按钮；双列地址库。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @updateURL     https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251
@@ -80,7 +80,7 @@
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000; 
             
             // 每次进入派单页，强制同步隔离库
-            log('进入派单界面，同步并清洗库...', 'info');
+            log('进入派单界面，同步并清洗隔离库...', 'info');
             fetchOnlineBlacklist(true);
 
             // 延迟触发时间距离设置
@@ -166,29 +166,27 @@
         setSliderValue(targetKm);
     };
 
-    // [逻辑升级] 清洗历史记录 (屏蔽词 + 长度限制)
+    // [核心新增] 清洗历史记录
     const cleanHistoryWithBlacklist = () => {
         if (!state.history.addrs || state.history.addrs.length === 0) return;
         
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
-        
+        if (blockers.length === 0) return;
+
         const originalCount = state.history.addrs.length;
         
-        // 过滤：
-        // 1. 不包含任何屏蔽词
-        // 2. 长度不能超过 10
+        // 过滤：只有不包含任何屏蔽词的地址才保留
         state.history.addrs = state.history.addrs.filter(addr => {
-            const isBlocked = blockers.some(keyword => addr.includes(keyword));
-            const isTooLong = addr.length > 30;
-            return !isBlocked && !isTooLong;
+            return !blockers.some(keyword => addr.includes(keyword));
         });
 
         const newCount = state.history.addrs.length;
         
+        // 如果有变化，保存并更新UI
         if (originalCount !== newCount) {
             GM_setValue('clipHistory', JSON.stringify(state.history));
             updateListsUI();
-            log(`已清洗: 移除 ${originalCount - newCount} 条(违规/超长)地址`, 'warning');
+            log(`已清洗地址库: 自动移除 ${originalCount - newCount} 条不符合规则的地址`, 'warning');
         }
     };
 
@@ -205,7 +203,7 @@
                         state.blacklist = cleanList;
                         GM_setValue('blacklist', cleanList);
                         
-                        // 同步完成后，立即清洗
+                        // [新增] 同步完成后，立即清洗现有库
                         cleanHistoryWithBlacklist();
 
                         if(!silent) log('隔离库同步并清洗完成', 'success');
@@ -257,7 +255,6 @@
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
 
-    // [逻辑升级] 解析文本 (增加长度限制)
     const parseTextToHistory = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
         
@@ -291,12 +288,10 @@
             const cleanSeg = seg.trim();
             if (!cleanSeg || cleanSeg.length < 2) return;
             if (/^\d+$/.test(cleanSeg)) return; 
-            
-            // 检查长度 > 10
-            if (cleanSeg.length > 10) return;
-
-            // 检查屏蔽词
-            if (blockers.some(keyword => cleanSeg.includes(keyword))) return;
+            if (blockers.some(keyword => cleanSeg.includes(keyword))) {
+                // log(`已过滤屏蔽地址: ${cleanSeg}`, 'info');
+                return;
+            }
 
             if (!state.history.addrs) state.history.addrs = [];
             const existIdx = state.history.addrs.indexOf(cleanSeg);
