@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (本地完整版+强力清空)
+// @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       9.3
-// @description   启动自动比对云端版本号；发现新版自动提示更新；保留所有V8系列功能；修复地址栏无法清空的问题。
+// @version       9.0
+// @description   启动自动比对云端版本号；发现新版自动提示更新；保留所有V8系列功能（隔离库、剪贴板、精准缩放）。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @updateURL     https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251
@@ -41,9 +41,13 @@
             PRESETS: [2, 3, 5, 10, 20],
             RAPID_INTERVAL: 500
         },
+        // 云端配置
         CLOUD: {
+            // 1. 版本号检测地址 (只读取数字)
             VERSION_CHECK_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fbb?sign=65b8wq&t=1765094665264",
+            // 2. 脚本下载地址 (代码文件)
             SCRIPT_DOWNLOAD_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251",
+            // 3. 隔离库地址
             BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=nfpvws&t=1765094235754"
         },
         CLIPBOARD: { MAX_HISTORY: 6 }
@@ -62,8 +66,9 @@
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
         history: JSON.parse(GM_getValue('clipHistory', '{"phones":[], "addrs":[]}')),
         blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信'),
+        // 版本检测状态
         currentVersion: GM_info.script.version,
-        newVersionAvailable: null 
+        newVersionAvailable: null // 如果检测到新版，这里会变成版本号字符串
     };
 
     // --------------- 3. 核心逻辑 ---------------
@@ -98,6 +103,7 @@
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
 
+    // [逻辑] 版本检测 (核心新增)
     const checkAppVersion = () => {
         log(`当前版本 V${state.currentVersion}, 正在检查更新...`, 'info');
         GM_xmlhttpRequest({
@@ -105,14 +111,15 @@
             url: CONFIG.CLOUD.VERSION_CHECK_URL,
             onload: function(response) {
                 if (response.status === 200) {
-                    const cloudVerStr = response.responseText.trim(); 
+                    const cloudVerStr = response.responseText.trim(); // 获取云端版本号
                     const cloudVer = parseFloat(cloudVerStr);
                     const localVer = parseFloat(state.currentVersion);
 
+                    // 简单比对：如果云端大于本地
                     if (!isNaN(cloudVer) && cloudVer > localVer) {
                         state.newVersionAvailable = cloudVerStr;
                         log(`发现新版本: V${cloudVerStr}`, 'success');
-                        updateUI(); 
+                        updateUI(); // 刷新UI显示更新按钮
                     } else {
                         log('当前已是最新版', 'info');
                     }
@@ -121,6 +128,7 @@
         });
     };
 
+    // [逻辑] 云端黑名单同步
     const fetchOnlineBlacklist = (silent = false) => {
         if(!silent) log('同步隔离库...', 'info');
         GM_xmlhttpRequest({
@@ -143,6 +151,7 @@
         });
     };
 
+    // [逻辑] 刷新系统
     const startRapidRefresh = () => {
         if (state.rapidTimer) return;
         state.rapidTimer = setInterval(() => {
@@ -224,95 +233,34 @@
         } catch (e) {}
     };
 
-    // [核心] Vue/React 兼容的强制赋值工具
-    const setNativeValue = (element, value) => {
-        const valueSetter = Object.getOwnPropertyDescriptor(element, 'value').set;
-        const prototype = Object.getPrototypeOf(element);
-        const prototypeValueSetter = Object.getOwnPropertyDescriptor(prototype, 'value').set;
-
-        if (valueSetter && valueSetter !== prototypeValueSetter) {
-            prototypeValueSetter.call(element, value);
-        } else {
-            valueSetter.call(element, value);
-        }
-        element.dispatchEvent(new Event('input', { bubbles: true }));
-        element.dispatchEvent(new Event('change', { bubbles: true }));
-        // 针对某些输入框可能需要 focus/blur 触发校验
-        element.dispatchEvent(new Event('focus', { bubbles: true }));
-        element.dispatchEvent(new Event('blur', { bubbles: true }));
-    };
-
     const fillInput = (type, value) => {
         let input = null;
         if (type === 'address') {
              input = document.querySelector('input[id="tipinput"]') || 
                      document.querySelector('input[placeholder*="搜索"]') ||
                      document.querySelector('input[placeholder*="请输入关键字"]');
+             if (!input) {
+                 const inputs = document.querySelectorAll('input');
+                 for (let i = 0; i < inputs.length; i++) {
+                     if (!inputs[i].closest('.el-form-item')) { input = inputs[i]; break; }
+                 }
+             }
         } else if (type === 'phone') {
              input = document.querySelector('input[placeholder*="用户电话"]') || 
                      document.querySelector('input[placeholder*="电话"]');
         }
 
         if (input) {
-            setNativeValue(input, value); // 使用强力赋值
+            input.value = value;
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
             input.style.transition = 'background 0.3s';
             input.style.backgroundColor = '#e1f3d8';
             setTimeout(() => input.style.backgroundColor = '', 500);
             log(`已填: ${value.substring(0,8)}...`, 'success');
         } else {
-            // 如果没找到，尝试模糊搜索
-             const inputs = document.querySelectorAll('input');
-             for (let i = 0; i < inputs.length; i++) {
-                 const p = (inputs[i].placeholder || '').toLowerCase();
-                 if ((type === 'phone' && p.includes('电话')) || (type === 'address' && (p.includes('地址') || p.includes('位置')))) {
-                     setNativeValue(inputs[i], value);
-                     return;
-                 }
-             }
             alert(`找不到${type==='address'?'地址':'电话'}框`);
         }
-    };
-
-    // [新增] 强力清空功能 (V9.3 修复地址栏清空)
-    const clearAllInputs = () => {
-        let count = 0;
-
-        // 策略1：优先点击界面上现有的“×”清除按钮 (解决地址栏问题)
-        // ElementUI 的清除图标通常是 .el-input__clear 或 .el-icon-circle-close
-        const clearIcons = document.querySelectorAll('.el-input__clear, .el-input__icon.el-icon-circle-close, .amap-search-clear');
-        clearIcons.forEach(icon => {
-            // 只有当图标可见时才点击
-            if (icon.offsetParent !== null) {
-                icon.click();
-                count++;
-                console.log('[助手] 触发了原生清除按钮');
-            }
-        });
-
-        // 策略2：遍历输入框进行强制清空
-        const inputs = document.querySelectorAll('input[type="text"], textarea');
-        inputs.forEach(input => {
-            // 排除隐藏的输入框
-            if (input.offsetParent === null) return;
-
-            const id = (input.id || '').toLowerCase();
-            const placeholder = (input.placeholder || '').toLowerCase();
-            const parentText = input.closest('.el-form-item')?.innerText?.toLowerCase() || '';
-            
-            // 判定目标：tipinput(地址栏ID), 或包含 电话/手机/地址/位置 的输入框
-            const isTarget = id.includes('tipinput') || 
-                             /电话|手机|地址|位置|起点|终点/.test(placeholder) || 
-                             /电话|手机|地址|位置/.test(parentText);
-            
-            // 只有当里面有值的时候才清空
-            if (isTarget && input.value && input.value.trim() !== '') {
-                setNativeValue(input, '');
-                count++;
-            }
-        });
-
-        if(count > 0) log(`已执行清空操作`, 'success');
-        else log('未检测到需要清空的内容', 'info');
     };
 
     const setSliderValue = (targetValue) => {
@@ -462,7 +410,6 @@
                 <div class="gj-group">
                     <button id="btn-auto-addr" class="btn-big green">填最新地址</button>
                     <button id="btn-auto-phone" class="btn-big red">填最新电话</button>
-                    <button id="btn-clear-all" class="btn-big gray" style="background:#f4f4f5; border-color:#d3d4d6; color:#909399; margin-top:2px;">🗑️ 一键清空</button>
                 </div>
                 <div class="gj-label-sm">⚡ AI距离 (极速)</div>
                 <div class="gj-grid-btns">${buttonsHtml}</div>
@@ -521,9 +468,6 @@
             document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
                 if(state.history.phones[0]) fillInput('phone', state.history.phones[0]);
             });
-            // [绑定] 清空按钮
-            document.getElementById('btn-clear-all')?.addEventListener('click', clearAllInputs);
-            
             document.getElementById('btn-sync-cloud')?.addEventListener('click', () => fetchOnlineBlacklist(false));
         }
         
@@ -573,6 +517,7 @@
         });
         document.addEventListener('mousemove', e => {
             if (!isDragging) return;
+            // 考虑 transform scale 的影响
             const dx = (e.clientX - startX) / state.uiScale;
             const dy = (e.clientY - startY) / state.uiScale;
             el.style.left = (rect.left + dx) + 'px';
@@ -631,8 +576,6 @@
             .btn-big.green:hover { background: #67c23a; color: white; }
             .btn-big.red { background: #fef0f0; border-color: #fbc4c4; color: #f56c6c; }
             .btn-big.red:hover { background: #f56c6c; color: white; }
-            .btn-big.gray { background: #f4f4f5; border-color: #d3d4d6; color: #909399; }
-            .btn-big.gray:hover { background: #909399; color: white; border-color: #909399; }
 
             .gj-grid-btns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 5px; }
             .btn-preset { background: #ECF5FF; border: 1px solid #B3D8FF; color: #409EFF; padding: 8px 0; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight:bold;}
@@ -656,7 +599,7 @@
 
     const init = () => {
         addStyles();
-        checkAppVersion(); 
+        checkAppVersion(); // 启动时检查新版
         checkPage();
         window.addEventListener('hashchange', checkPage);
         document.addEventListener('visibilitychange', () => {
