@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (深色护眼版)
+// @name          代驾调度系统助手 (v9.9 稳定修复版)
 // @namespace     http://tampermonkey.net/
-// @version       9.7
-// @description   支持深色/浅色模式切换；地址库字体加大；右下角拖拽缩放与调整宽高；地址库自动分列；严格电话校验；司机调度秒刷。
+// @version       9.9
+// @description   修复面板消失问题；主面板与地址库分离；支持深色模式；显眼注释修改地址字数限制；保留所有自动化功能。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
@@ -46,6 +46,15 @@
     };
 
     // --------------- 2. 全局状态 ---------------
+    // 安全读取配置，防止报错
+    const safeParse = (key, def) => {
+        try {
+            return JSON.parse(GM_getValue(key, def));
+        } catch (e) {
+            return JSON.parse(def);
+        }
+    };
+
     let state = {
         currentHash: window.location.hash,
         isCollapsed: GM_getValue('uiCollapsed', false),
@@ -54,14 +63,17 @@
         countdown: 0,
         timerId: null,
         rapidTimer: null,
-        uiPos: JSON.parse(GM_getValue('uiPos', '{"top":"80px","left":"20px"}')),
+        // 主面板位置
+        posMain: safeParse('posMain', '{"top":"80px","left":"20px"}'),
+        // 地址库位置
+        posAddr: safeParse('posAddr', '{"top":"80px","left":"300px"}'),
+        
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
-        layout: JSON.parse(GM_getValue('uiLayout', '{"width": 260, "height": 300}')),
-        history: JSON.parse(GM_getValue('clipHistory', '{"phones":[], "addrs":[]}')),
+        layout: safeParse('uiLayout', '{"width": 260, "height": 300}'),
+        history: safeParse('clipHistory', '{"phones":[], "addrs":[]}'),
         blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信'),
         currentVersion: GM_info.script.version,
-        timeConfig: JSON.parse(GM_getValue('timeConfig', '{"start":"20:00", "end":"22:00"}')),
-        // [新增] 主题状态: 'light' 或 'dark'
+        timeConfig: safeParse('timeConfig', '{"start":"20:00", "end":"22:00"}'),
         theme: GM_getValue('theme', 'light') 
     };
 
@@ -310,30 +322,28 @@
     // --------------- 4. UI 界面 ---------------
 
     const applyLayout = () => {
-        const sideCol = document.getElementById('gj-side-col');
+        const addrWidget = document.getElementById('gj-widget-addr');
         const listBody = document.getElementById('list-addr-body');
-        if (sideCol && listBody) {
-            sideCol.style.width = state.layout.width + 'px';
+        if (addrWidget && listBody) {
+            addrWidget.style.width = state.layout.width + 'px';
             listBody.style.height = state.layout.height + 'px';
         }
     };
 
-    // [新增] 切换主题逻辑
     const toggleTheme = () => {
         state.theme = state.theme === 'light' ? 'dark' : 'light';
         GM_setValue('theme', state.theme);
         updateUI();
     };
 
-    const createWidget = () => {
-        const old = document.getElementById('gj-widget');
-        if (old) old.remove();
+    const createMainWidget = () => {
+        let widget = document.getElementById('gj-widget-main');
+        if (widget) widget.remove();
 
-        const widget = document.createElement('div');
-        widget.id = 'gj-widget';
-        // 应用当前主题类
-        widget.className = state.theme === 'dark' ? 'gj-dark' : 'gj-light';
-        applyPos(widget, state.uiPos);
+        widget = document.createElement('div');
+        widget.id = 'gj-widget-main';
+        widget.className = state.theme === 'dark' ? 'gj-dark gj-window' : 'gj-light gj-window';
+        applyPos(widget, state.posMain);
         widget.style.transform = `scale(${state.uiScale})`;
         widget.style.transformOrigin = 'top left';
 
@@ -341,39 +351,24 @@
         const toggleIcon = state.isCollapsed ? '➕' : '➖';
 
         widget.innerHTML = `
-            <div id="gj-main-col" style="position:relative;">
-                <div class="gj-header">
-                    <div style="display:flex;align-items:center;gap:6px;">
-                        <span style="font-size:16px;">🤖</span>
-                        <span id="gj-title-text">...</span>
-                    </div>
-                    <div style="display:flex; gap:8px;">
-                         <span id="gj-theme-toggle" title="切换模式">${themeIcon}</span>
-                         <span class="gj-toggle">${toggleIcon}</span>
-                    </div>
+            <div class="gj-header">
+                <div style="display:flex;align-items:center;gap:6px;">
+                    <span style="font-size:16px;">🤖</span>
+                    <span id="gj-title-text">...</span>
                 </div>
-                <div id="gj-main-content" style="display: ${state.isCollapsed ? 'none' : 'block'}"></div>
-                <div id="gj-scale-handle" class="gj-resize-handle" title="拖拽缩放界面"></div>
-            </div>
-            
-            <div id="gj-side-col" style="display:none; width:${state.layout.width}px; position:relative;">
-                <div class="gj-side-box" style="flex:1; display:flex; flex-direction:column;">
-                    <div class="gj-side-header">
-                        <span>📍 地址库 (右下角拖拽)</span>
-                        <span class="btn-icon-circle" id="btn-refresh-addr" title="刷新/读取剪贴板">↻</span>
-                    </div>
-                    <div class="gj-list-body" id="list-addr-body" style="height:${state.layout.height}px;"></div>
+                <div style="display:flex; gap:8px;">
+                     <span id="gj-theme-toggle" title="切换模式">${themeIcon}</span>
+                     <span class="gj-toggle" title="折叠/展开">${toggleIcon}</span>
                 </div>
-                <div id="gj-size-handle" class="gj-resize-handle" title="拖拽调整宽高"></div>
             </div>
+            <div id="gj-main-content" style="display: ${state.isCollapsed ? 'none' : 'block'}"></div>
+            <div id="gj-scale-handle" class="gj-resize-handle" title="拖拽缩放"></div>
         `;
 
         document.body.appendChild(widget);
-        addStyles();
-        setupDrag(widget);          
-        setupScaleDrag(widget);     
-        setupResizeDrag(widget);    
-        
+        setupDrag(widget, 'posMain');
+        setupScaleDrag(widget);
+
         widget.querySelector('.gj-toggle').addEventListener('click', (e) => {
             e.stopPropagation();
             state.isCollapsed = !state.isCollapsed;
@@ -386,41 +381,74 @@
              toggleTheme();
         });
 
-        widget.querySelector('#btn-refresh-addr').addEventListener('click', processClipboard);
+        return widget;
+    };
 
+    const createAddrWidget = () => {
+        let widget = document.getElementById('gj-widget-addr');
+        if (widget) widget.remove();
+        if (!isDispatchPage()) return null;
+
+        widget = document.createElement('div');
+        widget.id = 'gj-widget-addr';
+        widget.className = state.theme === 'dark' ? 'gj-dark gj-window' : 'gj-light gj-window';
+        applyPos(widget, state.posAddr);
+        widget.style.transform = `scale(${state.uiScale})`;
+        widget.style.transformOrigin = 'top left';
+        widget.style.width = state.layout.width + 'px';
+
+        widget.innerHTML = `
+            <div class="gj-header gj-drag-header">
+                <span>📍 地址库 (按住拖动)</span>
+                <span class="btn-icon-circle" id="btn-refresh-addr" title="刷新/读取剪贴板">↻</span>
+            </div>
+            <div class="gj-list-body" id="list-addr-body" style="height:${state.layout.height}px;"></div>
+            <div id="gj-size-handle" class="gj-resize-handle" title="拖拽调整宽高"></div>
+        `;
+
+        document.body.appendChild(widget);
+        setupDrag(widget, 'posAddr');
+        setupResizeDrag(widget);
+
+        widget.querySelector('#btn-refresh-addr').addEventListener('click', processClipboard);
+        
         return widget;
     };
 
     const updateUI = () => {
-        let widget = document.getElementById('gj-widget');
-        if (!widget) widget = createWidget();
+        let mainWidget = document.getElementById('gj-widget-main');
+        if (!mainWidget) mainWidget = createMainWidget();
         
-        // 确保类名同步
-        widget.className = state.theme === 'dark' ? 'gj-dark' : 'gj-light';
+        let addrWidget = document.getElementById('gj-widget-addr');
+        if (isDispatchPage() && !addrWidget) {
+            addrWidget = createAddrWidget();
+            updateListsUI();
+        } else if (!isDispatchPage() && addrWidget) {
+            addrWidget.remove();
+        }
+
+        const cls = state.theme === 'dark' ? 'gj-dark gj-window' : 'gj-light gj-window';
+        if(mainWidget) mainWidget.className = cls;
+        if(addrWidget) addrWidget.className = cls;
+
         const themeIcon = document.getElementById('gj-theme-toggle');
         if(themeIcon) themeIcon.textContent = state.theme === 'light' ? '🌙' : '🌞';
 
         const titleSpan = document.getElementById('gj-title-text');
-        if (isOrderPage()) titleSpan.textContent = CONFIG.ORDER.TITLE;
-        else if (isDriverPage()) titleSpan.textContent = CONFIG.DRIVER.TITLE;
-        else if (isDispatchPage()) titleSpan.textContent = CONFIG.DISPATCH.TITLE;
-        else titleSpan.textContent = "助手待机";
-
-        const mainContent = document.getElementById('gj-main-content');
-        const sideCol = document.getElementById('gj-side-col');
-        const scaleHandle = document.getElementById('gj-scale-handle');
-        
-        mainContent.style.display = state.isCollapsed ? 'none' : 'block';
-        scaleHandle.style.display = state.isCollapsed ? 'none' : 'block';
-        
-        if (isDispatchPage() && !state.isCollapsed) {
-            sideCol.style.display = 'flex';
-            updateListsUI(); 
-        } else {
-            sideCol.style.display = 'none';
+        if (titleSpan) {
+            if (isOrderPage()) titleSpan.textContent = CONFIG.ORDER.TITLE;
+            else if (isDriverPage()) titleSpan.textContent = CONFIG.DRIVER.TITLE;
+            else if (isDispatchPage()) titleSpan.textContent = CONFIG.DISPATCH.TITLE;
+            else titleSpan.textContent = "助手待机";
         }
 
-        renderMainContent(mainContent);
+        const mainContent = document.getElementById('gj-main-content');
+        const scaleHandle = document.getElementById('gj-scale-handle');
+        
+        if (mainContent) mainContent.style.display = state.isCollapsed ? 'none' : 'block';
+        if (scaleHandle) scaleHandle.style.display = state.isCollapsed ? 'none' : 'block';
+        
+        if (mainContent) renderMainContent(mainContent);
         updateStatusText();
     };
 
@@ -472,18 +500,28 @@
     };
 
     const updateListsUI = () => {
-        const renderItem = (item, type) => 
-            `<div class="gj-list-item" title="${item}" data-val="${item}" data-type="${type}">
-                ${type==='address' ? '' : '📞'}
-                <span class="gj-item-text">${item}</span>
-            </div>`;
         const addrBody = document.getElementById('list-addr-body');
-        
-        if(addrBody) {
-            const list = state.history.addrs || [];
-            addrBody.innerHTML = list.map(i => renderItem(i, 'address')).join('') || '<div class="gj-empty">空</div>';
-            addrBody.querySelectorAll('.gj-list-item').forEach(el => el.addEventListener('click', () => fillInput('address', el.dataset.val)));
-        }
+        if (!addrBody) return;
+
+        // 【👇 这里修改地址库每个格子显示的字数 👇】
+        // ----------------------------------------------------
+        const ADDR_CHAR_LIMIT = 6; // 默认为 4 个字，你可以改成 3, 5, 6 等
+        // ----------------------------------------------------
+
+        const renderItem = (item, type) => {
+            let displayItem = item;
+            if (type === 'address' && item.length > ADDR_CHAR_LIMIT) {
+                displayItem = item.substring(0, ADDR_CHAR_LIMIT) + '..';
+            }
+            return `<div class="gj-list-item" title="${item}" data-val="${item}" data-type="${type}">
+                ${type==='address' ? '' : '📞'}
+                <span class="gj-item-text">${displayItem}</span>
+            </div>`;
+        };
+
+        const list = state.history.addrs || [];
+        addrBody.innerHTML = list.map(i => renderItem(i, 'address')).join('') || '<div class="gj-empty">空</div>';
+        addrBody.querySelectorAll('.gj-list-item').forEach(el => el.addEventListener('click', () => fillInput('address', el.dataset.val)));
     };
 
     const bindEvents = () => {
@@ -540,7 +578,7 @@
         else { el.style.bottom = pos.bottom || 'auto'; el.style.top = 'auto'; }
     };
 
-    const setupDrag = (el) => {
+    const setupDrag = (el, posKey) => {
         const header = el.querySelector('.gj-header'); 
         let isDragging = false, startX, startY, rect;
         header.addEventListener('mousedown', e => {
@@ -562,8 +600,9 @@
             if(isDragging) {
                 isDragging = false; header.style.cursor = 'grab';
                 el.style.transition = 'transform 0.1s';
-                state.uiPos = {left: el.style.left, top: el.style.top};
-                GM_setValue('uiPos', JSON.stringify(state.uiPos));
+                const newPos = {left: el.style.left, top: el.style.top};
+                state[posKey] = newPos;
+                GM_setValue(posKey, JSON.stringify(newPos));
             }
         });
     };
@@ -584,8 +623,12 @@
             if(newScale < 0.5) newScale = 0.5;
             if(newScale > 3.0) newScale = 3.0;
             state.uiScale = newScale;
-            el.style.transform = `scale(${newScale})`;
-            const label = el.querySelector('.gj-bottom-controls span');
+            const mainW = document.getElementById('gj-widget-main');
+            const addrW = document.getElementById('gj-widget-addr');
+            if(mainW) mainW.style.transform = `scale(${newScale})`;
+            if(addrW) addrW.style.transform = `scale(${newScale})`;
+            
+            const label = document.querySelector('.gj-bottom-controls span');
             if(label) label.textContent = `缩放: ${(newScale*100).toFixed(0)}%`;
         });
         document.addEventListener('mouseup', () => {
@@ -659,22 +702,21 @@
                 --gj-header-bg: linear-gradient(135deg, #3a4b8a 0%, #4a2b6e 100%);
             }
 
-            #gj-widget {
+            .gj-window {
                 position: fixed; z-index: 99999;
-                display: flex; align-items: flex-start;
+                display: flex; flex-direction: column;
                 font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
                 font-size: 14px; user-select: none;
                 filter: drop-shadow(0 4px 12px var(--gj-shadow));
                 color: var(--gj-text-main);
+                background: var(--gj-bg-main); 
+                border-radius: 12px; 
+                overflow: hidden;
             }
-            #gj-main-col {
-                width: 250px; background: var(--gj-bg-main); border-radius: 12px; 
-                overflow: hidden; display:flex; flex-direction:column;
-                transition: background 0.3s;
-            }
-            #gj-side-col {
-                margin-left: 8px; display: flex; flex-direction: column; gap: 6px;
-            }
+
+            #gj-widget-main { width: 250px; }
+            #gj-widget-addr { /* width dynamic */ }
+
             .gj-header {
                 padding: 12px 16px; 
                 background: var(--gj-header-bg);
@@ -730,15 +772,6 @@
             
             .gj-bottom-controls { display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding-top:10px; border-top:1px dashed var(--gj-border); }
             
-            .gj-side-box {
-                background: var(--gj-bg-main); border-radius: 10px; overflow: hidden;
-                box-shadow: 0 2px 8px var(--gj-shadow); display:flex; flex-direction:column;
-            }
-            .gj-side-header {
-                padding: 8px 10px; font-size: 12px; font-weight: 700; color:var(--gj-text-main);
-                background:var(--gj-bg-sec); border-bottom:1px solid var(--gj-border);
-                display: flex; justify-content: space-between; align-items: center;
-            }
             .btn-icon-circle { 
                 width:18px; height:18px; border-radius:50%; background:var(--gj-bg-input); 
                 display:flex; align-items:center; justify-content:center; 
@@ -759,7 +792,7 @@
             .gj-list-item {
                 background: var(--gj-bg-main); padding: 6px 4px; 
                 cursor: pointer; 
-                font-size: 14px; /* [字体加大] */
+                font-size: 14px;
                 font-weight: 500;
                 color: var(--gj-text-main);
                 display: flex; align-items: center; justify-content: center;
