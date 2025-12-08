@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (无版本检测版)
+// @name          代驾调度系统助手 (美化增强版)
 // @namespace     http://tampermonkey.net/
-// @version       9.2
-// @description   根据时间段自动设置初始距离；每次进入派单页强制同步隔离库并自动清洗现有地址库；恢复“填最新电话”按钮；双列地址库；地址首位过滤数字字母符号。
+// @version       8
+// @description   司机调度默认1秒刷新；严格电话校验(11位1开头)；地址首位过滤；界面深度美化；自动比对与清洗。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
@@ -29,7 +29,7 @@
         DRIVER: {
             HASH: '#/driverAll',
             TITLE: '司机调度',
-            DEFAULT_INTERVAL: 30, 
+            DEFAULT_INTERVAL: 1, // [修改] 默认改为 1 秒
             BUTTON_SELECTOR: '.el-icon-refresh',
             ALT_SELECTOR: 'button i.el-icon-refresh'
         },
@@ -40,7 +40,6 @@
             RAPID_INTERVAL: 500
         },
         CLOUD: {
-            // 已移除版本检测URL
             BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=nfpvws&t=1765094235754"
         },
         CLIPBOARD: { MAX_HISTORY: 20 }
@@ -71,7 +70,11 @@
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
         } else if (isDriverPage()) {
-            state.refreshInterval = GM_getValue('driverInterval', CONFIG.DRIVER.DEFAULT_INTERVAL);
+            // 司机页面强制默认值，或者读取用户设定（如果用户手动改过）
+            let saved = GM_getValue('driverInterval');
+            // 如果未保存过，或者保存的值比默认大很多，重置为默认1秒
+            if (!saved) saved = CONFIG.DRIVER.DEFAULT_INTERVAL;
+            state.refreshInterval = saved;
         } else if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000; 
             
@@ -100,8 +103,6 @@
     const isOrderPage = () => state.currentHash.includes(CONFIG.ORDER.HASH);
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
-
-    // 已移除 checkCloudConfig (云端版本检测)
 
     const applyDistanceByTime = () => {
         if (!isDispatchPage()) return;
@@ -146,7 +147,6 @@
 
         const newCount = state.history.addrs.length;
         
-        // 如果有变化，保存并更新UI
         if (originalCount !== newCount) {
             GM_setValue('clipHistory', JSON.stringify(state.history));
             updateListsUI();
@@ -166,10 +166,7 @@
                         const cleanList = text.replace(/[\r\n\s]+/g, ',').replace(/，/g, ',');
                         state.blacklist = cleanList;
                         GM_setValue('blacklist', cleanList);
-                        
-                        // 同步完成后，立即清洗现有库
                         cleanHistoryWithBlacklist();
-
                         if(!silent) log('隔离库同步并清洗完成', 'success');
                     }
                 }
@@ -225,7 +222,7 @@
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
         let hasUpdate = false;
 
-        // 1. 提取手机号
+        // 1. 提取手机号 (严格校验：1开头，11位，前后非数字)
         const phoneRegex = /(?:^|[^\d])(1\d{10})(?:$|[^\d])/g;
         let phoneMatch;
         let tempTextForPhone = fullText;
@@ -236,6 +233,9 @@
         }
         
         phonesFound.reverse().forEach(num => {
+            // 再次确保是1开头的11位数字 (Regex已经保证了，这里双重保险)
+            if (!/^1\d{10}$/.test(num)) return;
+
             if (!state.history.phones) state.history.phones = [];
             const existIdx = state.history.phones.indexOf(num);
             if (existIdx > -1) state.history.phones.splice(existIdx, 1);
@@ -247,28 +247,19 @@
         // 2. 提取地址
         let addrText = fullText.replace(phoneRegex, ' ').trim();
         const segments = addrText.split(/[\r\n,;，；]+/); 
-        
-        // 符号正则（包含常见英文和中文标点）
         const symbolRegex = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`·！@#￥%……&*（）—+={}|【】；：‘’“”、，。《》？]/;
 
         segments.reverse().forEach(seg => {
             const cleanSeg = seg.trim();
             if (!cleanSeg || cleanSeg.length < 2) return;
             
-            // --- 新增过滤逻辑 ---
+            // --- 过滤逻辑 ---
             const firstChar = cleanSeg.charAt(0);
+            if (/[0-9]/.test(firstChar)) return; // 数字开头
+            if (/[a-zA-Z]/.test(firstChar)) return; // 字母开头
+            if (symbolRegex.test(firstChar)) return; // 符号开头
             
-            // 过滤首位是数字的情况
-            if (/[0-9]/.test(firstChar)) return;
-            // 过滤首位是字母的情况
-            if (/[a-zA-Z]/.test(firstChar)) return;
-            // 过滤首位是符号的情况
-            if (symbolRegex.test(firstChar)) return;
-            // -------------------
-
-            if (blockers.some(keyword => cleanSeg.includes(keyword))) {
-                return;
-            }
+            if (blockers.some(keyword => cleanSeg.includes(keyword))) return;
 
             if (!state.history.addrs) state.history.addrs = [];
             const existIdx = state.history.addrs.indexOf(cleanSeg);
@@ -278,7 +269,6 @@
             log('提取地址: ' + cleanSeg.substring(0, 6) + '...', 'info');
         });
 
-        // 3. 截断长度
         if (state.history.phones && state.history.phones.length > CONFIG.CLIPBOARD.MAX_HISTORY) state.history.phones.length = CONFIG.CLIPBOARD.MAX_HISTORY;
         if (state.history.addrs && state.history.addrs.length > CONFIG.CLIPBOARD.MAX_HISTORY) state.history.addrs.length = CONFIG.CLIPBOARD.MAX_HISTORY;
 
@@ -296,6 +286,15 @@
     };
 
     const fillInput = (type, value) => {
+        // [新增] 严格校验填充的电话号码
+        if (type === 'phone') {
+            const strictPhonePattern = /^1\d{10}$/;
+            if (!strictPhonePattern.test(value)) {
+                alert('电话不对：必须是11位数字且以1开头');
+                return;
+            }
+        }
+
         let input = null;
         if (type === 'address') {
              input = document.querySelector('input[id="tipinput"]') || 
@@ -316,9 +315,13 @@
             input.value = value;
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
-            input.style.transition = 'background 0.3s';
-            input.style.backgroundColor = '#e1f3d8';
-            setTimeout(() => input.style.backgroundColor = '', 500);
+            input.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+            input.style.boxShadow = '0 0 0 2px rgba(103, 194, 58, 0.3)';
+            input.style.borderColor = '#67c23a';
+            setTimeout(() => {
+                input.style.boxShadow = '';
+                input.style.borderColor = '';
+            }, 800);
         } else {
             alert(`找不到${type==='address'?'地址':'电话'}框`);
         }
@@ -363,21 +366,24 @@
         widget.innerHTML = `
             <div id="gj-main-col">
                 <div class="gj-header">
-                    <span id="gj-title-text" style="font-size:14px">...</span>
-                    <span class="gj-toggle">${state.isCollapsed ? '▼' : '▲'}</span>
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <span style="font-size:16px;">🤖</span>
+                        <span id="gj-title-text">...</span>
+                    </div>
+                    <span class="gj-toggle">${state.isCollapsed ? '➕' : '➖'}</span>
                 </div>
                 <div id="gj-main-content" style="display: ${state.isCollapsed ? 'none' : 'block'}"></div>
             </div>
             <div id="gj-side-col" style="display:none;">
                 <div class="gj-side-box">
-                    <div class="gj-side-header green">
-                        <span>📍 地址库 (点击填)</span>
-                        <span class="btn-icon" id="btn-refresh-addr" title="读取剪贴板">↻</span>
+                    <div class="gj-side-header">
+                        <span>📍 地址库</span>
+                        <span class="btn-icon-circle" id="btn-refresh-addr" title="读取剪贴板">↻</span>
                     </div>
                     <div class="gj-list-body" id="list-addr-body"></div>
                 </div>
-                <div class="gj-side-box" style="margin-top:5px; padding:5px;">
-                    <input id="gj-magic-input" placeholder="📋 在此粘贴... (自动解析)" style="width:100%; box-sizing:border-box; border:1px solid #ddd; border-radius:4px; padding:4px; font-size:12px;">
+                <div class="gj-side-box" style="margin-top:8px; padding:8px;">
+                    <input id="gj-magic-input" placeholder="📋 粘贴自动解析..." class="gj-magic-input">
                 </div>
             </div>
         `;
@@ -399,12 +405,26 @@
         magicInput.addEventListener('input', (e) => {
             const val = e.target.value;
             if (val && val.trim()) {
+                // 如果是纯数字但不是合法的电话，先尝试警告
+                if (/^\d+$/.test(val.trim())) {
+                    if (!/^1\d{10}$/.test(val.trim())) {
+                        // 继续往下走，parseTextToHistory 不会提取它，但我们可以在这里给提示
+                        // 或者简单点：如果 parseTextToHistory 返回 false 且输入看起来像数字
+                    }
+                }
+
                 if (parseTextToHistory(val)) {
                     GM_setValue('clipHistory', JSON.stringify(state.history));
                     updateListsUI();
                     e.target.value = ''; 
-                    e.target.style.background = '#f0f9eb';
-                    setTimeout(() => e.target.style.background = '#fff', 300);
+                    e.target.classList.add('success');
+                    setTimeout(() => e.target.classList.remove('success'), 500);
+                } else {
+                    // 如果解析失败，且输入是数字，提示错误
+                    if (/^\d+$/.test(val.trim()) && !/^1\d{10}$/.test(val.trim())) {
+                         alert("电话不对：请输入11位以1开头的数字");
+                         e.target.value = '';
+                    }
                 }
             }
         });
@@ -428,7 +448,7 @@
         mainContent.style.display = state.isCollapsed ? 'none' : 'block';
         
         if (isDispatchPage() && !state.isCollapsed) {
-            sideCol.style.display = 'block';
+            sideCol.style.display = 'flex';
             updateListsUI(); 
         } else {
             sideCol.style.display = 'none';
@@ -442,14 +462,20 @@
         let html = '';
         if (isOrderPage() || isDriverPage()) {
             const btnClass = state.manualPause ? 'btn-resume' : 'btn-pause';
-            const btnText = state.manualPause ? '▶ 恢复' : '⏸ 暂停';
+            const btnText = state.manualPause ? '▶ 恢复运行' : '⏸ 暂停刷新';
+            const statusColor = state.manualPause ? '#909399' : '#409EFF';
+            
             html = `
-                <div class="gj-timer-box">${state.countdown}s</div>
-                <button id="gj-btn-toggle" class="${btnClass}">${btnText}</button>
-                <div class="gj-row">
-                    <span>间隔:</span>
-                    <input type="number" id="gj-input-interval" value="${state.refreshInterval}" class="gj-input-mini">
-                    <button id="gj-btn-set" class="btn-xs">OK</button>
+                <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
+                    <span class="gj-timer-text" style="color:${statusColor}">${state.manualPause ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
+                </div>
+                <button id="gj-btn-toggle" class="gj-btn ${btnClass}">${btnText}</button>
+                <div class="gj-control-row">
+                    <span style="color:#606266;font-size:12px;">刷新间隔</span>
+                    <div style="display:flex;align-items:center;">
+                        <input type="number" id="gj-input-interval" value="${state.refreshInterval}" class="gj-input-mini">
+                        <button id="gj-btn-set" class="gj-btn-icon">🆗</button>
+                    </div>
                 </div>
             `;
         } else if (isDispatchPage()) {
@@ -459,24 +485,26 @@
             
             html = `
                 <div class="gj-group">
-                    <button id="btn-auto-addr" class="btn-big green">📌 填最新地址</button>
-                    <button id="btn-auto-phone" class="btn-big red">📞 填最新电话</button>
+                    <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
+                    <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
                 </div>
-                <div class="gj-label-sm">⚡ AI距离 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</div>
+                <div class="gj-divider">
+                    <span class="gj-label-sm">AI 距离控制 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</span>
+                </div>
                 <div class="gj-grid-btns">${buttonsHtml}</div>
                 
                 <div class="gj-bottom-controls">
-                    <div style="flex:1; display:flex; align-items:center; gap:5px;">
-                        <span style="font-size:11px">🔍缩放:</span>
-                        <input type="number" id="gj-scale-input" value="${state.uiScale}" step="0.1" min="0.5" max="3.0" style="width:40px;text-align:center;border:1px solid #ddd;border-radius:4px;font-size:12px;">
-                        <button id="btn-set-scale" class="btn-xs">OK</button>
+                    <div style="display:flex; align-items:center; gap:5px;">
+                        <span style="font-size:11px;color:#909399">UI缩放</span>
+                        <input type="number" id="gj-scale-input" value="${state.uiScale}" step="0.1" min="0.5" max="3.0" class="gj-input-mini" style="width:40px;">
+                        <button id="btn-set-scale" class="gj-btn-icon">🆗</button>
                     </div>
-                    <button id="btn-sync-cloud" class="btn-xs">☁️ 同步</button>
+                    <button id="btn-sync-cloud" class="gj-btn-text">☁️ 同步配置</button>
                 </div>
-                <div style="font-size:9px;color:#ccc;text-align:center;margin-top:4px;">当前 V${state.currentVersion}</div>
+                <div style="font-size:10px;color:#dcdfe6;text-align:center;margin-top:6px;">Ver ${state.currentVersion}</div>
             `;
         } else {
-            html = `<div style="padding:10px;color:#999;text-align:center;">非工作区</div>`;
+            html = `<div style="padding:20px;color:#999;text-align:center;font-size:13px;">💤 非工作区域</div>`;
         }
         container.innerHTML = html;
         bindEvents();
@@ -484,12 +512,15 @@
 
     const updateListsUI = () => {
         const renderItem = (item, type) => 
-            `<div class="gj-list-item" title="${item}" data-val="${item}" data-type="${type}">${item}</div>`;
+            `<div class="gj-list-item" title="${item}" data-val="${item}" data-type="${type}">
+                <span class="gj-item-icon">${type==='address'?'📍':'📞'}</span>
+                <span class="gj-item-text">${item}</span>
+            </div>`;
         const addrBody = document.getElementById('list-addr-body');
         
         if(addrBody) {
             const list = state.history.addrs || [];
-            addrBody.innerHTML = list.map(i => renderItem(i, 'address')).join('') || '<div class="gj-empty">- 空 -</div>';
+            addrBody.innerHTML = list.map(i => renderItem(i, 'address')).join('') || '<div class="gj-empty">暂无地址记录</div>';
             addrBody.querySelectorAll('.gj-list-item').forEach(el => el.addEventListener('click', () => fillInput('address', el.dataset.val)));
         }
     };
@@ -540,10 +571,13 @@
     };
 
     const updateStatusText = () => {
-        const box = document.querySelector('.gj-timer-box');
-        if (box) {
-            if (state.manualPause) { box.textContent = "暂停"; box.style.color = "#909399"; }
-            else { box.textContent = `${state.countdown}s`; box.style.color = state.countdown <= 3 ? "#F56C6C" : "#409EFF"; }
+        const text = document.querySelector('.gj-timer-text');
+        if (text) {
+            if (state.manualPause) { text.textContent = "暂停"; text.style.color = "#909399"; }
+            else { 
+                text.innerHTML = `${state.countdown}<span style="font-size:16px;margin-left:2px;opacity:0.6">s</span>`; 
+                text.style.color = state.countdown <= 3 ? "#F56C6C" : "#409EFF"; 
+            }
         }
     };
 
@@ -563,6 +597,7 @@
             isDragging = true; startX = e.clientX; startY = e.clientY;
             rect = el.getBoundingClientRect();
             header.style.cursor = 'grabbing';
+            el.style.transition = 'none';
         });
         document.addEventListener('mousemove', e => {
             if (!isDragging) return;
@@ -575,6 +610,7 @@
         document.addEventListener('mouseup', () => {
             if(isDragging) {
                 isDragging = false; header.style.cursor = 'grab';
+                el.style.transition = 'transform 0.1s';
                 state.uiPos = {left: el.style.left, top: el.style.top};
                 GM_setValue('uiPos', JSON.stringify(state.uiPos));
             }
@@ -584,81 +620,131 @@
     const addStyles = () => {
         GM_addStyle(`
             #gj-widget {
-                position: fixed; z-index: 10000;
+                position: fixed; z-index: 99999;
                 display: flex; align-items: flex-start;
-                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
                 font-size: 14px; user-select: none;
+                filter: drop-shadow(0 4px 12px rgba(0,0,0,0.15));
             }
             #gj-main-col {
-                width: 240px; background: #fff; border-radius: 8px; 
-                box-shadow: 0 5px 15px rgba(0,0,0,0.2); border: 1px solid #ebeef5; overflow: hidden;
+                width: 250px; background: #fff; border-radius: 12px; 
+                overflow: hidden; display:flex; flex-direction:column;
             }
             #gj-side-col {
-                width: 300px; 
-                margin-left: 5px; display: flex; flex-direction: column; gap: 5px;
+                width: 320px; 
+                margin-left: 10px; display: flex; flex-direction: column; gap: 10px;
             }
             .gj-header {
-                padding: 10px 12px; background: #F5F7FA; border-bottom: 1px solid #EBEEF5;
+                padding: 12px 16px; 
+                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                color: #fff;
                 display: flex; justify-content: space-between; align-items: center;
-                cursor: grab; font-weight: bold; color: #606266; font-size: 15px; 
+                cursor: grab; font-weight: 600; font-size: 15px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             }
+            .gj-toggle { cursor: pointer; opacity:0.8; transition:opacity 0.2s; font-size:12px; }
+            .gj-toggle:hover { opacity:1; }
+            
+            #gj-main-content { padding: 16px; background:#fff; }
+            
+            .gj-timer-text { font-size: 38px; font-weight: 700; line-height:1; letter-spacing: -1px; }
+            
+            .gj-btn {
+                width: 100%; border: none; padding: 10px; border-radius: 8px; 
+                cursor: pointer; font-weight: 600; font-size: 14px;
+                transition: all 0.2s; box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+                display:flex; justify-content:center; align-items:center; gap:5px;
+            }
+            .gj-btn:active { transform: scale(0.98); }
+            
+            .btn-pause { background: #fff1f0; color: #f56c6c; border:1px solid #fde2e2; }
+            .btn-pause:hover { background: #fef0f0; }
+            .btn-resume { background: #f0f9eb; color: #67c23a; border:1px solid #e1f3d8; }
+            .btn-resume:hover { background: #f0f9eb; }
+            
+            .btn-green { background: linear-gradient(135deg, #42e695 0%, #3bb2b8 100%); color: white; box-shadow: 0 3px 8px rgba(66, 230, 149, 0.3); }
+            .btn-blue { background: linear-gradient(135deg, #f56c6c 0%, #f78989 100%); color: white; box-shadow: 0 3px 8px rgba(245, 108, 108, 0.3); } /* 实际是红色，类名保留以防混淆 */
+            
+            .gj-control-row { display: flex; justify-content: space-between; align-items: center; margin-top: 15px; padding: 0 2px;}
+            .gj-input-mini { 
+                width: 45px; border: 1px solid #dcdfe6; border-radius: 6px; 
+                text-align: center; padding: 4px; font-size:13px; outline:none;
+                background: #f8f9fa; transition: all 0.2s;
+            }
+            .gj-input-mini:focus { border-color: #409EFF; background: #fff; }
+            
+            .gj-btn-icon { border:none; background:transparent; cursor:pointer; font-size:16px; padding:0 5px; }
+            .gj-btn-text { border:none; background:transparent; cursor:pointer; font-size:11px; color:#909399; }
+            .gj-btn-text:hover { color:#409EFF; }
+
+            .gj-group { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; }
+            
+            .gj-divider { display:flex; align-items:center; margin: 10px 0 6px 0; }
+            .gj-divider::before, .gj-divider::after { content:''; flex:1; height:1px; background:#ebeef5; }
+            .gj-label-sm { font-size: 11px; color: #909399; margin: 0 8px; white-space:nowrap;}
+            
+            .gj-grid-btns { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+            .btn-preset { 
+                background: #f4f6f8; border: 1px solid #e4e7ed; color: #606266; 
+                padding: 6px 0; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight:600;
+                transition:all 0.2s;
+            }
+            .btn-preset:hover { background: #ecf5ff; border-color: #b3d8ff; color: #409EFF; }
+            
+            .gj-bottom-controls { display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding-top:10px; border-top:1px dashed #ebeef5; }
+            
+            /* Side Column */
             .gj-side-box {
-                background: #fff; border-radius: 8px; border: 1px solid #ebeef5; overflow: hidden;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+                background: #fff; border-radius: 12px; overflow: hidden;
+                box-shadow: 0 2px 8px rgba(0,0,0,0.05); display:flex; flex-direction:column;
             }
             .gj-side-header {
-                padding: 6px 10px; font-size: 13px; font-weight: bold; display: flex; justify-content: space-between;
+                padding: 10px 12px; font-size: 13px; font-weight: 700; color:#303133;
+                background:#fbfbfc; border-bottom:1px solid #f0f0f0;
+                display: flex; justify-content: space-between; align-items: center;
             }
-            .green { background: #f0f9eb; color: #67c23a; }
-            .red { background: #fef0f0; color: #f56c6c; }
-            
-            #gj-main-content { padding: 12px; }
-            .gj-timer-box { font-size: 36px; font-weight: bold; color: #409EFF; text-align: center; margin-bottom: 8px; }
-            .gj-row { display: flex; align-items: center; justify-content: center; margin-top: 8px; gap: 5px; }
-            .gj-input-mini { width: 50px; border: 1px solid #dcdfe6; border-radius: 4px; text-align: center; padding: 4px; font-size:14px;}
-            
-            .btn-pause, .btn-resume { width: 100%; border: none; padding: 8px; border-radius: 6px; cursor: pointer; color: white; font-weight: bold; font-size: 14px;}
-            .btn-pause { background: #F56C6C; } .btn-resume { background: #67C23A; }
-            
-            .btn-big { width: 100%; border: 1px solid; border-radius: 6px; padding: 10px; margin-bottom: 6px; cursor: pointer; font-weight: bold; font-size: 14px; }
-            .btn-big.green { background: #f0f9eb; border-color: #c2e7b0; color: #67c23a; }
-            .btn-big.green:hover { background: #67c23a; color: white; }
-            .btn-big.red { background: #fef0f0; border-color: #fbc4c4; color: #f56c6c; }
-            .btn-big.red:hover { background: #f56c6c; color: white; }
+            .btn-icon-circle { 
+                width:20px; height:20px; border-radius:50%; background:#f0f2f5; 
+                display:flex; align-items:center; justify-content:center; 
+                cursor:pointer; color:#909399; font-size:12px; transition:all 0.2s;
+            }
+            .btn-icon-circle:hover { background:#409EFF; color:white; transform:rotate(180deg); }
 
-            .gj-grid-btns { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 6px; margin-top: 5px; }
-            .btn-preset { background: #ECF5FF; border: 1px solid #B3D8FF; color: #409EFF; padding: 8px 0; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight:bold;}
-            .btn-preset:hover { background: #409EFF; color: white; }
-
-            /* 地址库双列布局 */
             .gj-list-body { 
-                height: 300px; 
-                overflow-y: auto; background: #fff; 
-                display: grid;
-                grid-template-columns: 1fr 1fr; 
-                gap: 1px;
-                background-color: #f0f0f0; 
+                height: 320px; 
+                overflow-y: auto; 
+                display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
+                background: #f0f2f5;
+                padding: 1px;
             }
+            .gj-list-body::-webkit-scrollbar { width: 4px; }
+            .gj-list-body::-webkit-scrollbar-thumb { background: #dcdfe6; border-radius: 2px; }
+            
             .gj-list-item {
-                background: #fff;
-                padding: 8px 6px; 
-                cursor: pointer; font-size: 12px; color: #333;
-                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
+                background: #fff; padding: 10px 8px; 
+                cursor: pointer; font-size: 12px; color: #606266;
+                display: flex; align-items: center; gap: 6px;
+                transition: background 0.1s;
             }
             .gj-list-item:hover { background: #ecf5ff; color: #409EFF; }
-            .gj-empty { grid-column: 1 / -1; text-align: center; color: #ccc; padding: 10px; font-size: 12px; background: #fff; }
+            .gj-item-icon { font-size:10px; opacity:0.7; }
+            .gj-item-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex:1; }
             
-            .btn-icon { cursor: pointer; font-size: 14px; padding: 0 5px; }
-            .btn-xs { font-size: 12px; padding: 3px 8px; border: 1px solid #ddd; background: #fff; border-radius: 4px; cursor: pointer; }
-            .gj-label-sm { font-size: 12px; color: #999; margin-top: 8px; }
-            .gj-toggle { cursor: pointer; padding: 0 8px; font-size: 14px; }
-            .gj-bottom-controls { display:flex; justify-content:space-between; align-items:center; margin-top:10px; padding-top:8px; border-top:1px dashed #eee; }
+            .gj-empty { grid-column: 1 / -1; text-align: center; color: #c0c4cc; padding: 20px; font-size: 12px; background: #fff; display:flex; align-items:center; justify-content:center;}
+            
+            .gj-magic-input {
+                width: 100%; box-sizing: border-box; 
+                border: 1px solid #dcdfe6; border-radius: 6px; 
+                padding: 8px 10px; font-size: 12px; outline: none;
+                transition: all 0.3s;
+            }
+            .gj-magic-input:focus { border-color: #409EFF; box-shadow: 0 0 0 2px rgba(64,158,255,0.2); }
+            .gj-magic-input.success { background: #f0f9eb; border-color: #67c23a; }
         `);
     };
 
     const init = () => {
         addStyles();
-        // 已移除 checkCloudConfig();
         checkPage();
         window.addEventListener('hashchange', checkPage);
         if(isDispatchPage()) setTimeout(applyDistanceByTime, 2000);
