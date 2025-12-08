@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v10.0 自定义字数版)
+// @name          代驾调度系统助手 (v10.1 全局暗黑版)
 // @namespace     http://tampermonkey.net/
-// @version       10.0
-// @description   地址库底部增加“列宽”滑块，自由调节显示字数；双窗口分离；深色模式；全自动化功能保留。
+// @version       10.1
+// @description   点击图标可切换全站深色/浅色模式；智能反转保护图片；地址库自由调节字数；双窗口分离；全自动化功能保留。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
@@ -62,7 +62,6 @@
         posAddr: safeParse('posAddr', '{"top":"80px","left":"300px"}'),
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
         layout: safeParse('uiLayout', '{"width": 260, "height": 300}'),
-        // [新增] 地址库列宽 (控制显示字数)
         colWidth: parseInt(GM_getValue('addrColWidth', 70)),
         history: safeParse('clipHistory', '{"phones":[], "addrs":[]}'),
         blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信'),
@@ -321,15 +320,25 @@
         if (addrWidget && listBody) {
             addrWidget.style.width = state.layout.width + 'px';
             listBody.style.height = state.layout.height + 'px';
-            // 实时更新列宽
             listBody.style.setProperty('--gj-col-width', state.colWidth + 'px');
         }
     };
 
+    // [核心] 切换主题（同时切换全局网页颜色）
     const toggleTheme = () => {
         state.theme = state.theme === 'light' ? 'dark' : 'light';
         GM_setValue('theme', state.theme);
         updateUI();
+        applyGlobalTheme(); // 应用全局反转
+    };
+
+    const applyGlobalTheme = () => {
+        const doc = document.documentElement;
+        if (state.theme === 'dark') {
+            doc.classList.add('gj-global-dark');
+        } else {
+            doc.classList.remove('gj-global-dark');
+        }
     };
 
     const createMainWidget = () => {
@@ -353,7 +362,7 @@
                     <span id="gj-title-text">...</span>
                 </div>
                 <div style="display:flex; gap:8px;">
-                     <span id="gj-theme-toggle" title="切换模式">${themeIcon}</span>
+                     <span id="gj-theme-toggle" title="全站变黑/变亮">${themeIcon}</span>
                      <span class="gj-toggle" title="折叠/展开">${toggleIcon}</span>
                 </div>
             </div>
@@ -402,7 +411,7 @@
             
             <div style="padding:5px 8px; font-size:11px; display:flex; align-items:center; gap:5px; border-top:1px dashed var(--gj-border);">
                 <span style="color:var(--gj-text-mute);white-space:nowrap;">列宽:</span>
-                <input type="range" id="gj-col-slider" min="50" max="250" value="${state.colWidth}" style="flex:1;">
+                <input type="range" id="gj-col-slider" min="50" max="250" value="${state.colWidth}" style="flex:1;" title="拖动改变显示字数">
             </div>
 
             <div id="gj-size-handle" class="gj-resize-handle" title="拖拽调整宽高"></div>
@@ -414,11 +423,9 @@
 
         widget.querySelector('#btn-refresh-addr').addEventListener('click', processClipboard);
         
-        // 绑定列宽滑块事件
         const slider = widget.querySelector('#gj-col-slider');
         slider.addEventListener('input', (e) => {
             state.colWidth = parseInt(e.target.value);
-            // 实时修改CSS变量
             document.getElementById('list-addr-body').style.setProperty('--gj-col-width', state.colWidth + 'px');
         });
         slider.addEventListener('change', (e) => {
@@ -436,7 +443,7 @@
         if (isDispatchPage() && !addrWidget) {
             addrWidget = createAddrWidget();
             updateListsUI();
-            applyLayout(); // 初始化应用样式
+            applyLayout(); 
         } else if (!isDispatchPage() && addrWidget) {
             addrWidget.remove();
         }
@@ -517,7 +524,6 @@
         const addrBody = document.getElementById('list-addr-body');
         if (!addrBody) return;
 
-        // 【更新】移除了JS截断逻辑，完全由CSS控制显示
         const renderItem = (item, type) => {
             return `<div class="gj-list-item" title="${item}" data-val="${item}" data-type="${type}">
                 ${type==='address' ? '' : '📞'}
@@ -681,6 +687,20 @@
 
     const addStyles = () => {
         GM_addStyle(`
+            /* 全局反转滤镜 */
+            html.gj-global-dark {
+                filter: invert(0.92) hue-rotate(180deg) !important;
+                background-color: #111 !important;
+            }
+            /* 保护图片、视频不被反转 */
+            html.gj-global-dark img,
+            html.gj-global-dark video,
+            html.gj-global-dark iframe,
+            html.gj-global-dark .el-image,
+            html.gj-global-dark .gj-window { /* 保护助手窗口 */
+                filter: invert(1) hue-rotate(180deg) !important;
+            }
+
             :root {
                 --gj-bg-main: #ffffff;
                 --gj-bg-sec: #f0f2f5;
@@ -833,6 +853,7 @@
         checkPage();
         window.addEventListener('hashchange', checkPage);
         if(isDispatchPage()) setTimeout(applyDistanceByTime, 2000);
+        applyGlobalTheme(); // 初始化应用主题
 
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) {
