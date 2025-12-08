@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (美化增强版)
+// @name          代驾调度系统助手 (自定义布局版)
 // @namespace     http://tampermonkey.net/
-// @version       8
-// @description   司机调度默认1秒刷新；严格电话校验(11位1开头)；地址首位过滤；界面深度美化；自动比对与清洗。
+// @version       9.4
+// @description   支持自定义地址库宽高与列数；3列紧凑布局；严格电话校验；司机调度秒刷；界面美化。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
@@ -29,7 +29,7 @@
         DRIVER: {
             HASH: '#/driverAll',
             TITLE: '司机调度',
-            DEFAULT_INTERVAL: 1, // [修改] 默认改为 1 秒
+            DEFAULT_INTERVAL: 1, // 默认秒刷
             BUTTON_SELECTOR: '.el-icon-refresh',
             ALT_SELECTOR: 'button i.el-icon-refresh'
         },
@@ -56,6 +56,8 @@
         rapidTimer: null,
         uiPos: JSON.parse(GM_getValue('uiPos', '{"top":"80px","left":"20px"}')),
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
+        // [新增] 布局配置：默认宽度240(较窄)，高度300，列数3
+        layout: JSON.parse(GM_getValue('uiLayout', '{"width": 240, "height": 300, "cols": 3}')),
         history: JSON.parse(GM_getValue('clipHistory', '{"phones":[], "addrs":[]}')),
         blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信'),
         currentVersion: GM_info.script.version,
@@ -70,19 +72,13 @@
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
         } else if (isDriverPage()) {
-            // 司机页面强制默认值，或者读取用户设定（如果用户手动改过）
             let saved = GM_getValue('driverInterval');
-            // 如果未保存过，或者保存的值比默认大很多，重置为默认1秒
             if (!saved) saved = CONFIG.DRIVER.DEFAULT_INTERVAL;
             state.refreshInterval = saved;
         } else if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000; 
-            
-            // 每次进入派单页，强制同步隔离库
             log('进入派单界面，同步并清洗隔离库...', 'info');
             fetchOnlineBlacklist(true);
-
-            // 延迟触发时间距离设置
             setTimeout(applyDistanceByTime, 1500); 
         }
 
@@ -106,27 +102,20 @@
 
     const applyDistanceByTime = () => {
         if (!isDispatchPage()) return;
-        
         const now = new Date();
-        const currentH = now.getHours();
-        const currentM = now.getMinutes();
-        const currentVal = currentH * 60 + currentM; 
-
+        const currentVal = now.getHours() * 60 + now.getMinutes(); 
         const parseTime = (str) => {
             const parts = str.split(':');
             return parseInt(parts[0]) * 60 + parseInt(parts[1]);
         };
-
         const startVal = parseTime(state.timeConfig.start);
         const endVal = parseTime(state.timeConfig.end);
-
         let targetKm = 3; 
         if (currentVal >= startVal && currentVal < endVal) {
             targetKm = 2;
             log(`高峰时段 (${state.timeConfig.start}-${state.timeConfig.end})，设为 2km`, 'success');
         } else {
             targetKm = 3;
-            log(`平时时段，设为 3km`, 'info');
         }
         setSliderValue(targetKm);
     };
@@ -134,23 +123,15 @@
     // [核心] 清洗历史记录
     const cleanHistoryWithBlacklist = () => {
         if (!state.history.addrs || state.history.addrs.length === 0) return;
-        
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
         if (blockers.length === 0) return;
-
         const originalCount = state.history.addrs.length;
-        
-        // 过滤：只有不包含任何屏蔽词的地址才保留
-        state.history.addrs = state.history.addrs.filter(addr => {
-            return !blockers.some(keyword => addr.includes(keyword));
-        });
-
+        state.history.addrs = state.history.addrs.filter(addr => !blockers.some(keyword => addr.includes(keyword)));
         const newCount = state.history.addrs.length;
-        
         if (originalCount !== newCount) {
             GM_setValue('clipHistory', JSON.stringify(state.history));
             updateListsUI();
-            log(`已清洗地址库: 自动移除 ${originalCount - newCount} 条不符合规则的地址`, 'warning');
+            log(`已清洗地址库: 移除 ${originalCount - newCount} 条`, 'warning');
         }
     };
 
@@ -189,11 +170,9 @@
         let selector = null;
         if (isOrderPage()) selector = CONFIG.ORDER.BUTTON_SELECTOR;
         else if (isDriverPage()) selector = CONFIG.DRIVER.BUTTON_SELECTOR;
-        
         let btn = document.querySelector(selector);
         if (!btn && isOrderPage()) btn = document.querySelector(CONFIG.ORDER.ALT_SELECTOR)?.closest('button');
         if (!btn && isDriverPage()) btn = document.querySelector(CONFIG.DRIVER.ALT_SELECTOR)?.closest('button');
-
         if (btn) {
             btn.click();
             state.countdown = state.refreshInterval; 
@@ -218,11 +197,10 @@
 
     const parseTextToHistory = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
-        
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
         let hasUpdate = false;
 
-        // 1. 提取手机号 (严格校验：1开头，11位，前后非数字)
+        // 严格电话校验：1开头，11位
         const phoneRegex = /(?:^|[^\d])(1\d{10})(?:$|[^\d])/g;
         let phoneMatch;
         let tempTextForPhone = fullText;
@@ -233,9 +211,7 @@
         }
         
         phonesFound.reverse().forEach(num => {
-            // 再次确保是1开头的11位数字 (Regex已经保证了，这里双重保险)
             if (!/^1\d{10}$/.test(num)) return;
-
             if (!state.history.phones) state.history.phones = [];
             const existIdx = state.history.phones.indexOf(num);
             if (existIdx > -1) state.history.phones.splice(existIdx, 1);
@@ -244,7 +220,7 @@
             log('提取电话: ' + num, 'success');
         });
 
-        // 2. 提取地址
+        // 提取地址
         let addrText = fullText.replace(phoneRegex, ' ').trim();
         const segments = addrText.split(/[\r\n,;，；]+/); 
         const symbolRegex = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`·！@#￥%……&*（）—+={}|【】；：‘’“”、，。《》？]/;
@@ -253,11 +229,11 @@
             const cleanSeg = seg.trim();
             if (!cleanSeg || cleanSeg.length < 2) return;
             
-            // --- 过滤逻辑 ---
+            // 首位过滤
             const firstChar = cleanSeg.charAt(0);
-            if (/[0-9]/.test(firstChar)) return; // 数字开头
-            if (/[a-zA-Z]/.test(firstChar)) return; // 字母开头
-            if (symbolRegex.test(firstChar)) return; // 符号开头
+            if (/[0-9]/.test(firstChar)) return; 
+            if (/[a-zA-Z]/.test(firstChar)) return; 
+            if (symbolRegex.test(firstChar)) return; 
             
             if (blockers.some(keyword => cleanSeg.includes(keyword))) return;
 
@@ -286,7 +262,6 @@
     };
 
     const fillInput = (type, value) => {
-        // [新增] 严格校验填充的电话号码
         if (type === 'phone') {
             const strictPhonePattern = /^1\d{10}$/;
             if (!strictPhonePattern.test(value)) {
@@ -294,7 +269,6 @@
                 return;
             }
         }
-
         let input = null;
         if (type === 'address') {
              input = document.querySelector('input[id="tipinput"]') || 
@@ -315,13 +289,9 @@
             input.value = value;
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
-            input.style.transition = 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)';
+            input.style.transition = 'all 0.3s';
             input.style.boxShadow = '0 0 0 2px rgba(103, 194, 58, 0.3)';
-            input.style.borderColor = '#67c23a';
-            setTimeout(() => {
-                input.style.boxShadow = '';
-                input.style.borderColor = '';
-            }, 800);
+            setTimeout(() => input.style.boxShadow = '', 800);
         } else {
             alert(`找不到${type==='address'?'地址':'电话'}框`);
         }
@@ -353,6 +323,17 @@
 
     // --------------- 4. UI 界面 ---------------
 
+    // [新增] 动态应用布局样式
+    const applyLayout = () => {
+        const sideCol = document.getElementById('gj-side-col');
+        const listBody = document.getElementById('list-addr-body');
+        if (sideCol && listBody) {
+            sideCol.style.width = state.layout.width + 'px';
+            listBody.style.height = state.layout.height + 'px';
+            listBody.style.gridTemplateColumns = `repeat(${state.layout.cols}, 1fr)`;
+        }
+    };
+
     const createWidget = () => {
         const old = document.getElementById('gj-widget');
         if (old) old.remove();
@@ -374,16 +355,29 @@
                 </div>
                 <div id="gj-main-content" style="display: ${state.isCollapsed ? 'none' : 'block'}"></div>
             </div>
-            <div id="gj-side-col" style="display:none;">
+            
+            <div id="gj-side-col" style="display:none; width:${state.layout.width}px;">
                 <div class="gj-side-box">
                     <div class="gj-side-header">
                         <span>📍 地址库</span>
-                        <span class="btn-icon-circle" id="btn-refresh-addr" title="读取剪贴板">↻</span>
+                        <span class="btn-icon-circle" id="btn-refresh-addr" title="刷新/读取剪贴板">↻</span>
                     </div>
-                    <div class="gj-list-body" id="list-addr-body"></div>
+                    <!-- 动态高度和列数 -->
+                    <div class="gj-list-body" id="list-addr-body" 
+                         style="height:${state.layout.height}px; grid-template-columns: repeat(${state.layout.cols}, 1fr);">
+                    </div>
                 </div>
-                <div class="gj-side-box" style="margin-top:8px; padding:8px;">
-                    <input id="gj-magic-input" placeholder="📋 粘贴自动解析..." class="gj-magic-input">
+                
+                <div class="gj-side-box" style="margin-top:5px; padding:5px;">
+                    <input id="gj-magic-input" placeholder="📋 粘贴..." class="gj-magic-input">
+                </div>
+
+                <!-- [新增] 布局设置区域 -->
+                <div class="gj-layout-settings">
+                    <label>宽:<input type="number" id="set-width" value="${state.layout.width}" class="gj-mini-input"></label>
+                    <label>高:<input type="number" id="set-height" value="${state.layout.height}" class="gj-mini-input"></label>
+                    <label>列:<input type="number" id="set-cols" value="${state.layout.cols}" class="gj-mini-input" max="6" min="1"></label>
+                    <button id="btn-save-layout" class="gj-btn-xs">存</button>
                 </div>
             </div>
         `;
@@ -401,18 +395,25 @@
 
         widget.querySelector('#btn-refresh-addr').addEventListener('click', processClipboard);
 
+        // [新增] 保存布局设置
+        widget.querySelector('#btn-save-layout').addEventListener('click', () => {
+            const w = parseInt(document.getElementById('set-width').value);
+            const h = parseInt(document.getElementById('set-height').value);
+            const c = parseInt(document.getElementById('set-cols').value);
+            if (w && h && c) {
+                state.layout = { width: w, height: h, cols: c };
+                GM_setValue('uiLayout', JSON.stringify(state.layout));
+                applyLayout();
+            }
+        });
+
         const magicInput = widget.querySelector('#gj-magic-input');
         magicInput.addEventListener('input', (e) => {
             const val = e.target.value;
             if (val && val.trim()) {
-                // 如果是纯数字但不是合法的电话，先尝试警告
-                if (/^\d+$/.test(val.trim())) {
-                    if (!/^1\d{10}$/.test(val.trim())) {
-                        // 继续往下走，parseTextToHistory 不会提取它，但我们可以在这里给提示
-                        // 或者简单点：如果 parseTextToHistory 返回 false 且输入看起来像数字
-                    }
+                if (/^\d+$/.test(val.trim()) && !/^1\d{10}$/.test(val.trim())) {
+                    // 数字但不是电话，静默
                 }
-
                 if (parseTextToHistory(val)) {
                     GM_setValue('clipHistory', JSON.stringify(state.history));
                     updateListsUI();
@@ -420,7 +421,6 @@
                     e.target.classList.add('success');
                     setTimeout(() => e.target.classList.remove('success'), 500);
                 } else {
-                    // 如果解析失败，且输入是数字，提示错误
                     if (/^\d+$/.test(val.trim()) && !/^1\d{10}$/.test(val.trim())) {
                          alert("电话不对：请输入11位以1开头的数字");
                          e.target.value = '';
@@ -489,17 +489,17 @@
                     <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
                 </div>
                 <div class="gj-divider">
-                    <span class="gj-label-sm">AI 距离控制 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</span>
+                    <span class="gj-label-sm">AI 距离 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</span>
                 </div>
                 <div class="gj-grid-btns">${buttonsHtml}</div>
                 
                 <div class="gj-bottom-controls">
                     <div style="display:flex; align-items:center; gap:5px;">
-                        <span style="font-size:11px;color:#909399">UI缩放</span>
+                        <span style="font-size:11px;color:#909399">缩放</span>
                         <input type="number" id="gj-scale-input" value="${state.uiScale}" step="0.1" min="0.5" max="3.0" class="gj-input-mini" style="width:40px;">
                         <button id="btn-set-scale" class="gj-btn-icon">🆗</button>
                     </div>
-                    <button id="btn-sync-cloud" class="gj-btn-text">☁️ 同步配置</button>
+                    <button id="btn-sync-cloud" class="gj-btn-text">☁️ 同步</button>
                 </div>
                 <div style="font-size:10px;color:#dcdfe6;text-align:center;margin-top:6px;">Ver ${state.currentVersion}</div>
             `;
@@ -513,14 +513,14 @@
     const updateListsUI = () => {
         const renderItem = (item, type) => 
             `<div class="gj-list-item" title="${item}" data-val="${item}" data-type="${type}">
-                <span class="gj-item-icon">${type==='address'?'📍':'📞'}</span>
+                ${type==='address' ? '' : '📞'}
                 <span class="gj-item-text">${item}</span>
             </div>`;
         const addrBody = document.getElementById('list-addr-body');
         
         if(addrBody) {
             const list = state.history.addrs || [];
-            addrBody.innerHTML = list.map(i => renderItem(i, 'address')).join('') || '<div class="gj-empty">暂无地址记录</div>';
+            addrBody.innerHTML = list.map(i => renderItem(i, 'address')).join('') || '<div class="gj-empty">空</div>';
             addrBody.querySelectorAll('.gj-list-item').forEach(el => el.addEventListener('click', () => fillInput('address', el.dataset.val)));
         }
     };
@@ -631,8 +631,9 @@
                 overflow: hidden; display:flex; flex-direction:column;
             }
             #gj-side-col {
-                width: 320px; 
-                margin-left: 10px; display: flex; flex-direction: column; gap: 10px;
+                /* width 由 js 动态控制 */
+                margin-left: 8px; display: flex; flex-direction: column; gap: 6px;
+                transition: width 0.2s;
             }
             .gj-header {
                 padding: 12px 16px; 
@@ -643,10 +644,8 @@
                 box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             }
             .gj-toggle { cursor: pointer; opacity:0.8; transition:opacity 0.2s; font-size:12px; }
-            .gj-toggle:hover { opacity:1; }
             
             #gj-main-content { padding: 16px; background:#fff; }
-            
             .gj-timer-text { font-size: 38px; font-weight: 700; line-height:1; letter-spacing: -1px; }
             
             .gj-btn {
@@ -656,14 +655,10 @@
                 display:flex; justify-content:center; align-items:center; gap:5px;
             }
             .gj-btn:active { transform: scale(0.98); }
-            
             .btn-pause { background: #fff1f0; color: #f56c6c; border:1px solid #fde2e2; }
-            .btn-pause:hover { background: #fef0f0; }
             .btn-resume { background: #f0f9eb; color: #67c23a; border:1px solid #e1f3d8; }
-            .btn-resume:hover { background: #f0f9eb; }
-            
-            .btn-green { background: linear-gradient(135deg, #42e695 0%, #3bb2b8 100%); color: white; box-shadow: 0 3px 8px rgba(66, 230, 149, 0.3); }
-            .btn-blue { background: linear-gradient(135deg, #f56c6c 0%, #f78989 100%); color: white; box-shadow: 0 3px 8px rgba(245, 108, 108, 0.3); } /* 实际是红色，类名保留以防混淆 */
+            .btn-green { background: linear-gradient(135deg, #42e695 0%, #3bb2b8 100%); color: white; }
+            .btn-blue { background: linear-gradient(135deg, #f56c6c 0%, #f78989 100%); color: white; } 
             
             .gj-control-row { display: flex; justify-content: space-between; align-items: center; margin-top: 15px; padding: 0 2px;}
             .gj-input-mini { 
@@ -672,74 +667,80 @@
                 background: #f8f9fa; transition: all 0.2s;
             }
             .gj-input-mini:focus { border-color: #409EFF; background: #fff; }
-            
             .gj-btn-icon { border:none; background:transparent; cursor:pointer; font-size:16px; padding:0 5px; }
             .gj-btn-text { border:none; background:transparent; cursor:pointer; font-size:11px; color:#909399; }
-            .gj-btn-text:hover { color:#409EFF; }
-
             .gj-group { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; }
-            
             .gj-divider { display:flex; align-items:center; margin: 10px 0 6px 0; }
             .gj-divider::before, .gj-divider::after { content:''; flex:1; height:1px; background:#ebeef5; }
             .gj-label-sm { font-size: 11px; color: #909399; margin: 0 8px; white-space:nowrap;}
-            
             .gj-grid-btns { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
             .btn-preset { 
                 background: #f4f6f8; border: 1px solid #e4e7ed; color: #606266; 
                 padding: 6px 0; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight:600;
-                transition:all 0.2s;
             }
             .btn-preset:hover { background: #ecf5ff; border-color: #b3d8ff; color: #409EFF; }
-            
             .gj-bottom-controls { display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding-top:10px; border-top:1px dashed #ebeef5; }
             
-            /* Side Column */
+            /* 侧边栏样式 */
             .gj-side-box {
-                background: #fff; border-radius: 12px; overflow: hidden;
+                background: #fff; border-radius: 10px; overflow: hidden;
                 box-shadow: 0 2px 8px rgba(0,0,0,0.05); display:flex; flex-direction:column;
             }
             .gj-side-header {
-                padding: 10px 12px; font-size: 13px; font-weight: 700; color:#303133;
+                padding: 8px 10px; font-size: 12px; font-weight: 700; color:#303133;
                 background:#fbfbfc; border-bottom:1px solid #f0f0f0;
                 display: flex; justify-content: space-between; align-items: center;
             }
             .btn-icon-circle { 
-                width:20px; height:20px; border-radius:50%; background:#f0f2f5; 
+                width:18px; height:18px; border-radius:50%; background:#f0f2f5; 
                 display:flex; align-items:center; justify-content:center; 
-                cursor:pointer; color:#909399; font-size:12px; transition:all 0.2s;
+                cursor:pointer; color:#909399; font-size:12px;
             }
-            .btn-icon-circle:hover { background:#409EFF; color:white; transform:rotate(180deg); }
+            .btn-icon-circle:hover { background:#409EFF; color:white; }
 
             .gj-list-body { 
-                height: 320px; 
                 overflow-y: auto; 
-                display: grid; grid-template-columns: 1fr 1fr; gap: 1px;
-                background: #f0f2f5;
-                padding: 1px;
+                display: grid; /* 列数由js控制 */
+                gap: 1px; background: #f0f2f5; padding: 1px;
+                transition: height 0.2s;
             }
             .gj-list-body::-webkit-scrollbar { width: 4px; }
             .gj-list-body::-webkit-scrollbar-thumb { background: #dcdfe6; border-radius: 2px; }
             
             .gj-list-item {
-                background: #fff; padding: 10px 8px; 
-                cursor: pointer; font-size: 12px; color: #606266;
-                display: flex; align-items: center; gap: 6px;
-                transition: background 0.1s;
+                background: #fff; padding: 8px 2px; 
+                cursor: pointer; font-size: 11px; color: #606266;
+                display: flex; align-items: center; justify-content: center;
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
             }
             .gj-list-item:hover { background: #ecf5ff; color: #409EFF; }
-            .gj-item-icon { font-size:10px; opacity:0.7; }
-            .gj-item-text { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; flex:1; }
-            
-            .gj-empty { grid-column: 1 / -1; text-align: center; color: #c0c4cc; padding: 20px; font-size: 12px; background: #fff; display:flex; align-items:center; justify-content:center;}
+            .gj-item-text { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+            .gj-empty { grid-column: 1 / -1; text-align: center; color: #c0c4cc; padding: 20px; font-size: 11px; background: #fff;}
             
             .gj-magic-input {
                 width: 100%; box-sizing: border-box; 
                 border: 1px solid #dcdfe6; border-radius: 6px; 
-                padding: 8px 10px; font-size: 12px; outline: none;
-                transition: all 0.3s;
+                padding: 6px 8px; font-size: 12px; outline: none;
             }
-            .gj-magic-input:focus { border-color: #409EFF; box-shadow: 0 0 0 2px rgba(64,158,255,0.2); }
+            .gj-magic-input:focus { border-color: #409EFF; }
             .gj-magic-input.success { background: #f0f9eb; border-color: #67c23a; }
+
+            /* 布局设置区域 */
+            .gj-layout-settings {
+                display: flex; justify-content: space-between; align-items: center;
+                background: #f4f4f5; border-radius: 8px; padding: 4px 8px;
+                margin-top: 4px; font-size: 11px; color: #909399;
+            }
+            .gj-layout-settings label { display: flex; align-items: center; gap: 2px; }
+            .gj-mini-input {
+                width: 30px; border: 1px solid #dcdfe6; border-radius: 4px;
+                text-align: center; font-size: 11px; padding: 2px 0;
+            }
+            .gj-btn-xs {
+                border: 1px solid #dcdfe6; background: #fff; border-radius: 4px;
+                padding: 2px 6px; font-size: 11px; cursor: pointer; color: #606266;
+            }
+            .gj-btn-xs:hover { border-color: #409EFF; color: #409EFF; }
         `);
     };
 
