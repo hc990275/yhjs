@@ -1,12 +1,10 @@
 // ==UserScript==
-// @name          代驾调度系统助手
+// @name          代驾调度系统助手 (无版本检测版)
 // @namespace     http://tampermonkey.net/
-// @version       9.1
-// @description   启动自动比对云端版本号；根据时间段自动设置初始距离；每次进入派单页强制同步隔离库并自动清洗现有地址库；恢复“填最新电话”按钮；双列地址库。
+// @version       9.2
+// @description   根据时间段自动设置初始距离；每次进入派单页强制同步隔离库并自动清洗现有地址库；恢复“填最新电话”按钮；双列地址库；地址首位过滤数字字母符号。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
-// @updateURL     https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251
-// @downloadURL   https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251
 // @grant         GM_setValue
 // @grant         GM_getValue
 // @grant         GM_addStyle
@@ -42,8 +40,7 @@
             RAPID_INTERVAL: 500
         },
         CLOUD: {
-            VERSION_CHECK_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fbb?sign=65b8wq&t=1765094665264",
-            SCRIPT_DOWNLOAD_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fwg.js?sign=voi9t7&t=1765094363251",
+            // 已移除版本检测URL
             BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=nfpvws&t=1765094235754"
         },
         CLIPBOARD: { MAX_HISTORY: 20 }
@@ -63,7 +60,6 @@
         history: JSON.parse(GM_getValue('clipHistory', '{"phones":[], "addrs":[]}')),
         blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信'),
         currentVersion: GM_info.script.version,
-        newVersionAvailable: null,
         timeConfig: JSON.parse(GM_getValue('timeConfig', '{"start":"20:00", "end":"22:00"}'))
     };
 
@@ -105,39 +101,7 @@
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
 
-    const checkCloudConfig = () => {
-        GM_xmlhttpRequest({
-            method: "GET",
-            url: CONFIG.CLOUD.VERSION_CHECK_URL,
-            onload: function(response) {
-                if (response.status === 200) {
-                    const text = response.responseText.trim();
-                    const lines = text.split(/[\r\n]+/); 
-                    
-                    if (lines.length > 0) {
-                        const cloudVerStr = lines[0].trim();
-                        const cloudVer = parseFloat(cloudVerStr);
-                        const localVer = parseFloat(state.currentVersion);
-                        if (!isNaN(cloudVer) && cloudVer > localVer) {
-                            state.newVersionAvailable = cloudVerStr;
-                            updateUI();
-                        }
-                    }
-
-                    if (lines.length >= 3) {
-                        const newTimeConfig = {
-                            start: lines[1].trim(),
-                            end: lines[2].trim()
-                        };
-                        if (newTimeConfig.start.includes(':') && newTimeConfig.end.includes(':')) {
-                            state.timeConfig = newTimeConfig;
-                            GM_setValue('timeConfig', JSON.stringify(newTimeConfig));
-                        }
-                    }
-                }
-            }
-        });
-    };
+    // 已移除 checkCloudConfig (云端版本检测)
 
     const applyDistanceByTime = () => {
         if (!isDispatchPage()) return;
@@ -166,7 +130,7 @@
         setSliderValue(targetKm);
     };
 
-    // [核心新增] 清洗历史记录
+    // [核心] 清洗历史记录
     const cleanHistoryWithBlacklist = () => {
         if (!state.history.addrs || state.history.addrs.length === 0) return;
         
@@ -203,7 +167,7 @@
                         state.blacklist = cleanList;
                         GM_setValue('blacklist', cleanList);
                         
-                        // [新增] 同步完成后，立即清洗现有库
+                        // 同步完成后，立即清洗现有库
                         cleanHistoryWithBlacklist();
 
                         if(!silent) log('隔离库同步并清洗完成', 'success');
@@ -283,13 +247,26 @@
         // 2. 提取地址
         let addrText = fullText.replace(phoneRegex, ' ').trim();
         const segments = addrText.split(/[\r\n,;，；]+/); 
+        
+        // 符号正则（包含常见英文和中文标点）
+        const symbolRegex = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`·！@#￥%……&*（）—+={}|【】；：‘’“”、，。《》？]/;
 
         segments.reverse().forEach(seg => {
             const cleanSeg = seg.trim();
             if (!cleanSeg || cleanSeg.length < 2) return;
-            if (/^\d+$/.test(cleanSeg)) return; 
+            
+            // --- 新增过滤逻辑 ---
+            const firstChar = cleanSeg.charAt(0);
+            
+            // 过滤首位是数字的情况
+            if (/[0-9]/.test(firstChar)) return;
+            // 过滤首位是字母的情况
+            if (/[a-zA-Z]/.test(firstChar)) return;
+            // 过滤首位是符号的情况
+            if (symbolRegex.test(firstChar)) return;
+            // -------------------
+
             if (blockers.some(keyword => cleanSeg.includes(keyword))) {
-                // log(`已过滤屏蔽地址: ${cleanSeg}`, 'info');
                 return;
             }
 
@@ -385,9 +362,6 @@
 
         widget.innerHTML = `
             <div id="gj-main-col">
-                <div id="gj-update-bar" style="display:none; background:#f56c6c; color:white; padding:8px; text-align:center; font-weight:bold; cursor:pointer;">
-                    🚀 发现新版本 V<span id="gj-new-ver"></span> (点击更新)
-                </div>
                 <div class="gj-header">
                     <span id="gj-title-text" style="font-size:14px">...</span>
                     <span class="gj-toggle">${state.isCollapsed ? '▼' : '▲'}</span>
@@ -419,12 +393,6 @@
             updateUI();
         });
 
-        widget.querySelector('#gj-update-bar').addEventListener('click', () => {
-            if (confirm(`检测到新版本 V${state.newVersionAvailable}，是否前往更新？`)) {
-                GM_openInTab(CONFIG.CLOUD.SCRIPT_DOWNLOAD_URL, { active: true });
-            }
-        });
-
         widget.querySelector('#btn-refresh-addr').addEventListener('click', processClipboard);
 
         const magicInput = widget.querySelector('#gj-magic-input');
@@ -453,14 +421,6 @@
         else if (isDriverPage()) titleSpan.textContent = CONFIG.DRIVER.TITLE;
         else if (isDispatchPage()) titleSpan.textContent = CONFIG.DISPATCH.TITLE;
         else titleSpan.textContent = "助手待机";
-
-        const updateBar = document.getElementById('gj-update-bar');
-        if (state.newVersionAvailable) {
-            updateBar.style.display = 'block';
-            document.getElementById('gj-new-ver').textContent = state.newVersionAvailable;
-        } else {
-            updateBar.style.display = 'none';
-        }
 
         const mainContent = document.getElementById('gj-main-content');
         const sideCol = document.getElementById('gj-side-col');
@@ -558,7 +518,6 @@
             });
             document.getElementById('btn-sync-cloud')?.addEventListener('click', () => {
                 fetchOnlineBlacklist(false);
-                checkCloudConfig();
             });
         }
         
@@ -635,7 +594,7 @@
                 box-shadow: 0 5px 15px rgba(0,0,0,0.2); border: 1px solid #ebeef5; overflow: hidden;
             }
             #gj-side-col {
-                width: 300px; /* 增加宽度以适应双列 */
+                width: 300px; 
                 margin-left: 5px; display: flex; flex-direction: column; gap: 5px;
             }
             .gj-header {
@@ -676,7 +635,7 @@
                 height: 300px; 
                 overflow-y: auto; background: #fff; 
                 display: grid;
-                grid-template-columns: 1fr 1fr; /* 双列 */
+                grid-template-columns: 1fr 1fr; 
                 gap: 1px;
                 background-color: #f0f0f0; 
             }
@@ -699,7 +658,7 @@
 
     const init = () => {
         addStyles();
-        checkCloudConfig(); 
+        // 已移除 checkCloudConfig();
         checkPage();
         window.addEventListener('hashchange', checkPage);
         if(isDispatchPage()) setTimeout(applyDistanceByTime, 2000);
