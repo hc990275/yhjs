@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (简洁终极版)
+// @name          代驾调度系统助手 (深色护眼版)
 // @namespace     http://tampermonkey.net/
-// @version       9.6
-// @description   移除底部粘贴框；右下角拖拽可调整缩放；右下角拖拽可调整地址库宽高；地址库自动分列；严格电话校验；司机调度秒刷。
+// @version       9.7
+// @description   支持深色/浅色模式切换；地址库字体加大；右下角拖拽缩放与调整宽高；地址库自动分列；严格电话校验；司机调度秒刷。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
@@ -60,7 +60,9 @@
         history: JSON.parse(GM_getValue('clipHistory', '{"phones":[], "addrs":[]}')),
         blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信'),
         currentVersion: GM_info.script.version,
-        timeConfig: JSON.parse(GM_getValue('timeConfig', '{"start":"20:00", "end":"22:00"}'))
+        timeConfig: JSON.parse(GM_getValue('timeConfig', '{"start":"20:00", "end":"22:00"}')),
+        // [新增] 主题状态: 'light' 或 'dark'
+        theme: GM_getValue('theme', 'light') 
     };
 
     // --------------- 3. 核心逻辑 ---------------
@@ -316,15 +318,27 @@
         }
     };
 
+    // [新增] 切换主题逻辑
+    const toggleTheme = () => {
+        state.theme = state.theme === 'light' ? 'dark' : 'light';
+        GM_setValue('theme', state.theme);
+        updateUI();
+    };
+
     const createWidget = () => {
         const old = document.getElementById('gj-widget');
         if (old) old.remove();
 
         const widget = document.createElement('div');
         widget.id = 'gj-widget';
+        // 应用当前主题类
+        widget.className = state.theme === 'dark' ? 'gj-dark' : 'gj-light';
         applyPos(widget, state.uiPos);
         widget.style.transform = `scale(${state.uiScale})`;
         widget.style.transformOrigin = 'top left';
+
+        const themeIcon = state.theme === 'light' ? '🌙' : '🌞';
+        const toggleIcon = state.isCollapsed ? '➕' : '➖';
 
         widget.innerHTML = `
             <div id="gj-main-col" style="position:relative;">
@@ -333,7 +347,10 @@
                         <span style="font-size:16px;">🤖</span>
                         <span id="gj-title-text">...</span>
                     </div>
-                    <span class="gj-toggle">${state.isCollapsed ? '➕' : '➖'}</span>
+                    <div style="display:flex; gap:8px;">
+                         <span id="gj-theme-toggle" title="切换模式">${themeIcon}</span>
+                         <span class="gj-toggle">${toggleIcon}</span>
+                    </div>
                 </div>
                 <div id="gj-main-content" style="display: ${state.isCollapsed ? 'none' : 'block'}"></div>
                 <div id="gj-scale-handle" class="gj-resize-handle" title="拖拽缩放界面"></div>
@@ -364,6 +381,11 @@
             updateUI();
         });
 
+        widget.querySelector('#gj-theme-toggle').addEventListener('click', (e) => {
+             e.stopPropagation();
+             toggleTheme();
+        });
+
         widget.querySelector('#btn-refresh-addr').addEventListener('click', processClipboard);
 
         return widget;
@@ -372,6 +394,11 @@
     const updateUI = () => {
         let widget = document.getElementById('gj-widget');
         if (!widget) widget = createWidget();
+        
+        // 确保类名同步
+        widget.className = state.theme === 'dark' ? 'gj-dark' : 'gj-light';
+        const themeIcon = document.getElementById('gj-theme-toggle');
+        if(themeIcon) themeIcon.textContent = state.theme === 'light' ? '🌙' : '🌞';
 
         const titleSpan = document.getElementById('gj-title-text');
         if (isOrderPage()) titleSpan.textContent = CONFIG.ORDER.TITLE;
@@ -402,7 +429,7 @@
         if (isOrderPage() || isDriverPage()) {
             const btnClass = state.manualPause ? 'btn-resume' : 'btn-pause';
             const btnText = state.manualPause ? '▶ 恢复运行' : '⏸ 暂停刷新';
-            const statusColor = state.manualPause ? '#909399' : '#409EFF';
+            const statusColor = state.manualPause ? 'var(--gj-text-sec)' : '#409EFF';
             
             html = `
                 <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
@@ -410,7 +437,7 @@
                 </div>
                 <button id="gj-btn-toggle" class="gj-btn ${btnClass}">${btnText}</button>
                 <div class="gj-control-row">
-                    <span style="color:#606266;font-size:12px;">刷新间隔</span>
+                    <span style="color:var(--gj-text-sec);font-size:12px;">刷新间隔</span>
                     <div style="display:flex;align-items:center;">
                         <input type="number" id="gj-input-interval" value="${state.refreshInterval}" class="gj-input-mini">
                         <button id="gj-btn-set" class="gj-btn-icon">🆗</button>
@@ -434,11 +461,11 @@
                 
                 <div class="gj-bottom-controls">
                     <button id="btn-sync-cloud" class="gj-btn-text">☁️ 同步配置</button>
-                    <span style="font-size:10px;color:#ccc;">缩放: ${(state.uiScale*100).toFixed(0)}%</span>
+                    <span style="font-size:10px;color:var(--gj-text-mute);">缩放: ${(state.uiScale*100).toFixed(0)}%</span>
                 </div>
             `;
         } else {
-            html = `<div style="padding:20px;color:#999;text-align:center;font-size:13px;">💤 非工作区域</div>`;
+            html = `<div style="padding:20px;color:var(--gj-text-mute);text-align:center;font-size:13px;">💤 非工作区域</div>`;
         }
         container.innerHTML = html;
         bindEvents();
@@ -496,7 +523,7 @@
     const updateStatusText = () => {
         const text = document.querySelector('.gj-timer-text');
         if (text) {
-            if (state.manualPause) { text.textContent = "暂停"; text.style.color = "#909399"; }
+            if (state.manualPause) { text.textContent = "暂停"; text.style.color = "var(--gj-text-sec)"; }
             else { 
                 text.innerHTML = `${state.countdown}<span style="font-size:16px;margin-left:2px;opacity:0.6">s</span>`; 
                 text.style.color = state.countdown <= 3 ? "#F56C6C" : "#409EFF"; 
@@ -517,7 +544,7 @@
         const header = el.querySelector('.gj-header'); 
         let isDragging = false, startX, startY, rect;
         header.addEventListener('mousedown', e => {
-            if(e.target.closest('.gj-toggle')) return;
+            if(e.target.closest('.gj-toggle') || e.target.closest('#gj-theme-toggle')) return;
             isDragging = true; startX = e.clientX; startY = e.clientY;
             rect = el.getBoundingClientRect();
             header.style.cursor = 'grabbing';
@@ -605,32 +632,61 @@
 
     const addStyles = () => {
         GM_addStyle(`
+            :root {
+                --gj-bg-main: #ffffff;
+                --gj-bg-sec: #f0f2f5;
+                --gj-bg-input: #f8f9fa;
+                --gj-text-main: #303133;
+                --gj-text-sec: #606266;
+                --gj-text-mute: #909399;
+                --gj-border: #dcdfe6;
+                --gj-hover: #ecf5ff;
+                --gj-hover-text: #409EFF;
+                --gj-shadow: rgba(0,0,0,0.1);
+                --gj-header-bg: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            }
+            .gj-dark {
+                --gj-bg-main: #1a1a1a;
+                --gj-bg-sec: #2d2d2d;
+                --gj-bg-input: #333333;
+                --gj-text-main: #e0e0e0;
+                --gj-text-sec: #b0b0b0;
+                --gj-text-mute: #666666;
+                --gj-border: #444444;
+                --gj-hover: #404040;
+                --gj-hover-text: #66b1ff;
+                --gj-shadow: rgba(0,0,0,0.5);
+                --gj-header-bg: linear-gradient(135deg, #3a4b8a 0%, #4a2b6e 100%);
+            }
+
             #gj-widget {
                 position: fixed; z-index: 99999;
                 display: flex; align-items: flex-start;
                 font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
                 font-size: 14px; user-select: none;
-                filter: drop-shadow(0 4px 12px rgba(0,0,0,0.15));
+                filter: drop-shadow(0 4px 12px var(--gj-shadow));
+                color: var(--gj-text-main);
             }
             #gj-main-col {
-                width: 250px; background: #fff; border-radius: 12px; 
+                width: 250px; background: var(--gj-bg-main); border-radius: 12px; 
                 overflow: hidden; display:flex; flex-direction:column;
+                transition: background 0.3s;
             }
             #gj-side-col {
-                /* width 由 js 动态控制 */
                 margin-left: 8px; display: flex; flex-direction: column; gap: 6px;
             }
             .gj-header {
                 padding: 12px 16px; 
-                background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                background: var(--gj-header-bg);
                 color: #fff;
                 display: flex; justify-content: space-between; align-items: center;
                 cursor: grab; font-weight: 600; font-size: 15px;
                 box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             }
-            .gj-toggle { cursor: pointer; opacity:0.8; transition:opacity 0.2s; font-size:12px; }
+            .gj-toggle, #gj-theme-toggle { cursor: pointer; opacity:0.8; transition:opacity 0.2s; font-size:14px; }
+            .gj-toggle:hover, #gj-theme-toggle:hover { opacity:1; }
             
-            #gj-main-content { padding: 16px; background:#fff; position: relative;}
+            #gj-main-content { padding: 16px; background:var(--gj-bg-main); position: relative;}
             .gj-timer-text { font-size: 38px; font-weight: 700; line-height:1; letter-spacing: -1px; }
             
             .gj-btn {
@@ -641,44 +697,52 @@
             }
             .gj-btn:active { transform: scale(0.98); }
             .btn-pause { background: #fff1f0; color: #f56c6c; border:1px solid #fde2e2; }
+            .gj-dark .btn-pause { background: #4a1b1b; color: #ff6b6b; border:1px solid #632b2b; }
+
             .btn-resume { background: #f0f9eb; color: #67c23a; border:1px solid #e1f3d8; }
+            .gj-dark .btn-resume { background: #1b4a24; color: #67c23a; border:1px solid #2b6339; }
+
             .btn-green { background: linear-gradient(135deg, #42e695 0%, #3bb2b8 100%); color: white; }
             .btn-blue { background: linear-gradient(135deg, #f56c6c 0%, #f78989 100%); color: white; } 
             
             .gj-control-row { display: flex; justify-content: space-between; align-items: center; margin-top: 15px; padding: 0 2px;}
             .gj-input-mini { 
-                width: 45px; border: 1px solid #dcdfe6; border-radius: 6px; 
+                width: 45px; border: 1px solid var(--gj-border); border-radius: 6px; 
                 text-align: center; padding: 4px; font-size:13px; outline:none;
-                background: #f8f9fa; transition: all 0.2s;
+                background: var(--gj-bg-input); color: var(--gj-text-main); transition: all 0.2s;
             }
-            .gj-input-mini:focus { border-color: #409EFF; background: #fff; }
+            .gj-input-mini:focus { border-color: #409EFF; }
+            
             .gj-btn-icon { border:none; background:transparent; cursor:pointer; font-size:16px; padding:0 5px; }
-            .gj-btn-text { border:none; background:transparent; cursor:pointer; font-size:11px; color:#909399; }
+            .gj-btn-text { border:none; background:transparent; cursor:pointer; font-size:11px; color:var(--gj-text-mute); }
+            .gj-btn-text:hover { color:#409EFF; }
+
             .gj-group { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; }
             .gj-divider { display:flex; align-items:center; margin: 10px 0 6px 0; }
-            .gj-divider::before, .gj-divider::after { content:''; flex:1; height:1px; background:#ebeef5; }
-            .gj-label-sm { font-size: 11px; color: #909399; margin: 0 8px; white-space:nowrap;}
+            .gj-divider::before, .gj-divider::after { content:''; flex:1; height:1px; background:var(--gj-border); }
+            .gj-label-sm { font-size: 11px; color: var(--gj-text-mute); margin: 0 8px; white-space:nowrap;}
             .gj-grid-btns { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
             .btn-preset { 
-                background: #f4f6f8; border: 1px solid #e4e7ed; color: #606266; 
+                background: var(--gj-bg-sec); border: 1px solid var(--gj-border); color: var(--gj-text-sec); 
                 padding: 6px 0; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight:600;
             }
-            .btn-preset:hover { background: #ecf5ff; border-color: #b3d8ff; color: #409EFF; }
-            .gj-bottom-controls { display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding-top:10px; border-top:1px dashed #ebeef5; }
+            .btn-preset:hover { background: var(--gj-hover); border-color: #b3d8ff; color: #409EFF; }
+            
+            .gj-bottom-controls { display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding-top:10px; border-top:1px dashed var(--gj-border); }
             
             .gj-side-box {
-                background: #fff; border-radius: 10px; overflow: hidden;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.05); display:flex; flex-direction:column;
+                background: var(--gj-bg-main); border-radius: 10px; overflow: hidden;
+                box-shadow: 0 2px 8px var(--gj-shadow); display:flex; flex-direction:column;
             }
             .gj-side-header {
-                padding: 8px 10px; font-size: 12px; font-weight: 700; color:#303133;
-                background:#fbfbfc; border-bottom:1px solid #f0f0f0;
+                padding: 8px 10px; font-size: 12px; font-weight: 700; color:var(--gj-text-main);
+                background:var(--gj-bg-sec); border-bottom:1px solid var(--gj-border);
                 display: flex; justify-content: space-between; align-items: center;
             }
             .btn-icon-circle { 
-                width:18px; height:18px; border-radius:50%; background:#f0f2f5; 
+                width:18px; height:18px; border-radius:50%; background:var(--gj-bg-input); 
                 display:flex; align-items:center; justify-content:center; 
-                cursor:pointer; color:#909399; font-size:12px;
+                cursor:pointer; color:var(--gj-text-mute); font-size:12px;
             }
             .btn-icon-circle:hover { background:#409EFF; color:white; }
 
@@ -686,21 +750,24 @@
                 overflow-y: auto; 
                 display: grid;
                 grid-template-columns: repeat(auto-fill, minmax(65px, 1fr));
-                gap: 1px; background: #f0f2f5; padding: 1px;
+                gap: 1px; background: var(--gj-bg-sec); padding: 1px;
                 transition: height 0.05s;
             }
             .gj-list-body::-webkit-scrollbar { width: 4px; }
-            .gj-list-body::-webkit-scrollbar-thumb { background: #dcdfe6; border-radius: 2px; }
+            .gj-list-body::-webkit-scrollbar-thumb { background: var(--gj-border); border-radius: 2px; }
             
             .gj-list-item {
-                background: #fff; padding: 6px 2px; 
-                cursor: pointer; font-size: 11px; color: #606266;
+                background: var(--gj-bg-main); padding: 6px 4px; 
+                cursor: pointer; 
+                font-size: 14px; /* [字体加大] */
+                font-weight: 500;
+                color: var(--gj-text-main);
                 display: flex; align-items: center; justify-content: center;
                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
             }
-            .gj-list-item:hover { background: #ecf5ff; color: #409EFF; }
+            .gj-list-item:hover { background: var(--gj-hover); color: var(--gj-hover-text); }
             .gj-item-text { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-            .gj-empty { grid-column: 1 / -1; text-align: center; color: #c0c4cc; padding: 20px; font-size: 11px; background: #fff;}
+            .gj-empty { grid-column: 1 / -1; text-align: center; color: var(--gj-text-mute); padding: 20px; font-size: 11px; background: var(--gj-bg-main);}
             
             .gj-resize-handle {
                 position: absolute;
@@ -709,7 +776,7 @@
                 width: 12px;
                 height: 12px;
                 cursor: nwse-resize;
-                background: linear-gradient(135deg, transparent 50%, #909399 50%);
+                background: linear-gradient(135deg, transparent 50%, var(--gj-text-mute) 50%);
                 opacity: 0.5;
                 z-index: 10;
                 clip-path: polygon(100% 0, 100% 100%, 0 100%);
