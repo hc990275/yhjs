@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name          代驾调度系统助手 (自定义布局版)
 // @namespace     http://tampermonkey.net/
-// @version       9.4
+// @version       8
 // @description   支持自定义地址库宽高与列数；3列紧凑布局；严格电话校验；司机调度秒刷；界面美化。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
