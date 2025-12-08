@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v9.9 稳定修复版)
+// @name          代驾调度系统助手 (v10.0 自定义字数版)
 // @namespace     http://tampermonkey.net/
-// @version       9.9
-// @description   修复面板消失问题；主面板与地址库分离；支持深色模式；显眼注释修改地址字数限制；保留所有自动化功能。
+// @version       10.0
+// @description   地址库底部增加“列宽”滑块，自由调节显示字数；双窗口分离；深色模式；全自动化功能保留。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
@@ -46,13 +46,8 @@
     };
 
     // --------------- 2. 全局状态 ---------------
-    // 安全读取配置，防止报错
     const safeParse = (key, def) => {
-        try {
-            return JSON.parse(GM_getValue(key, def));
-        } catch (e) {
-            return JSON.parse(def);
-        }
+        try { return JSON.parse(GM_getValue(key, def)); } catch (e) { return JSON.parse(def); }
     };
 
     let state = {
@@ -63,13 +58,12 @@
         countdown: 0,
         timerId: null,
         rapidTimer: null,
-        // 主面板位置
         posMain: safeParse('posMain', '{"top":"80px","left":"20px"}'),
-        // 地址库位置
         posAddr: safeParse('posAddr', '{"top":"80px","left":"300px"}'),
-        
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
         layout: safeParse('uiLayout', '{"width": 260, "height": 300}'),
+        // [新增] 地址库列宽 (控制显示字数)
+        colWidth: parseInt(GM_getValue('addrColWidth', 70)),
         history: safeParse('clipHistory', '{"phones":[], "addrs":[]}'),
         blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信'),
         currentVersion: GM_info.script.version,
@@ -327,6 +321,8 @@
         if (addrWidget && listBody) {
             addrWidget.style.width = state.layout.width + 'px';
             listBody.style.height = state.layout.height + 'px';
+            // 实时更新列宽
+            listBody.style.setProperty('--gj-col-width', state.colWidth + 'px');
         }
     };
 
@@ -403,6 +399,12 @@
                 <span class="btn-icon-circle" id="btn-refresh-addr" title="刷新/读取剪贴板">↻</span>
             </div>
             <div class="gj-list-body" id="list-addr-body" style="height:${state.layout.height}px;"></div>
+            
+            <div style="padding:5px 8px; font-size:11px; display:flex; align-items:center; gap:5px; border-top:1px dashed var(--gj-border);">
+                <span style="color:var(--gj-text-mute);white-space:nowrap;">列宽:</span>
+                <input type="range" id="gj-col-slider" min="50" max="250" value="${state.colWidth}" style="flex:1;">
+            </div>
+
             <div id="gj-size-handle" class="gj-resize-handle" title="拖拽调整宽高"></div>
         `;
 
@@ -411,6 +413,17 @@
         setupResizeDrag(widget);
 
         widget.querySelector('#btn-refresh-addr').addEventListener('click', processClipboard);
+        
+        // 绑定列宽滑块事件
+        const slider = widget.querySelector('#gj-col-slider');
+        slider.addEventListener('input', (e) => {
+            state.colWidth = parseInt(e.target.value);
+            // 实时修改CSS变量
+            document.getElementById('list-addr-body').style.setProperty('--gj-col-width', state.colWidth + 'px');
+        });
+        slider.addEventListener('change', (e) => {
+             GM_setValue('addrColWidth', state.colWidth);
+        });
         
         return widget;
     };
@@ -423,6 +436,7 @@
         if (isDispatchPage() && !addrWidget) {
             addrWidget = createAddrWidget();
             updateListsUI();
+            applyLayout(); // 初始化应用样式
         } else if (!isDispatchPage() && addrWidget) {
             addrWidget.remove();
         }
@@ -503,19 +517,11 @@
         const addrBody = document.getElementById('list-addr-body');
         if (!addrBody) return;
 
-        // 【👇 这里修改地址库每个格子显示的字数 👇】
-        // ----------------------------------------------------
-        const ADDR_CHAR_LIMIT = 6; // 默认为 4 个字，你可以改成 3, 5, 6 等
-        // ----------------------------------------------------
-
+        // 【更新】移除了JS截断逻辑，完全由CSS控制显示
         const renderItem = (item, type) => {
-            let displayItem = item;
-            if (type === 'address' && item.length > ADDR_CHAR_LIMIT) {
-                displayItem = item.substring(0, ADDR_CHAR_LIMIT) + '..';
-            }
             return `<div class="gj-list-item" title="${item}" data-val="${item}" data-type="${type}">
                 ${type==='address' ? '' : '📞'}
-                <span class="gj-item-text">${displayItem}</span>
+                <span class="gj-item-text">${item}</span>
             </div>`;
         };
 
@@ -782,7 +788,8 @@
             .gj-list-body { 
                 overflow-y: auto; 
                 display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(65px, 1fr));
+                /* 【核心】使用 CSS 变量控制最小列宽，从而控制一行显示几个 */
+                grid-template-columns: repeat(auto-fill, minmax(var(--gj-col-width, 70px), 1fr));
                 gap: 1px; background: var(--gj-bg-sec); padding: 1px;
                 transition: height 0.05s;
             }
