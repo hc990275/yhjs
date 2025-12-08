@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (自定义布局版)
+// @name          代驾调度系统助手 (拖拽交互版)
 // @namespace     http://tampermonkey.net/
-// @version       8
-// @description   支持自定义地址库宽高与列数；3列紧凑布局；严格电话校验；司机调度秒刷；界面美化。
+// @version       9.5
+// @description   右下角拖拽可调整缩放；右下角拖拽可调整地址库宽高；地址库自动分列；严格电话校验；司机调度秒刷。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
@@ -29,7 +29,7 @@
         DRIVER: {
             HASH: '#/driverAll',
             TITLE: '司机调度',
-            DEFAULT_INTERVAL: 1, // 默认秒刷
+            DEFAULT_INTERVAL: 1, // 秒刷
             BUTTON_SELECTOR: '.el-icon-refresh',
             ALT_SELECTOR: 'button i.el-icon-refresh'
         },
@@ -56,8 +56,8 @@
         rapidTimer: null,
         uiPos: JSON.parse(GM_getValue('uiPos', '{"top":"80px","left":"20px"}')),
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
-        // [新增] 布局配置：默认宽度240(较窄)，高度300，列数3
-        layout: JSON.parse(GM_getValue('uiLayout', '{"width": 240, "height": 300, "cols": 3}')),
+        // 布局改为只存宽高，列数自动计算
+        layout: JSON.parse(GM_getValue('uiLayout', '{"width": 260, "height": 300}')),
         history: JSON.parse(GM_getValue('clipHistory', '{"phones":[], "addrs":[]}')),
         blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信'),
         currentVersion: GM_info.script.version,
@@ -113,14 +113,10 @@
         let targetKm = 3; 
         if (currentVal >= startVal && currentVal < endVal) {
             targetKm = 2;
-            log(`高峰时段 (${state.timeConfig.start}-${state.timeConfig.end})，设为 2km`, 'success');
-        } else {
-            targetKm = 3;
         }
         setSliderValue(targetKm);
     };
 
-    // [核心] 清洗历史记录
     const cleanHistoryWithBlacklist = () => {
         if (!state.history.addrs || state.history.addrs.length === 0) return;
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
@@ -165,7 +161,7 @@
     };
     const stopRapidRefresh = () => { if (state.rapidTimer) { clearInterval(state.rapidTimer); state.rapidTimer = null; } };
 
-    const performAction = (reason) => {
+    const performAction = () => {
         if (state.manualPause) return;
         let selector = null;
         if (isOrderPage()) selector = CONFIG.ORDER.BUTTON_SELECTOR;
@@ -188,7 +184,7 @@
             state.countdown--;
             updateStatusText(); 
             if (state.countdown <= 0) {
-                performAction("定时触发");
+                performAction();
                 state.countdown = state.refreshInterval; 
             }
         }, 1000);
@@ -200,27 +196,22 @@
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
         let hasUpdate = false;
 
-        // 严格电话校验：1开头，11位
         const phoneRegex = /(?:^|[^\d])(1\d{10})(?:$|[^\d])/g;
         let phoneMatch;
         let tempTextForPhone = fullText;
-        let phonesFound = [];
         
         while ((phoneMatch = phoneRegex.exec(tempTextForPhone)) !== null) {
-            phonesFound.push(phoneMatch[1]);
+            const num = phoneMatch[1];
+            if (/^1\d{10}$/.test(num)) {
+                if (!state.history.phones) state.history.phones = [];
+                const existIdx = state.history.phones.indexOf(num);
+                if (existIdx > -1) state.history.phones.splice(existIdx, 1);
+                state.history.phones.unshift(num);
+                hasUpdate = true;
+                log('提取电话: ' + num, 'success');
+            }
         }
-        
-        phonesFound.reverse().forEach(num => {
-            if (!/^1\d{10}$/.test(num)) return;
-            if (!state.history.phones) state.history.phones = [];
-            const existIdx = state.history.phones.indexOf(num);
-            if (existIdx > -1) state.history.phones.splice(existIdx, 1);
-            state.history.phones.unshift(num);
-            hasUpdate = true;
-            log('提取电话: ' + num, 'success');
-        });
 
-        // 提取地址
         let addrText = fullText.replace(phoneRegex, ' ').trim();
         const segments = addrText.split(/[\r\n,;，；]+/); 
         const symbolRegex = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`·！@#￥%……&*（）—+={}|【】；：‘’“”、，。《》？]/;
@@ -228,13 +219,8 @@
         segments.reverse().forEach(seg => {
             const cleanSeg = seg.trim();
             if (!cleanSeg || cleanSeg.length < 2) return;
-            
-            // 首位过滤
             const firstChar = cleanSeg.charAt(0);
-            if (/[0-9]/.test(firstChar)) return; 
-            if (/[a-zA-Z]/.test(firstChar)) return; 
-            if (symbolRegex.test(firstChar)) return; 
-            
+            if (/[0-9]/.test(firstChar) || /[a-zA-Z]/.test(firstChar) || symbolRegex.test(firstChar)) return; 
             if (blockers.some(keyword => cleanSeg.includes(keyword))) return;
 
             if (!state.history.addrs) state.history.addrs = [];
@@ -263,8 +249,7 @@
 
     const fillInput = (type, value) => {
         if (type === 'phone') {
-            const strictPhonePattern = /^1\d{10}$/;
-            if (!strictPhonePattern.test(value)) {
+            if (!/^1\d{10}$/.test(value)) {
                 alert('电话不对：必须是11位数字且以1开头');
                 return;
             }
@@ -323,14 +308,12 @@
 
     // --------------- 4. UI 界面 ---------------
 
-    // [新增] 动态应用布局样式
     const applyLayout = () => {
         const sideCol = document.getElementById('gj-side-col');
         const listBody = document.getElementById('list-addr-body');
         if (sideCol && listBody) {
             sideCol.style.width = state.layout.width + 'px';
             listBody.style.height = state.layout.height + 'px';
-            listBody.style.gridTemplateColumns = `repeat(${state.layout.cols}, 1fr)`;
         }
     };
 
@@ -345,7 +328,7 @@
         widget.style.transformOrigin = 'top left';
 
         widget.innerHTML = `
-            <div id="gj-main-col">
+            <div id="gj-main-col" style="position:relative;">
                 <div class="gj-header">
                     <div style="display:flex;align-items:center;gap:6px;">
                         <span style="font-size:16px;">🤖</span>
@@ -354,37 +337,33 @@
                     <span class="gj-toggle">${state.isCollapsed ? '➕' : '➖'}</span>
                 </div>
                 <div id="gj-main-content" style="display: ${state.isCollapsed ? 'none' : 'block'}"></div>
+                <!-- 1. 主界面缩放手柄 -->
+                <div id="gj-scale-handle" class="gj-resize-handle" title="拖拽缩放界面"></div>
             </div>
             
-            <div id="gj-side-col" style="display:none; width:${state.layout.width}px;">
-                <div class="gj-side-box">
+            <div id="gj-side-col" style="display:none; width:${state.layout.width}px; position:relative;">
+                <div class="gj-side-box" style="flex:1; display:flex; flex-direction:column;">
                     <div class="gj-side-header">
-                        <span>📍 地址库</span>
+                        <span>📍 地址库 (拖拽右下角调整)</span>
                         <span class="btn-icon-circle" id="btn-refresh-addr" title="刷新/读取剪贴板">↻</span>
                     </div>
-                    <!-- 动态高度和列数 -->
-                    <div class="gj-list-body" id="list-addr-body" 
-                         style="height:${state.layout.height}px; grid-template-columns: repeat(${state.layout.cols}, 1fr);">
-                    </div>
+                    <div class="gj-list-body" id="list-addr-body" style="height:${state.layout.height}px;"></div>
                 </div>
                 
                 <div class="gj-side-box" style="margin-top:5px; padding:5px;">
                     <input id="gj-magic-input" placeholder="📋 粘贴..." class="gj-magic-input">
                 </div>
 
-                <!-- [新增] 布局设置区域 -->
-                <div class="gj-layout-settings">
-                    <label>宽:<input type="number" id="set-width" value="${state.layout.width}" class="gj-mini-input"></label>
-                    <label>高:<input type="number" id="set-height" value="${state.layout.height}" class="gj-mini-input"></label>
-                    <label>列:<input type="number" id="set-cols" value="${state.layout.cols}" class="gj-mini-input" max="6" min="1"></label>
-                    <button id="btn-save-layout" class="gj-btn-xs">存</button>
-                </div>
+                <!-- 2. 地址库尺寸手柄 -->
+                <div id="gj-size-handle" class="gj-resize-handle" title="拖拽调整宽高"></div>
             </div>
         `;
 
         document.body.appendChild(widget);
         addStyles();
-        setupDrag(widget);
+        setupDrag(widget);          // 移动整个窗口
+        setupScaleDrag(widget);     // 拖拽缩放
+        setupResizeDrag(widget);    // 拖拽改变尺寸
         
         widget.querySelector('.gj-toggle').addEventListener('click', (e) => {
             e.stopPropagation();
@@ -395,24 +374,12 @@
 
         widget.querySelector('#btn-refresh-addr').addEventListener('click', processClipboard);
 
-        // [新增] 保存布局设置
-        widget.querySelector('#btn-save-layout').addEventListener('click', () => {
-            const w = parseInt(document.getElementById('set-width').value);
-            const h = parseInt(document.getElementById('set-height').value);
-            const c = parseInt(document.getElementById('set-cols').value);
-            if (w && h && c) {
-                state.layout = { width: w, height: h, cols: c };
-                GM_setValue('uiLayout', JSON.stringify(state.layout));
-                applyLayout();
-            }
-        });
-
         const magicInput = widget.querySelector('#gj-magic-input');
         magicInput.addEventListener('input', (e) => {
             const val = e.target.value;
             if (val && val.trim()) {
                 if (/^\d+$/.test(val.trim()) && !/^1\d{10}$/.test(val.trim())) {
-                    // 数字但不是电话，静默
+                    // 仅数字但非手机号，静默
                 }
                 if (parseTextToHistory(val)) {
                     GM_setValue('clipHistory', JSON.stringify(state.history));
@@ -444,8 +411,10 @@
 
         const mainContent = document.getElementById('gj-main-content');
         const sideCol = document.getElementById('gj-side-col');
+        const scaleHandle = document.getElementById('gj-scale-handle');
         
         mainContent.style.display = state.isCollapsed ? 'none' : 'block';
+        scaleHandle.style.display = state.isCollapsed ? 'none' : 'block';
         
         if (isDispatchPage() && !state.isCollapsed) {
             sideCol.style.display = 'flex';
@@ -494,14 +463,9 @@
                 <div class="gj-grid-btns">${buttonsHtml}</div>
                 
                 <div class="gj-bottom-controls">
-                    <div style="display:flex; align-items:center; gap:5px;">
-                        <span style="font-size:11px;color:#909399">缩放</span>
-                        <input type="number" id="gj-scale-input" value="${state.uiScale}" step="0.1" min="0.5" max="3.0" class="gj-input-mini" style="width:40px;">
-                        <button id="btn-set-scale" class="gj-btn-icon">🆗</button>
-                    </div>
-                    <button id="btn-sync-cloud" class="gj-btn-text">☁️ 同步</button>
+                    <button id="btn-sync-cloud" class="gj-btn-text">☁️ 同步配置</button>
+                    <span style="font-size:10px;color:#ccc;">缩放: ${(state.uiScale*100).toFixed(0)}%</span>
                 </div>
-                <div style="font-size:10px;color:#dcdfe6;text-align:center;margin-top:6px;">Ver ${state.currentVersion}</div>
             `;
         } else {
             html = `<div style="padding:20px;color:#999;text-align:center;font-size:13px;">💤 非工作区域</div>`;
@@ -527,17 +491,6 @@
 
     const bindEvents = () => {
         if (isDispatchPage()) {
-            document.getElementById('btn-set-scale')?.addEventListener('click', () => {
-                const val = parseFloat(document.getElementById('gj-scale-input').value);
-                if(val && val >= 0.5 && val <= 3.0) {
-                    state.uiScale = val;
-                    GM_setValue('uiScale', val);
-                    document.getElementById('gj-widget').style.transform = `scale(${val})`;
-                } else {
-                    alert('请输入 0.5 到 3.0 之间的数值');
-                }
-            });
-
             document.querySelectorAll('.btn-preset').forEach(btn => 
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
             );
@@ -564,7 +517,7 @@
                     state.refreshInterval = val;
                     if(isOrderPage()) GM_setValue('orderInterval', val);
                     if(isDriverPage()) GM_setValue('driverInterval', val);
-                    performAction("设置更新"); startCountdown();
+                    performAction(); startCountdown();
                 }
             });
         }
@@ -590,10 +543,12 @@
         else { el.style.bottom = pos.bottom || 'auto'; el.style.top = 'auto'; }
     };
 
+    // 拖拽移动窗口
     const setupDrag = (el) => {
         const header = el.querySelector('.gj-header'); 
         let isDragging = false, startX, startY, rect;
         header.addEventListener('mousedown', e => {
+            if(e.target.closest('.gj-toggle')) return;
             isDragging = true; startX = e.clientX; startY = e.clientY;
             rect = el.getBoundingClientRect();
             header.style.cursor = 'grabbing';
@@ -617,6 +572,73 @@
         });
     };
 
+    // 拖拽缩放 (UI Scale)
+    const setupScaleDrag = (el) => {
+        const handle = el.querySelector('#gj-scale-handle');
+        if(!handle) return;
+        let isResizing = false, startY, startScale;
+        handle.addEventListener('mousedown', e => {
+            e.stopPropagation(); e.preventDefault();
+            isResizing = true; startY = e.clientY; startScale = state.uiScale;
+            document.body.style.cursor = 'nwse-resize';
+        });
+        document.addEventListener('mousemove', e => {
+            if (!isResizing) return;
+            const dy = e.clientY - startY;
+            // 向下拉增大，向上拉减小
+            let newScale = startScale + (dy * 0.005);
+            if(newScale < 0.5) newScale = 0.5;
+            if(newScale > 3.0) newScale = 3.0;
+            state.uiScale = newScale;
+            el.style.transform = `scale(${newScale})`;
+            // 实时更新UI上的百分比显示
+            const label = el.querySelector('.gj-bottom-controls span');
+            if(label) label.textContent = `缩放: ${(newScale*100).toFixed(0)}%`;
+        });
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false; document.body.style.cursor = 'default';
+                GM_setValue('uiScale', state.uiScale);
+            }
+        });
+    };
+
+    // 拖拽改变尺寸 (Address List Size)
+    const setupResizeDrag = (el) => {
+        const handle = el.querySelector('#gj-size-handle');
+        if(!handle) return;
+        let isResizing = false, startX, startY, startW, startH;
+        handle.addEventListener('mousedown', e => {
+            e.stopPropagation(); e.preventDefault();
+            isResizing = true; 
+            startX = e.clientX; startY = e.clientY;
+            startW = state.layout.width; startH = state.layout.height;
+            document.body.style.cursor = 'nwse-resize';
+        });
+        document.addEventListener('mousemove', e => {
+            if (!isResizing) return;
+            // 因为整体有 scale，所以位移需要除以 scale 才是真实的像素变化
+            const dx = (e.clientX - startX) / state.uiScale;
+            const dy = (e.clientY - startY) / state.uiScale;
+            
+            let newW = startW + dx;
+            let newH = startH + dy;
+            
+            if(newW < 150) newW = 150;
+            if(newH < 100) newH = 100;
+            
+            state.layout.width = newW;
+            state.layout.height = newH;
+            applyLayout();
+        });
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false; document.body.style.cursor = 'default';
+                GM_setValue('uiLayout', JSON.stringify(state.layout));
+            }
+        });
+    };
+
     const addStyles = () => {
         GM_addStyle(`
             #gj-widget {
@@ -633,7 +655,6 @@
             #gj-side-col {
                 /* width 由 js 动态控制 */
                 margin-left: 8px; display: flex; flex-direction: column; gap: 6px;
-                transition: width 0.2s;
             }
             .gj-header {
                 padding: 12px 16px; 
@@ -645,7 +666,7 @@
             }
             .gj-toggle { cursor: pointer; opacity:0.8; transition:opacity 0.2s; font-size:12px; }
             
-            #gj-main-content { padding: 16px; background:#fff; }
+            #gj-main-content { padding: 16px; background:#fff; position: relative;}
             .gj-timer-text { font-size: 38px; font-weight: 700; line-height:1; letter-spacing: -1px; }
             
             .gj-btn {
@@ -700,15 +721,17 @@
 
             .gj-list-body { 
                 overflow-y: auto; 
-                display: grid; /* 列数由js控制 */
+                display: grid;
+                /* 自动分列的核心: 最小宽度70px，一行能排几个排几个 */
+                grid-template-columns: repeat(auto-fill, minmax(65px, 1fr));
                 gap: 1px; background: #f0f2f5; padding: 1px;
-                transition: height 0.2s;
+                transition: height 0.05s;
             }
             .gj-list-body::-webkit-scrollbar { width: 4px; }
             .gj-list-body::-webkit-scrollbar-thumb { background: #dcdfe6; border-radius: 2px; }
             
             .gj-list-item {
-                background: #fff; padding: 8px 2px; 
+                background: #fff; padding: 6px 2px; 
                 cursor: pointer; font-size: 11px; color: #606266;
                 display: flex; align-items: center; justify-content: center;
                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
@@ -725,22 +748,24 @@
             .gj-magic-input:focus { border-color: #409EFF; }
             .gj-magic-input.success { background: #f0f9eb; border-color: #67c23a; }
 
-            /* 布局设置区域 */
-            .gj-layout-settings {
-                display: flex; justify-content: space-between; align-items: center;
-                background: #f4f4f5; border-radius: 8px; padding: 4px 8px;
-                margin-top: 4px; font-size: 11px; color: #909399;
+            /* 拖拽手柄样式 - 模仿 Windows 右下角 */
+            .gj-resize-handle {
+                position: absolute;
+                bottom: 1px;
+                right: 1px;
+                width: 12px;
+                height: 12px;
+                cursor: nwse-resize;
+                /* 使用渐变画出三角形防滑纹 */
+                background: linear-gradient(135deg, transparent 50%, #909399 50%);
+                opacity: 0.5;
+                z-index: 10;
+                clip-path: polygon(100% 0, 100% 100%, 0 100%);
             }
-            .gj-layout-settings label { display: flex; align-items: center; gap: 2px; }
-            .gj-mini-input {
-                width: 30px; border: 1px solid #dcdfe6; border-radius: 4px;
-                text-align: center; font-size: 11px; padding: 2px 0;
+            .gj-resize-handle:hover {
+                background: linear-gradient(135deg, transparent 50%, #409EFF 50%);
+                opacity: 1;
             }
-            .gj-btn-xs {
-                border: 1px solid #dcdfe6; background: #fff; border-radius: 4px;
-                padding: 2px 6px; font-size: 11px; cursor: pointer; color: #606266;
-            }
-            .gj-btn-xs:hover { border-color: #409EFF; color: #409EFF; }
         `);
     };
 
@@ -752,7 +777,7 @@
 
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) {
-                if ((isOrderPage() || isDriverPage()) && !state.manualPause) performAction("切屏回刷");
+                if ((isOrderPage() || isDriverPage()) && !state.manualPause) performAction();
                 if (isDispatchPage()) processClipboard();
             }
         });
