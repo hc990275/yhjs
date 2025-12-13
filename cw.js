@@ -1,6 +1,7 @@
 // ============================================
-// 财务表-寿光锋鸟财务统计
+// 财务表-财务统计
 // Cloudflare Worker - KV绑定名称: cw
+// 环境变量: ADMIN_USER, ADMIN_PASS
 // ============================================
 
 addEventListener('fetch', event => {
@@ -13,7 +14,7 @@ async function handleRequest(request) {
   const corsHeaders = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
   };
 
   if (request.method === 'OPTIONS') {
@@ -23,37 +24,147 @@ async function handleRequest(request) {
   try {
     // 路由处理
     if (url.pathname === '/' || url.pathname === '/index.html') {
-      // 主页 - 分享模式（只读）
-      return handleIndexPage(true);
+      return handleIndexPage(true); // 只读模式
     } else if (url.pathname === '/admin') {
-      // 管理后台 - 编辑模式
-      return handleIndexPage(false);
+      return handleAdminAuth(request);
+    } else if (url.pathname === '/admin/login' && request.method === 'POST') {
+      return handleLogin(request);
     } else if (url.pathname === '/api/records' && request.method === 'GET') {
       return handleGetRecords(request, corsHeaders);
     } else if (url.pathname === '/api/records' && request.method === 'POST') {
+      const authCheck = await checkAuth(request);
+      if (!authCheck) return unauthorizedResponse(corsHeaders);
       return handleAddRecord(request, corsHeaders);
     } else if (url.pathname.startsWith('/api/records/') && request.method === 'GET') {
       const id = url.pathname.split('/api/records/')[1];
       return handleGetRecord(id, corsHeaders);
     } else if (url.pathname.startsWith('/api/records/') && request.method === 'PUT') {
+      const authCheck = await checkAuth(request);
+      if (!authCheck) return unauthorizedResponse(corsHeaders);
       const id = url.pathname.split('/api/records/')[1];
       return handleUpdateRecord(request, id, corsHeaders);
     } else if (url.pathname.startsWith('/api/records/') && request.method === 'DELETE') {
+      const authCheck = await checkAuth(request);
+      if (!authCheck) return unauthorizedResponse(corsHeaders);
       const id = url.pathname.split('/api/records/')[1];
       return handleDeleteRecord(id, corsHeaders);
     } else if (url.pathname === '/api/statistics') {
       return handleGetStatistics(request, corsHeaders);
     } else if (url.pathname === '/api/export') {
+      const authCheck = await checkAuth(request);
+      if (!authCheck) return unauthorizedResponse(corsHeaders);
       return handleExportData(request, corsHeaders);
     } else if (url.pathname === '/api/import' && request.method === 'POST') {
+      const authCheck = await checkAuth(request);
+      if (!authCheck) return unauthorizedResponse(corsHeaders);
       return handleImportData(request, corsHeaders);
     } else if (url.pathname === '/api/clear' && request.method === 'DELETE') {
+      const authCheck = await checkAuth(request);
+      if (!authCheck) return unauthorizedResponse(corsHeaders);
       return handleClearData(corsHeaders);
+    } else if (url.pathname === '/api/lastEdit') {
+      return handleGetLastEdit(corsHeaders);
     } else {
       return new Response('Not Found', { status: 404 });
     }
   } catch (error) {
     return new Response(JSON.stringify({ error: error.message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+// ============================================
+// 认证相关函数
+// ============================================
+
+function unauthorizedResponse(corsHeaders) {
+  return new Response(JSON.stringify({ success: false, error: '未授权，请先登录' }), {
+    status: 401,
+    headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+  });
+}
+
+async function checkAuth(request) {
+  const cookie = request.headers.get('Cookie') || '';
+  const match = cookie.match(/admin_token=([^;]+)/);
+  if (!match) return false;
+  
+  const token = match[1];
+  const expectedToken = await generateToken();
+  return token === expectedToken;
+}
+
+async function generateToken() {
+  const user = typeof ADMIN_USER !== 'undefined' ? ADMIN_USER : 'admin';
+  const pass = typeof ADMIN_PASS !== 'undefined' ? ADMIN_PASS : 'admin123';
+  const encoder = new TextEncoder();
+  const data = encoder.encode(user + ':' + pass + ':finance-salt-2024');
+  const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+  const hashArray = Array.from(new Uint8Array(hashBuffer));
+  return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function handleLogin(request) {
+  try {
+    const data = await request.json();
+    const user = typeof ADMIN_USER !== 'undefined' ? ADMIN_USER : 'admin';
+    const pass = typeof ADMIN_PASS !== 'undefined' ? ADMIN_PASS : 'admin123';
+    
+    if (data.username === user && data.password === pass) {
+      const token = await generateToken();
+      return new Response(JSON.stringify({ success: true }), {
+        headers: {
+          'Content-Type': 'application/json',
+          'Set-Cookie': `admin_token=${token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=86400`
+        }
+      });
+    } else {
+      return new Response(JSON.stringify({ success: false, error: '用户名或密码错误' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' }
+      });
+    }
+  } catch (error) {
+    return new Response(JSON.stringify({ success: false, error: error.message }), {
+      status: 500,
+      headers: { 'Content-Type': 'application/json' }
+    });
+  }
+}
+
+async function handleAdminAuth(request) {
+  const isLoggedIn = await checkAuth(request);
+  if (isLoggedIn) {
+    return handleIndexPage(false); // 管理模式
+  } else {
+    return handleLoginPage();
+  }
+}
+
+// ============================================
+// 最后编辑时间
+// ============================================
+
+async function updateLastEditTime() {
+  const now = new Date();
+  const beijingTime = new Date(now.getTime() + 8 * 60 * 60 * 1000);
+  const timeStr = beijingTime.toISOString().replace('T', ' ').substring(0, 19);
+  await cw.put('meta_lastEdit', timeStr);
+}
+
+async function handleGetLastEdit(corsHeaders) {
+  try {
+    const lastEdit = await cw.get('meta_lastEdit');
+    return new Response(JSON.stringify({ 
+      success: true, 
+      data: lastEdit || '暂无编辑记录'
+    }), {
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+    });
+  } catch (error) {
+    return new Response(JSON.stringify({ success: false, error: error.message }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
@@ -68,14 +179,12 @@ function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
 }
 
-// 解析月份范围参数
 function parseMonthFilter(url) {
   const startMonth = url.searchParams.get('startMonth');
   const endMonth = url.searchParams.get('endMonth');
   return { startMonth, endMonth };
 }
 
-// 检查日期是否在月份范围内
 function isDateInRange(dateStr, startMonth, endMonth) {
   if (!dateStr) return false;
   const recordMonth = dateStr.substring(0, 7);
@@ -84,7 +193,6 @@ function isDateInRange(dateStr, startMonth, endMonth) {
   return true;
 }
 
-// 获取所有记录
 async function handleGetRecords(request, corsHeaders) {
   try {
     const url = new URL(request.url);
@@ -128,7 +236,6 @@ async function handleGetRecords(request, corsHeaders) {
   }
 }
 
-// 添加记录
 async function handleAddRecord(request, corsHeaders) {
   try {
     const data = await request.json();
@@ -153,6 +260,7 @@ async function handleAddRecord(request, corsHeaders) {
     };
 
     await cw.put('record_' + id, JSON.stringify(record));
+    await updateLastEditTime();
 
     return new Response(JSON.stringify({ success: true, data: record }), {
       status: 201,
@@ -166,7 +274,6 @@ async function handleAddRecord(request, corsHeaders) {
   }
 }
 
-// 获取单条记录
 async function handleGetRecord(id, corsHeaders) {
   try {
     const record = await cw.get('record_' + id, { type: 'json' });
@@ -189,7 +296,6 @@ async function handleGetRecord(id, corsHeaders) {
   }
 }
 
-// 更新记录
 async function handleUpdateRecord(request, id, corsHeaders) {
   try {
     const existingRecord = await cw.get('record_' + id, { type: 'json' });
@@ -214,6 +320,7 @@ async function handleUpdateRecord(request, id, corsHeaders) {
     };
 
     await cw.put('record_' + id, JSON.stringify(updatedRecord));
+    await updateLastEditTime();
 
     return new Response(JSON.stringify({ success: true, data: updatedRecord }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -226,7 +333,6 @@ async function handleUpdateRecord(request, id, corsHeaders) {
   }
 }
 
-// 删除记录
 async function handleDeleteRecord(id, corsHeaders) {
   try {
     const record = await cw.get('record_' + id);
@@ -239,6 +345,7 @@ async function handleDeleteRecord(id, corsHeaders) {
     }
 
     await cw.delete('record_' + id);
+    await updateLastEditTime();
 
     return new Response(JSON.stringify({ success: true, message: '删除成功' }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -251,7 +358,6 @@ async function handleDeleteRecord(id, corsHeaders) {
   }
 }
 
-// 统计
 async function handleGetStatistics(request, corsHeaders) {
   try {
     const url = new URL(request.url);
@@ -297,7 +403,6 @@ async function handleGetStatistics(request, corsHeaders) {
   }
 }
 
-// 导入
 async function handleImportData(request, corsHeaders) {
   try {
     const data = await request.json();
@@ -342,6 +447,8 @@ async function handleImportData(request, corsHeaders) {
       }
     }
 
+    await updateLastEditTime();
+
     return new Response(JSON.stringify({ 
       success: true, 
       message: '导入完成！成功 ' + successCount + ' 条，失败 ' + errorCount + ' 条',
@@ -358,7 +465,6 @@ async function handleImportData(request, corsHeaders) {
   }
 }
 
-// 清空
 async function handleClearData(corsHeaders) {
   try {
     const keys = await cw.list({ prefix: 'record_' });
@@ -368,6 +474,8 @@ async function handleClearData(corsHeaders) {
       await cw.delete(key.name);
       count++;
     }
+
+    await updateLastEditTime();
 
     return new Response(JSON.stringify({ success: true, message: '已清空 ' + count + ' 条记录' }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -380,7 +488,6 @@ async function handleClearData(corsHeaders) {
   }
 }
 
-// 导出
 async function handleExportData(request, corsHeaders) {
   try {
     const url = new URL(request.url);
@@ -415,7 +522,6 @@ async function handleExportData(request, corsHeaders) {
   }
 }
 
-// 日期格式化
 function formatDateValue(val) {
   if (!val) return '';
   
@@ -455,10 +561,770 @@ function formatDateValue(val) {
 }
 
 // ============================================
+// 登录页面
+// ============================================
+
+function handleLoginPage() {
+  const html = `<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>管理登录 - 财务统计</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'PingFang SC', 'Microsoft YaHei', sans-serif;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .login-box {
+      background: white;
+      border-radius: 16px;
+      padding: 40px;
+      width: 100%;
+      max-width: 400px;
+      box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+    }
+    .login-title {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+    .login-title i {
+      font-size: 3rem;
+      color: #4f46e5;
+      margin-bottom: 15px;
+      display: block;
+    }
+    .login-title h1 {
+      font-size: 1.5rem;
+      color: #1e293b;
+    }
+    .form-group {
+      margin-bottom: 20px;
+    }
+    .form-group label {
+      display: block;
+      margin-bottom: 8px;
+      color: #64748b;
+      font-size: 0.9rem;
+    }
+    .form-group input {
+      width: 100%;
+      padding: 12px 15px;
+      border: 2px solid #e2e8f0;
+      border-radius: 10px;
+      font-size: 1rem;
+      transition: border-color 0.2s;
+    }
+    .form-group input:focus {
+      outline: none;
+      border-color: #4f46e5;
+    }
+    .btn-login {
+      width: 100%;
+      padding: 14px;
+      background: #4f46e5;
+      color: white;
+      border: none;
+      border-radius: 10px;
+      font-size: 1rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+    .btn-login:hover {
+      background: #4338ca;
+    }
+    .btn-login:disabled {
+      background: #94a3b8;
+      cursor: not-allowed;
+    }
+    .error-msg {
+      background: #fef2f2;
+      color: #dc2626;
+      padding: 12px;
+      border-radius: 8px;
+      margin-bottom: 20px;
+      display: none;
+      font-size: 0.9rem;
+    }
+    .error-msg.show {
+      display: block;
+    }
+    .back-link {
+      text-align: center;
+      margin-top: 20px;
+    }
+    .back-link a {
+      color: #64748b;
+      text-decoration: none;
+      font-size: 0.9rem;
+    }
+    .back-link a:hover {
+      color: #4f46e5;
+    }
+  </style>
+</head>
+<body>
+  <div class="login-box">
+    <div class="login-title">
+      <i class="bi bi-shield-lock"></i>
+      <h1>管理后台登录</h1>
+    </div>
+    <div class="error-msg" id="errorMsg"></div>
+    <form id="loginForm" onsubmit="return handleLogin(event)">
+      <div class="form-group">
+        <label><i class="bi bi-person"></i> 用户名</label>
+        <input type="text" id="username" required autocomplete="username">
+      </div>
+      <div class="form-group">
+        <label><i class="bi bi-key"></i> 密码</label>
+        <input type="password" id="password" required autocomplete="current-password">
+      </div>
+      <button type="submit" class="btn-login" id="btnLogin">
+        <i class="bi bi-box-arrow-in-right"></i> 登录
+      </button>
+    </form>
+    <div class="back-link">
+      <a href="/"><i class="bi bi-arrow-left"></i> 返回首页</a>
+    </div>
+  </div>
+  <script>
+    async function handleLogin(e) {
+      e.preventDefault();
+      const btn = document.getElementById('btnLogin');
+      const errorMsg = document.getElementById('errorMsg');
+      
+      btn.disabled = true;
+      btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> 登录中...';
+      errorMsg.classList.remove('show');
+      
+      try {
+        const res = await fetch('/admin/login', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            username: document.getElementById('username').value,
+            password: document.getElementById('password').value
+          })
+        });
+        
+        const data = await res.json();
+        
+        if (data.success) {
+          window.location.href = '/admin';
+        } else {
+          errorMsg.textContent = data.error || '登录失败';
+          errorMsg.classList.add('show');
+        }
+      } catch (err) {
+        errorMsg.textContent = '网络错误: ' + err.message;
+        errorMsg.classList.add('show');
+      }
+      
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-box-arrow-in-right"></i> 登录';
+      return false;
+    }
+  </script>
+</body>
+</html>`;
+
+  return new Response(html, { 
+    headers: { 'Content-Type': 'text/html; charset=utf-8' } 
+  });
+}
+
+// ============================================
 // 前端页面
 // ============================================
 
 function handleIndexPage(isShareMode) {
+  // 管理模式的模态框HTML
+  const modalsHtml = isShareMode ? '' : `
+  <!-- 导入模态框 -->
+  <div class="modal" id="importModal">
+    <div class="modal-box">
+      <div class="modal-header">
+        <h3><i class="bi bi-file-earmark-excel" style="color: var(--success);"></i> 导入Excel</h3>
+        <button class="modal-close" onclick="closeImportModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
+          <i class="bi bi-cloud-arrow-up"></i>
+          <p><strong>点击选择文件</strong> 或拖拽到这里</p>
+          <p style="font-size: 0.8rem; margin-top: 5px;">支持 .xlsx .xls .csv</p>
+          <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleFileSelect(event)">
+        </div>
+        <div class="file-info" id="fileInfo">
+          <i class="bi bi-file-check"></i>
+          <span id="fileName"></span>
+          <span style="margin-left: auto;" id="rowCount"></span>
+        </div>
+        <div class="preview-box" id="previewBox">
+          <table class="preview-table">
+            <thead id="previewHead"></thead>
+            <tbody id="previewBody"></tbody>
+          </table>
+        </div>
+        <div class="tips-box">
+          <strong>支持的列名：</strong><br>
+          日期、明细一、明细二、用于、收入定金、收入定金日期、收入尾款、收入尾款日期、支出定金、支出定金日期、支出尾款、支出尾款日期、备注
+        </div>
+        <div style="margin-top: 15px;">
+          <a href="javascript:void(0)" onclick="downloadTemplate()" style="color: var(--success); font-weight: 600; text-decoration: none;">
+            <i class="bi bi-download"></i> 下载模板
+          </a>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-light" onclick="closeImportModal()">取消</button>
+        <button class="btn btn-danger" id="clearBtn" style="display: none;" onclick="clearAllData()">
+          <i class="bi bi-trash"></i> 清空数据
+        </button>
+        <button class="btn btn-success" id="importBtn" onclick="startImport()" disabled>
+          <i class="bi bi-upload"></i> 开始导入
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 删除确认模态框 -->
+  <div class="modal" id="deleteModal">
+    <div class="modal-box" style="max-width: 350px;">
+      <div class="modal-header">
+        <h3>确认删除</h3>
+        <button class="modal-close" onclick="closeDeleteModal()">&times;</button>
+      </div>
+      <div class="modal-body" style="text-align: center;">
+        <i class="bi bi-exclamation-triangle" style="font-size: 3rem; color: var(--warning);"></i>
+        <p style="margin-top: 15px;">确定要删除这条记录吗？</p>
+      </div>
+      <div class="modal-footer">
+        <button class="btn btn-light" onclick="closeDeleteModal()">取消</button>
+        <button class="btn btn-danger" onclick="confirmDelete()">
+          <i class="bi bi-trash"></i> 删除
+        </button>
+      </div>
+    </div>
+  </div>`;
+
+  // 管理模式的按钮
+  const adminButtons = isShareMode ? '' : `
+        <button class="btn btn-info" onclick="openImportModal()">
+          <i class="bi bi-upload"></i> 导入
+        </button>
+        <button class="btn btn-success" onclick="exportExcel()">
+          <i class="bi bi-download"></i> 导出
+        </button>`;
+
+  // 管理模式的添加表单
+  const addFormHtml = isShareMode ? '' : `
+    <!-- 添加记录表单 -->
+    <div class="add-form-card">
+      <div class="add-form-header">
+        <span><i class="bi bi-plus-lg"></i> 添加记录</span>
+      </div>
+      <div class="add-form-body">
+        <form id="addForm" onsubmit="return handleAddSubmit(event)">
+          <div class="form-grid">
+            <div class="form-group">
+              <label>日期 *</label>
+              <input type="date" id="fDate" required>
+            </div>
+            <div class="form-group">
+              <label>明细一</label>
+              <input type="text" id="fDetail1" placeholder="输入明细一">
+            </div>
+            <div class="form-group">
+              <label>明细二</label>
+              <input type="text" id="fDetail2" placeholder="输入明细二">
+            </div>
+            <div class="form-group">
+              <label>用于</label>
+              <input type="text" id="fPurpose" placeholder="输入用途">
+            </div>
+            <div class="form-group income">
+              <label>收入-定金</label>
+              <input type="number" step="0.01" id="fIncomeDeposit" placeholder="0">
+            </div>
+            <div class="form-group income">
+              <label>收入-定金日期</label>
+              <input type="date" id="fIncomeDepositDate">
+            </div>
+            <div class="form-group income">
+              <label>收入-尾款</label>
+              <input type="number" step="0.01" id="fIncomeBalance" placeholder="0">
+            </div>
+            <div class="form-group income">
+              <label>收入-尾款日期</label>
+              <input type="date" id="fIncomeBalanceDate">
+            </div>
+            <div class="form-group expense">
+              <label>支出-定金</label>
+              <input type="number" step="0.01" id="fExpenseDeposit" placeholder="0">
+            </div>
+            <div class="form-group expense">
+              <label>支出-定金日期</label>
+              <input type="date" id="fExpenseDepositDate">
+            </div>
+            <div class="form-group expense">
+              <label>支出-尾款</label>
+              <input type="number" step="0.01" id="fExpenseBalance" placeholder="0">
+            </div>
+            <div class="form-group expense">
+              <label>支出-尾款日期</label>
+              <input type="date" id="fExpenseBalanceDate">
+            </div>
+            <div class="form-group" style="grid-column: 1 / -1;">
+              <label>备注</label>
+              <input type="text" id="fRemarks" placeholder="输入备注">
+            </div>
+          </div>
+          <div class="form-actions">
+            <button type="button" class="btn btn-light" onclick="resetAddForm()">
+              <i class="bi bi-x-lg"></i> 清空
+            </button>
+            <button type="submit" class="btn btn-primary">
+              <i class="bi bi-check-lg"></i> 保存记录
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>`;
+
+  // 管理模式的JS函数
+  const adminJs = isShareMode ? '' : `
+    // 添加表单
+    function resetAddForm() {
+      document.getElementById('addForm').reset();
+      document.getElementById('fDate').value = getToday();
+    }
+
+    async function handleAddSubmit(e) {
+      e.preventDefault();
+      
+      const data = {
+        date: document.getElementById('fDate').value,
+        detail1: document.getElementById('fDetail1').value,
+        detail2: document.getElementById('fDetail2').value,
+        purpose: document.getElementById('fPurpose').value,
+        incomeDeposit: document.getElementById('fIncomeDeposit').value,
+        incomeDepositDate: document.getElementById('fIncomeDepositDate').value,
+        incomeBalance: document.getElementById('fIncomeBalance').value,
+        incomeBalanceDate: document.getElementById('fIncomeBalanceDate').value,
+        expenseDeposit: document.getElementById('fExpenseDeposit').value,
+        expenseDepositDate: document.getElementById('fExpenseDepositDate').value,
+        expenseBalance: document.getElementById('fExpenseBalance').value,
+        expenseBalanceDate: document.getElementById('fExpenseBalanceDate').value,
+        remarks: document.getElementById('fRemarks').value
+      };
+
+      try {
+        const res = await fetch('/api/records', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data)
+        });
+
+        const result = await res.json();
+        
+        if (result.success) {
+          toast('添加成功！');
+          resetAddForm();
+          loadData();
+          loadLastEditTime();
+        } else {
+          toast('添加失败: ' + (result.error || ''), 'error');
+        }
+      } catch (err) {
+        toast('添加失败: ' + err.message, 'error');
+      }
+      
+      return false;
+    }
+
+    // 删除
+    function showDeleteModal(id) {
+      deleteId = id;
+      document.getElementById('deleteModal').classList.add('show');
+    }
+
+    function closeDeleteModal() {
+      document.getElementById('deleteModal').classList.remove('show');
+      deleteId = null;
+    }
+
+    async function confirmDelete() {
+      if (!deleteId) return;
+      
+      try {
+        const res = await fetch('/api/records/' + deleteId, { method: 'DELETE' });
+        const data = await res.json();
+        
+        if (data.success) {
+          toast('删除成功');
+          closeDeleteModal();
+          loadData();
+          loadLastEditTime();
+        } else {
+          toast('删除失败: ' + (data.error || ''), 'error');
+        }
+      } catch (err) {
+        toast('删除失败: ' + err.message, 'error');
+      }
+    }
+
+    // 导出Excel
+    async function exportExcel() {
+      try {
+        const res = await fetch(buildApiUrl('/api/export'));
+        const result = await res.json();
+
+        if (!result.success) {
+          toast('导出失败', 'error');
+          return;
+        }
+
+        const records = result.data;
+        
+        const h1 = ['日期', '用途', '', '', '收入', '', '', '', '支出', '', '', '', '本单收入', '本单支出', '本单利润', '备注'];
+        const h2 = ['', '明细一', '明细二', '用于', '定金', '定金日期', '尾款', '尾款日期', '定金', '定金日期', '尾款', '尾款日期', '', '', '', ''];
+        
+        const rows = records.map(function(r) {
+          const totals = calcRecordTotals(r);
+          return [
+            r.date || '',
+            r.detail1 || '',
+            r.detail2 || '',
+            r.purpose || '',
+            r.incomeDeposit || 0,
+            r.incomeDepositDate || '',
+            r.incomeBalance || 0,
+            r.incomeBalanceDate || '',
+            r.expenseDeposit || 0,
+            r.expenseDepositDate || '',
+            r.expenseBalance || 0,
+            r.expenseBalanceDate || '',
+            totals.totalIncome,
+            totals.totalExpense,
+            totals.profit,
+            r.remarks || ''
+          ];
+        });
+
+        const ws = XLSX.utils.aoa_to_sheet([h1, h2].concat(rows));
+        
+        ws['!merges'] = [
+          { s: { r: 0, c: 0 }, e: { r: 1, c: 0 } },
+          { s: { r: 0, c: 1 }, e: { r: 0, c: 3 } },
+          { s: { r: 0, c: 4 }, e: { r: 0, c: 7 } },
+          { s: { r: 0, c: 8 }, e: { r: 0, c: 11 } },
+          { s: { r: 0, c: 12 }, e: { r: 1, c: 12 } },
+          { s: { r: 0, c: 13 }, e: { r: 1, c: 13 } },
+          { s: { r: 0, c: 14 }, e: { r: 1, c: 14 } },
+          { s: { r: 0, c: 15 }, e: { r: 1, c: 15 } }
+        ];
+
+        ws['!cols'] = [
+          {wch:12},{wch:12},{wch:12},{wch:12},
+          {wch:10},{wch:12},{wch:10},{wch:12},
+          {wch:10},{wch:12},{wch:10},{wch:12},
+          {wch:12},{wch:12},{wch:12},{wch:15}
+        ];
+
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, '财务记录');
+        
+        let fileName = '财务表-寿光锋鸟-' + getToday();
+        if (currentFilter.startMonth || currentFilter.endMonth) {
+          fileName += '-筛选';
+        }
+        XLSX.writeFile(wb, fileName + '.xlsx');
+        
+        toast('导出成功！');
+      } catch (err) {
+        toast('导出失败: ' + err.message, 'error');
+      }
+    }
+
+    // 导入功能
+    function initUpload() {
+      const area = document.getElementById('uploadArea');
+      if (!area) return;
+      
+      area.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        area.classList.add('dragover');
+      });
+      
+      area.addEventListener('dragleave', function() {
+        area.classList.remove('dragover');
+      });
+      
+      area.addEventListener('drop', function(e) {
+        e.preventDefault();
+        area.classList.remove('dragover');
+        if (e.dataTransfer.files.length > 0) {
+          processFile(e.dataTransfer.files[0]);
+        }
+      });
+    }
+
+    function handleFileSelect(e) {
+      if (e.target.files.length > 0) {
+        processFile(e.target.files[0]);
+      }
+    }
+
+    function processFile(file) {
+      const ext = file.name.split('.').pop().toLowerCase();
+      if (['xlsx', 'xls', 'csv'].indexOf(ext) < 0) {
+        toast('请上传 Excel 或 CSV 文件', 'error');
+        return;
+      }
+
+      document.getElementById('fileName').textContent = file.name;
+      
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const data = new Uint8Array(e.target.result);
+          const wb = XLSX.read(data, { type: 'array', cellDates: true });
+          const ws = wb.Sheets[wb.SheetNames[0]];
+          const json = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
+
+          if (json.length === 0) {
+            toast('文件中没有数据', 'warning');
+            return;
+          }
+
+          importData = json;
+          
+          document.getElementById('rowCount').textContent = json.length + ' 条';
+          document.getElementById('fileInfo').classList.add('show');
+
+          const keys = Object.keys(json[0]);
+          document.getElementById('previewHead').innerHTML = '<tr>' + keys.map(function(k){return '<th>'+k+'</th>';}).join('') + '</tr>';
+          document.getElementById('previewBody').innerHTML = json.slice(0, 5).map(function(row) {
+            return '<tr>' + keys.map(function(k){return '<td>'+(row[k]||'')+'</td>';}).join('') + '</tr>';
+          }).join('');
+          document.getElementById('previewBox').classList.add('show');
+
+          document.getElementById('importBtn').disabled = false;
+          document.getElementById('clearBtn').style.display = 'inline-flex';
+
+          toast('解析成功！', 'success');
+        } catch (err) {
+          toast('解析失败: ' + err.message, 'error');
+        }
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    async function startImport() {
+      if (importData.length === 0) return;
+
+      const btn = document.getElementById('importBtn');
+      btn.disabled = true;
+      btn.innerHTML = '<i class="bi bi-arrow-repeat" style="animation: spin 1s linear infinite;"></i> 导入中...';
+
+      try {
+        const res = await fetch('/api/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ records: importData })
+        });
+
+        const data = await res.json();
+
+        if (data.success) {
+          toast(data.message);
+          setTimeout(function() {
+            closeImportModal();
+            loadData();
+            loadLastEditTime();
+          }, 1000);
+        } else {
+          toast(data.error || '导入失败', 'error');
+        }
+      } catch (err) {
+        toast('导入失败: ' + err.message, 'error');
+      }
+
+      btn.disabled = false;
+      btn.innerHTML = '<i class="bi bi-upload"></i> 开始导入';
+    }
+
+    async function clearAllData() {
+      if (!confirm('确定要清空所有数据吗？此操作不可恢复！')) return;
+
+      try {
+        const res = await fetch('/api/clear', { method: 'DELETE' });
+        const data = await res.json();
+
+        if (data.success) {
+          toast(data.message);
+          loadData();
+          loadLastEditTime();
+        } else {
+          toast(data.error, 'error');
+        }
+      } catch (err) {
+        toast('清空失败: ' + err.message, 'error');
+      }
+    }
+
+    function downloadTemplate() {
+      const tpl = [{
+        '日期': '2024-01-01',
+        '明细一': '张三',
+        '明细二': '材料采购',
+        '用于': '项目A',
+        '收入定金': 5000,
+        '收入定金日期': '2024-01-01',
+        '收入尾款': 10000,
+        '收入尾款日期': '2024-01-15',
+        '支出定金': 0,
+        '支出定金日期': '',
+        '支出尾款': 0,
+        '支出尾款日期': '',
+        '备注': '示例'
+      }];
+
+      const ws = XLSX.utils.json_to_sheet(tpl);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, '模板');
+      XLSX.writeFile(wb, '财务记录模板.xlsx');
+      toast('模板下载成功！');
+    }
+
+    function openImportModal() {
+      document.getElementById('importModal').classList.add('show');
+      resetImportModal();
+    }
+
+    function closeImportModal() {
+      document.getElementById('importModal').classList.remove('show');
+      resetImportModal();
+    }
+
+    function resetImportModal() {
+      importData = [];
+      var fileInput = document.getElementById('fileInput');
+      if (fileInput) fileInput.value = '';
+      var fileInfo = document.getElementById('fileInfo');
+      if (fileInfo) fileInfo.classList.remove('show');
+      var previewBox = document.getElementById('previewBox');
+      if (previewBox) previewBox.classList.remove('show');
+      var importBtn = document.getElementById('importBtn');
+      if (importBtn) importBtn.disabled = true;
+      var clearBtn = document.getElementById('clearBtn');
+      if (clearBtn) clearBtn.style.display = 'none';
+    }
+
+    // 双击编辑
+    function startCellEdit(e) {
+      if (editingCell) return;
+      
+      const cell = e.target;
+      if (cell.tagName !== 'TD') return;
+      
+      const field = cell.dataset.field;
+      const row = cell.closest('tr');
+      const id = row.dataset.id;
+      const oldVal = cell.textContent;
+
+      editingCell = { cell: cell, field: field, id: id, oldVal: oldVal };
+
+      const isDate = field.toLowerCase().includes('date');
+      const isNum = ['incomeDeposit','incomeBalance','expenseDeposit','expenseBalance'].indexOf(field) >= 0;
+
+      const input = document.createElement('input');
+      input.className = 'edit-input';
+      input.type = isDate ? 'date' : (isNum ? 'number' : 'text');
+      if (isNum) input.step = '0.01';
+      input.value = isNum ? (parseFloat(oldVal) || 0) : oldVal;
+      
+      cell.textContent = '';
+      cell.appendChild(input);
+      input.focus();
+      input.select();
+
+      input.addEventListener('blur', saveCellEdit);
+      input.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') saveCellEdit();
+        if (e.key === 'Escape') cancelCellEdit();
+      });
+    }
+
+    async function saveCellEdit() {
+      if (!editingCell) return;
+      
+      const { cell, field, id, oldVal } = editingCell;
+      const input = cell.querySelector('input');
+      if (!input) return;
+      
+      const newVal = input.value;
+      editingCell = null;
+
+      if (newVal === oldVal) {
+        cell.textContent = oldVal;
+        return;
+      }
+
+      try {
+        const body = {};
+        body[field] = newVal;
+        
+        const res = await fetch('/api/records/' + id, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+
+        const data = await res.json();
+        
+        if (data.success) {
+          toast('已保存');
+          loadData();
+          loadLastEditTime();
+        } else {
+          cell.textContent = oldVal;
+          toast('保存失败: ' + (data.error || ''), 'error');
+        }
+      } catch (err) {
+        cell.textContent = oldVal;
+        toast('保存失败: ' + err.message, 'error');
+      }
+    }
+
+    function cancelCellEdit() {
+      if (!editingCell) return;
+      editingCell.cell.textContent = editingCell.oldVal;
+      editingCell = null;
+    }
+    
+    // 模态框点击外部关闭
+    document.addEventListener('DOMContentLoaded', function() {
+      ['importModal', 'deleteModal'].forEach(function(id) {
+        var el = document.getElementById(id);
+        if (el) {
+          el.addEventListener('click', function(e) {
+            if (e.target.id === id) {
+              el.classList.remove('show');
+            }
+          });
+        }
+      });
+    });`;
+
   const html = `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -466,13 +1332,9 @@ function handleIndexPage(isShareMode) {
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
   <title>财务表-寿光锋鸟财务统计</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.0/font/bootstrap-icons.css" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  ${!isShareMode ? '<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"><\/script>' : ''}
   <style>
-    * {
-      margin: 0;
-      padding: 0;
-      box-sizing: border-box;
-    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
     
     :root {
       --primary: #4f46e5;
@@ -494,11 +1356,7 @@ function handleIndexPage(isShareMode) {
       font-size: 14px;
     }
     
-    .app {
-      padding: 10px;
-      max-width: 100%;
-      overflow-x: hidden;
-    }
+    .app { padding: 10px; max-width: 100%; overflow-x: hidden; }
     
     .header {
       background: var(--white);
@@ -518,6 +1376,7 @@ function handleIndexPage(isShareMode) {
       justify-content: center;
       gap: 8px;
       text-align: center;
+      flex-wrap: wrap;
     }
     
     .header-btns {
@@ -540,36 +1399,6 @@ function handleIndexPage(isShareMode) {
       gap: 4px;
       transition: all 0.2s;
       white-space: nowrap;
-      flex: 1 1 auto;
-      min-width: 70px;
-      max-width: 120px;
-    }
-    
-    @media (min-width: 576px) {
-      .btn {
-        flex: 0 0 auto;
-        padding: 8px 14px;
-        font-size: 0.85rem;
-        min-width: auto;
-        max-width: none;
-      }
-      .header-title {
-        font-size: 1.4rem;
-      }
-    }
-    
-    @media (max-width: 400px) {
-      .btn {
-        padding: 6px 8px;
-        font-size: 0.75rem;
-        min-width: 55px;
-      }
-      .btn i {
-        display: none;
-      }
-      .header-title {
-        font-size: 1rem;
-      }
     }
     
     .btn-primary { background: var(--primary); color: var(--white); }
@@ -578,9 +1407,32 @@ function handleIndexPage(isShareMode) {
     .btn-warning { background: var(--warning); color: var(--white); }
     .btn-danger { background: var(--danger); color: var(--white); }
     .btn-light { background: var(--light); color: var(--dark); }
-    .btn-secondary { background: #6b7280; color: var(--white); }
     
     .btn:active { transform: scale(0.95); }
+    
+    .time-info {
+      background: var(--white);
+      border-radius: 12px;
+      padding: 12px 15px;
+      margin-bottom: 15px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+      justify-content: center;
+      font-size: 0.85rem;
+    }
+    
+    .time-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .time-item .label { color: var(--gray); }
+    .time-item .value { font-weight: 600; }
+    .time-item.edit-time .value { color: var(--danger); }
+    .time-item.view-time .value { color: var(--info); }
     
     .filter-card {
       background: var(--white);
@@ -629,20 +1481,10 @@ function handleIndexPage(isShareMode) {
     }
     
     @media (max-width: 576px) {
-      .filter-row {
-        flex-direction: column;
-        align-items: stretch;
-      }
-      .filter-group {
-        width: 100%;
-      }
-      .filter-group input[type="month"] {
-        flex: 1;
-      }
-      .filter-actions {
-        margin-left: 0;
-        justify-content: center;
-      }
+      .filter-row { flex-direction: column; align-items: stretch; }
+      .filter-group { width: 100%; }
+      .filter-group input[type="month"] { flex: 1; }
+      .filter-actions { margin-left: 0; justify-content: center; }
     }
     
     .stats {
@@ -689,24 +1531,16 @@ function handleIndexPage(isShareMode) {
       margin-bottom: 15px;
       box-shadow: 0 4px 20px rgba(0,0,0,0.1);
       overflow: hidden;
-      display: none;
     }
-    
-    .add-form-card.show { display: block; }
     
     .add-form-header {
       background: var(--primary);
       color: var(--white);
       padding: 12px 15px;
       font-weight: 600;
-      display: flex;
-      justify-content: space-between;
-      align-items: center;
     }
     
-    .add-form-body {
-      padding: 15px;
-    }
+    .add-form-body { padding: 15px; }
     
     .form-grid {
       display: grid;
@@ -722,10 +1556,7 @@ function handleIndexPage(isShareMode) {
       .form-grid { grid-template-columns: repeat(4, 1fr); }
     }
     
-    .form-group {
-      display: flex;
-      flex-direction: column;
-    }
+    .form-group { display: flex; flex-direction: column; }
     
     .form-group label {
       font-size: 0.75rem;
@@ -770,7 +1601,6 @@ function handleIndexPage(isShareMode) {
       flex: 1;
       padding: 12px;
       font-size: 1rem;
-      max-width: none;
     }
     
     .table-card {
@@ -832,11 +1662,7 @@ function handleIndexPage(isShareMode) {
     .data-table .positive { color: var(--success); font-weight: 700; }
     .data-table .negative { color: var(--danger); font-weight: 700; }
     
-    .data-table .editable {
-      cursor: pointer;
-      transition: background 0.2s;
-    }
-    
+    .data-table .editable { cursor: pointer; transition: background 0.2s; }
     .data-table .editable:hover { background: #fef3c7; }
     
     .data-table .edit-input {
@@ -1033,10 +1859,6 @@ function handleIndexPage(isShareMode) {
     .toast.info { background: var(--info); }
     .toast.warning { background: var(--warning); }
     
-    .admin-only { display: none; }
-    .admin-mode .admin-only { display: inline-flex; }
-    .admin-mode .share-only { display: none; }
-    
     .loading {
       display: flex;
       justify-content: center;
@@ -1083,18 +1905,11 @@ function handleIndexPage(isShareMode) {
       font-weight: normal;
     }
     
-    .mode-badge.admin {
-      background: var(--danger);
-      color: white;
-    }
-    
-    .mode-badge.view {
-      background: var(--info);
-      color: white;
-    }
+    .mode-badge.admin { background: var(--danger); color: white; }
+    .mode-badge.view { background: var(--info); color: white; }
   </style>
 </head>
-<body class="${isShareMode ? '' : 'admin-mode'}">
+<body>
   <div class="toast-box" id="toastBox"></div>
 
   <div class="app">
@@ -1105,18 +1920,23 @@ function handleIndexPage(isShareMode) {
         ${isShareMode ? '<span class="mode-badge view">只读</span>' : '<span class="mode-badge admin">管理</span>'}
       </div>
       <div class="header-btns">
-        <button class="btn btn-primary admin-only" onclick="toggleAddForm()">
-          <i class="bi bi-plus-circle"></i> 添加
-        </button>
-        <button class="btn btn-info admin-only" onclick="openImportModal()">
-          <i class="bi bi-upload"></i> 导入
-        </button>
-        <button class="btn btn-success admin-only" onclick="exportExcel()">
-          <i class="bi bi-download"></i> 导出
-        </button>
+        ${adminButtons}
         <button class="btn btn-light" onclick="loadData()">
           <i class="bi bi-arrow-clockwise"></i> 刷新
         </button>
+      </div>
+    </div>
+
+    <div class="time-info">
+      <div class="time-item edit-time">
+        <i class="bi bi-pencil-square"></i>
+        <span class="label">最后编辑:</span>
+        <span class="value" id="lastEditTime">加载中...</span>
+      </div>
+      <div class="time-item view-time">
+        <i class="bi bi-eye"></i>
+        <span class="label">当前时间:</span>
+        <span class="value" id="currentTime">--</span>
       </div>
     </div>
 
@@ -1164,78 +1984,7 @@ function handleIndexPage(isShareMode) {
       </div>
     </div>
 
-    <div class="add-form-card admin-only" id="addFormCard">
-      <div class="add-form-header">
-        <span><i class="bi bi-plus-lg"></i> 添加记录</span>
-        <button class="btn btn-light" style="padding: 4px 10px; font-size: 0.8rem;" onclick="toggleAddForm()">收起</button>
-      </div>
-      <div class="add-form-body">
-        <form id="addForm" onsubmit="return handleAddSubmit(event)">
-          <div class="form-grid">
-            <div class="form-group">
-              <label>日期 *</label>
-              <input type="date" id="fDate" required>
-            </div>
-            <div class="form-group">
-              <label>明细一</label>
-              <input type="text" id="fDetail1" placeholder="输入明细一">
-            </div>
-            <div class="form-group">
-              <label>明细二</label>
-              <input type="text" id="fDetail2" placeholder="输入明细二">
-            </div>
-            <div class="form-group">
-              <label>用于</label>
-              <input type="text" id="fPurpose" placeholder="输入用途">
-            </div>
-            <div class="form-group income">
-              <label>收入-定金</label>
-              <input type="number" step="0.01" id="fIncomeDeposit" placeholder="0">
-            </div>
-            <div class="form-group income">
-              <label>收入-定金日期</label>
-              <input type="date" id="fIncomeDepositDate">
-            </div>
-            <div class="form-group income">
-              <label>收入-尾款</label>
-              <input type="number" step="0.01" id="fIncomeBalance" placeholder="0">
-            </div>
-            <div class="form-group income">
-              <label>收入-尾款日期</label>
-              <input type="date" id="fIncomeBalanceDate">
-            </div>
-            <div class="form-group expense">
-              <label>支出-定金</label>
-              <input type="number" step="0.01" id="fExpenseDeposit" placeholder="0">
-            </div>
-            <div class="form-group expense">
-              <label>支出-定金日期</label>
-              <input type="date" id="fExpenseDepositDate">
-            </div>
-            <div class="form-group expense">
-              <label>支出-尾款</label>
-              <input type="number" step="0.01" id="fExpenseBalance" placeholder="0">
-            </div>
-            <div class="form-group expense">
-              <label>支出-尾款日期</label>
-              <input type="date" id="fExpenseBalanceDate">
-            </div>
-            <div class="form-group" style="grid-column: 1 / -1;">
-              <label>备注</label>
-              <input type="text" id="fRemarks" placeholder="输入备注">
-            </div>
-          </div>
-          <div class="form-actions">
-            <button type="button" class="btn btn-light" onclick="resetAddForm()">
-              <i class="bi bi-x-lg"></i> 清空
-            </button>
-            <button type="submit" class="btn btn-primary">
-              <i class="bi bi-check-lg"></i> 保存记录
-            </button>
-          </div>
-        </form>
-      </div>
-    </div>
+    ${addFormHtml}
 
     <div class="table-card">
       <div class="table-header">
@@ -1243,7 +1992,7 @@ function handleIndexPage(isShareMode) {
           <i class="bi bi-table"></i> 财务明细
           <span id="filterTag"></span>
         </span>
-        <span class="admin-only" style="font-size: 0.75rem; opacity: 0.7;">双击编辑</span>
+        ${!isShareMode ? '<span style="font-size: 0.75rem; opacity: 0.7;">双击编辑</span>' : ''}
       </div>
       <div class="table-wrapper" id="tableWrapper">
         <div class="loading"><div class="spinner"></div></div>
@@ -1252,70 +2001,7 @@ function handleIndexPage(isShareMode) {
     </div>
   </div>
 
-  <div class="modal" id="importModal">
-    <div class="modal-box">
-      <div class="modal-header">
-        <h3><i class="bi bi-file-earmark-excel" style="color: var(--success);"></i> 导入Excel</h3>
-        <button class="modal-close" onclick="closeImportModal()">&times;</button>
-      </div>
-      <div class="modal-body">
-        <div class="upload-area" id="uploadArea" onclick="document.getElementById('fileInput').click()">
-          <i class="bi bi-cloud-arrow-up"></i>
-          <p><strong>点击选择文件</strong> 或拖拽到这里</p>
-          <p style="font-size: 0.8rem; margin-top: 5px;">支持 .xlsx .xls .csv</p>
-          <input type="file" id="fileInput" accept=".xlsx,.xls,.csv" style="display:none" onchange="handleFileSelect(event)">
-        </div>
-        <div class="file-info" id="fileInfo">
-          <i class="bi bi-file-check"></i>
-          <span id="fileName"></span>
-          <span style="margin-left: auto;" id="rowCount"></span>
-        </div>
-        <div class="preview-box" id="previewBox">
-          <table class="preview-table">
-            <thead id="previewHead"></thead>
-            <tbody id="previewBody"></tbody>
-          </table>
-        </div>
-        <div class="tips-box">
-          <strong>支持的列名：</strong><br>
-          日期、明细一、明细二、用于、收入定金、收入定金日期、收入尾款、收入尾款日期、支出定金、支出定金日期、支出尾款、支出尾款日期、备注
-        </div>
-        <div style="margin-top: 15px;">
-          <a href="javascript:void(0)" onclick="downloadTemplate()" style="color: var(--success); font-weight: 600; text-decoration: none;">
-            <i class="bi bi-download"></i> 下载模板
-          </a>
-        </div>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-light" onclick="closeImportModal()">取消</button>
-        <button class="btn btn-danger" id="clearBtn" style="display: none;" onclick="clearAllData()">
-          <i class="bi bi-trash"></i> 清空数据
-        </button>
-        <button class="btn btn-success" id="importBtn" onclick="startImport()" disabled>
-          <i class="bi bi-upload"></i> 开始导入
-        </button>
-      </div>
-    </div>
-  </div>
-
-  <div class="modal" id="deleteModal">
-    <div class="modal-box" style="max-width: 350px;">
-      <div class="modal-header">
-        <h3>确认删除</h3>
-        <button class="modal-close" onclick="closeDeleteModal()">&times;</button>
-      </div>
-      <div class="modal-body" style="text-align: center;">
-        <i class="bi bi-exclamation-triangle" style="font-size: 3rem; color: var(--warning);"></i>
-        <p style="margin-top: 15px;">确定要删除这条记录吗？</p>
-      </div>
-      <div class="modal-footer">
-        <button class="btn btn-light" onclick="closeDeleteModal()">取消</button>
-        <button class="btn btn-danger" onclick="confirmDelete()">
-          <i class="bi bi-trash"></i> 删除
-        </button>
-      </div>
-    </div>
-  </div>
+  ${modalsHtml}
 
   <script>
     let allRecords = [];
@@ -1326,18 +2012,49 @@ function handleIndexPage(isShareMode) {
     const isAdminMode = ${!isShareMode};
 
     document.addEventListener('DOMContentLoaded', function() {
-      if (isAdminMode) {
-        document.getElementById('fDate').value = getToday();
-      }
+      ${!isShareMode ? "document.getElementById('fDate').value = getToday();" : ''}
       loadData();
-      if (isAdminMode) {
-        initUpload();
-      }
+      loadLastEditTime();
+      updateCurrentTime();
+      setInterval(updateCurrentTime, 1000);
+      ${!isShareMode ? 'initUpload();' : ''}
     });
 
     function getToday() {
       const d = new Date();
       return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    }
+
+    function getBeijingTime() {
+      const now = new Date();
+      const beijingOffset = 8 * 60;
+      const localOffset = now.getTimezoneOffset();
+      const beijingTime = new Date(now.getTime() + (beijingOffset + localOffset) * 60 * 1000);
+      
+      const y = beijingTime.getFullYear();
+      const m = String(beijingTime.getMonth() + 1).padStart(2, '0');
+      const d = String(beijingTime.getDate()).padStart(2, '0');
+      const h = String(beijingTime.getHours()).padStart(2, '0');
+      const min = String(beijingTime.getMinutes()).padStart(2, '0');
+      const s = String(beijingTime.getSeconds()).padStart(2, '0');
+      
+      return y + '-' + m + '-' + d + ' ' + h + ':' + min + ':' + s;
+    }
+
+    function updateCurrentTime() {
+      document.getElementById('currentTime').textContent = getBeijingTime();
+    }
+
+    async function loadLastEditTime() {
+      try {
+        const res = await fetch('/api/lastEdit');
+        const data = await res.json();
+        if (data.success) {
+          document.getElementById('lastEditTime').textContent = data.data;
+        }
+      } catch (err) {
+        document.getElementById('lastEditTime').textContent = '获取失败';
+      }
     }
 
     function toast(msg, type) {
@@ -1346,7 +2063,7 @@ function handleIndexPage(isShareMode) {
       const div = document.createElement('div');
       div.className = 'toast ' + type;
       const icons = {success:'check-circle', error:'x-circle', info:'info-circle', warning:'exclamation-triangle'};
-      div.innerHTML = '<i class="bi bi-' + icons[type] + '"></i> ' + msg;
+      div.innerHTML = '<i class="bi bi-' + icons[type] + '"><\/i> ' + msg;
       box.appendChild(div);
       setTimeout(function() {
         div.style.opacity = '0';
@@ -1388,7 +2105,7 @@ function handleIndexPage(isShareMode) {
         } else {
           text = '至 ' + currentFilter.endMonth;
         }
-        tag.innerHTML = '<span class="filter-tag">' + text + ' <span class="clear-filter" onclick="clearFilter()">×</span></span>';
+        tag.innerHTML = '<span class="filter-tag">' + text + ' <span class="clear-filter" onclick="clearFilter()">×<\/span><\/span>';
       } else {
         tag.innerHTML = '';
       }
@@ -1444,59 +2161,59 @@ function handleIndexPage(isShareMode) {
       const footer = document.getElementById('tableFooter');
       
       if (records.length === 0) {
-        wrapper.innerHTML = '<div class="empty-state"><i class="bi bi-inbox"></i><p>暂无记录</p></div>';
+        wrapper.innerHTML = '<div class="empty-state"><i class="bi bi-inbox"><\/i><p>暂无记录<\/p><\/div>';
         footer.textContent = '';
         return;
       }
 
       let html = '<table class="data-table"><thead>';
       html += '<tr>';
-      html += '<th rowspan="2">日期</th>';
-      html += '<th colspan="3">用途</th>';
-      html += '<th colspan="4" class="income-h">收入</th>';
-      html += '<th colspan="4" class="expense-h">支出</th>';
-      html += '<th rowspan="2" class="sum-h">本单收入</th>';
-      html += '<th rowspan="2" class="sum-h">本单支出</th>';
-      html += '<th rowspan="2" class="sum-h">本单利润</th>';
-      html += '<th rowspan="2">备注</th>';
-      if (isAdminMode) html += '<th rowspan="2">操作</th>';
-      html += '</tr>';
+      html += '<th rowspan="2">日期<\/th>';
+      html += '<th colspan="3">用途<\/th>';
+      html += '<th colspan="4" class="income-h">收入<\/th>';
+      html += '<th colspan="4" class="expense-h">支出<\/th>';
+      html += '<th rowspan="2" class="sum-h">本单收入<\/th>';
+      html += '<th rowspan="2" class="sum-h">本单支出<\/th>';
+      html += '<th rowspan="2" class="sum-h">本单利润<\/th>';
+      html += '<th rowspan="2">备注<\/th>';
+      if (isAdminMode) html += '<th rowspan="2">操作<\/th>';
+      html += '<\/tr>';
       html += '<tr>';
-      html += '<th>明细一</th><th>明细二</th><th>用于</th>';
-      html += '<th class="income-h">定金</th><th class="income-h">定金日期</th>';
-      html += '<th class="income-h">尾款</th><th class="income-h">尾款日期</th>';
-      html += '<th class="expense-h">定金</th><th class="expense-h">定金日期</th>';
-      html += '<th class="expense-h">尾款</th><th class="expense-h">尾款日期</th>';
-      html += '</tr></thead><tbody>';
+      html += '<th>明细一<\/th><th>明细二<\/th><th>用于<\/th>';
+      html += '<th class="income-h">定金<\/th><th class="income-h">定金日期<\/th>';
+      html += '<th class="income-h">尾款<\/th><th class="income-h">尾款日期<\/th>';
+      html += '<th class="expense-h">定金<\/th><th class="expense-h">定金日期<\/th>';
+      html += '<th class="expense-h">尾款<\/th><th class="expense-h">尾款日期<\/th>';
+      html += '<\/tr><\/thead><tbody>';
 
       records.forEach(function(r) {
         const ec = isAdminMode ? 'editable' : '';
         const totals = calcRecordTotals(r);
         
         html += '<tr data-id="' + r.id + '">';
-        html += '<td class="' + ec + '" data-field="date">' + (r.date || '') + '</td>';
-        html += '<td class="' + ec + '" data-field="detail1">' + (r.detail1 || '') + '</td>';
-        html += '<td class="' + ec + '" data-field="detail2">' + (r.detail2 || '') + '</td>';
-        html += '<td class="' + ec + '" data-field="purpose">' + (r.purpose || '') + '</td>';
-        html += '<td class="' + ec + ' income-val" data-field="incomeDeposit">' + fmtMoney(r.incomeDeposit) + '</td>';
-        html += '<td class="' + ec + '" data-field="incomeDepositDate">' + (r.incomeDepositDate || '') + '</td>';
-        html += '<td class="' + ec + ' income-val" data-field="incomeBalance">' + fmtMoney(r.incomeBalance) + '</td>';
-        html += '<td class="' + ec + '" data-field="incomeBalanceDate">' + (r.incomeBalanceDate || '') + '</td>';
-        html += '<td class="' + ec + ' expense-val" data-field="expenseDeposit">' + fmtMoney(r.expenseDeposit) + '</td>';
-        html += '<td class="' + ec + '" data-field="expenseDepositDate">' + (r.expenseDepositDate || '') + '</td>';
-        html += '<td class="' + ec + ' expense-val" data-field="expenseBalance">' + fmtMoney(r.expenseBalance) + '</td>';
-        html += '<td class="' + ec + '" data-field="expenseBalanceDate">' + (r.expenseBalanceDate || '') + '</td>';
-        html += '<td class="income-val">' + fmtMoney(totals.totalIncome) + '</td>';
-        html += '<td class="expense-val">' + fmtMoney(totals.totalExpense) + '</td>';
-        html += '<td class="' + (totals.profit >= 0 ? 'positive' : 'negative') + '">' + fmtMoney(totals.profit) + '</td>';
-        html += '<td class="' + ec + '" data-field="remarks">' + (r.remarks || '') + '</td>';
+        html += '<td class="' + ec + '" data-field="date">' + (r.date || '') + '<\/td>';
+        html += '<td class="' + ec + '" data-field="detail1">' + (r.detail1 || '') + '<\/td>';
+        html += '<td class="' + ec + '" data-field="detail2">' + (r.detail2 || '') + '<\/td>';
+        html += '<td class="' + ec + '" data-field="purpose">' + (r.purpose || '') + '<\/td>';
+        html += '<td class="' + ec + ' income-val" data-field="incomeDeposit">' + fmtMoney(r.incomeDeposit) + '<\/td>';
+        html += '<td class="' + ec + '" data-field="incomeDepositDate">' + (r.incomeDepositDate || '') + '<\/td>';
+        html += '<td class="' + ec + ' income-val" data-field="incomeBalance">' + fmtMoney(r.incomeBalance) + '<\/td>';
+        html += '<td class="' + ec + '" data-field="incomeBalanceDate">' + (r.incomeBalanceDate || '') + '<\/td>';
+        html += '<td class="' + ec + ' expense-val" data-field="expenseDeposit">' + fmtMoney(r.expenseDeposit) + '<\/td>';
+        html += '<td class="' + ec + '" data-field="expenseDepositDate">' + (r.expenseDepositDate || '') + '<\/td>';
+        html += '<td class="' + ec + ' expense-val" data-field="expenseBalance">' + fmtMoney(r.expenseBalance) + '<\/td>';
+        html += '<td class="' + ec + '" data-field="expenseBalanceDate">' + (r.expenseBalanceDate || '') + '<\/td>';
+        html += '<td class="income-val">' + fmtMoney(totals.totalIncome) + '<\/td>';
+        html += '<td class="expense-val">' + fmtMoney(totals.totalExpense) + '<\/td>';
+        html += '<td class="' + (totals.profit >= 0 ? 'positive' : 'negative') + '">' + fmtMoney(totals.profit) + '<\/td>';
+        html += '<td class="' + ec + '" data-field="remarks">' + (r.remarks || '') + '<\/td>';
         if (isAdminMode) {
-          html += '<td><button class="btn btn-danger" style="padding:5px 10px;font-size:0.75rem;max-width:none;" onclick="showDeleteModal(\\'' + r.id + '\\')"><i class="bi bi-trash"></i></button></td>';
+          html += '<td><button class="btn btn-danger" style="padding:5px 10px;font-size:0.75rem;" onclick="showDeleteModal(\\'' + r.id + '\\')"><i class="bi bi-trash"><\/i><\/button><\/td>';
         }
-        html += '</tr>';
+        html += '<\/tr>';
       });
 
-      html += '</tbody></table>';
+      html += '<\/tbody><\/table>';
       wrapper.innerHTML = html;
       footer.textContent = '共 ' + records.length + ' 条记录';
 
@@ -1505,411 +2222,6 @@ function handleIndexPage(isShareMode) {
           cell.addEventListener('dblclick', startCellEdit);
         });
       }
-    }
-
-    function startCellEdit(e) {
-      if (editingCell) return;
-      
-      const cell = e.target;
-      if (cell.tagName !== 'TD') return;
-      
-      const field = cell.dataset.field;
-      const row = cell.closest('tr');
-      const id = row.dataset.id;
-      const oldVal = cell.textContent;
-
-      editingCell = { cell: cell, field: field, id: id, oldVal: oldVal };
-
-      const isDate = field.toLowerCase().includes('date');
-      const isNum = ['incomeDeposit','incomeBalance','expenseDeposit','expenseBalance'].indexOf(field) >= 0;
-
-      const input = document.createElement('input');
-      input.className = 'edit-input';
-      input.type = isDate ? 'date' : (isNum ? 'number' : 'text');
-      if (isNum) input.step = '0.01';
-      input.value = isNum ? (parseFloat(oldVal) || 0) : oldVal;
-      
-      cell.textContent = '';
-      cell.appendChild(input);
-      input.focus();
-      input.select();
-
-      input.addEventListener('blur', saveCellEdit);
-      input.addEventListener('keydown', function(e) {
-        if (e.key === 'Enter') saveCellEdit();
-        if (e.key === 'Escape') cancelCellEdit();
-      });
-    }
-
-    async function saveCellEdit() {
-      if (!editingCell) return;
-      
-      const { cell, field, id, oldVal } = editingCell;
-      const input = cell.querySelector('input');
-      if (!input) return;
-      
-      const newVal = input.value;
-      editingCell = null;
-
-      if (newVal === oldVal) {
-        cell.textContent = oldVal;
-        return;
-      }
-
-      try {
-        const body = {};
-        body[field] = newVal;
-        
-        const res = await fetch('/api/records/' + id, {
-          method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        });
-
-        const data = await res.json();
-        
-        if (data.success) {
-          toast('已保存');
-          loadData();
-        } else {
-          cell.textContent = oldVal;
-          toast('保存失败: ' + (data.error || ''), 'error');
-        }
-      } catch (err) {
-        cell.textContent = oldVal;
-        toast('保存失败: ' + err.message, 'error');
-      }
-    }
-
-    function cancelCellEdit() {
-      if (!editingCell) return;
-      editingCell.cell.textContent = editingCell.oldVal;
-      editingCell = null;
-    }
-
-    function toggleAddForm() {
-      const card = document.getElementById('addFormCard');
-      if (card.classList.contains('show')) {
-        card.classList.remove('show');
-      } else {
-        card.classList.add('show');
-        document.getElementById('fDate').focus();
-      }
-    }
-
-    function resetAddForm() {
-      document.getElementById('addForm').reset();
-      document.getElementById('fDate').value = getToday();
-    }
-
-    async function handleAddSubmit(e) {
-      e.preventDefault();
-      
-      const data = {
-        date: document.getElementById('fDate').value,
-        detail1: document.getElementById('fDetail1').value,
-        detail2: document.getElementById('fDetail2').value,
-        purpose: document.getElementById('fPurpose').value,
-        incomeDeposit: document.getElementById('fIncomeDeposit').value,
-        incomeDepositDate: document.getElementById('fIncomeDepositDate').value,
-        incomeBalance: document.getElementById('fIncomeBalance').value,
-        incomeBalanceDate: document.getElementById('fIncomeBalanceDate').value,
-        expenseDeposit: document.getElementById('fExpenseDeposit').value,
-        expenseDepositDate: document.getElementById('fExpenseDepositDate').value,
-        expenseBalance: document.getElementById('fExpenseBalance').value,
-        expenseBalanceDate: document.getElementById('fExpenseBalanceDate').value,
-        remarks: document.getElementById('fRemarks').value
-      };
-
-      try {
-        const res = await fetch('/api/records', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(data)
-        });
-
-        const result = await res.json();
-        
-        if (result.success) {
-          toast('添加成功！');
-          resetAddForm();
-          loadData();
-        } else {
-          toast('添加失败: ' + (result.error || ''), 'error');
-        }
-      } catch (err) {
-        toast('添加失败: ' + err.message, 'error');
-      }
-      
-      return false;
-    }
-
-    function showDeleteModal(id) {
-      deleteId = id;
-      document.getElementById('deleteModal').classList.add('show');
-    }
-
-    function closeDeleteModal() {
-      document.getElementById('deleteModal').classList.remove('show');
-      deleteId = null;
-    }
-
-    async function confirmDelete() {
-      if (!deleteId) return;
-      
-      try {
-        const res = await fetch('/api/records/' + deleteId, { method: 'DELETE' });
-        const data = await res.json();
-        
-        if (data.success) {
-          toast('删除成功');
-          closeDeleteModal();
-          loadData();
-        } else {
-          toast('删除失败: ' + (data.error || ''), 'error');
-        }
-      } catch (err) {
-        toast('删除失败: ' + err.message, 'error');
-      }
-    }
-
-    async function exportExcel() {
-      try {
-        const res = await fetch(buildApiUrl('/api/export'));
-        const result = await res.json();
-
-        if (!result.success) {
-          toast('导出失败', 'error');
-          return;
-        }
-
-        const records = result.data;
-        
-        const h1 = ['日期', '用途', '', '', '收入', '', '', '', '支出', '', '', '', '本单收入', '本单支出', '本单利润', '备注'];
-        const h2 = ['', '明细一', '明细二', '用于', '定金', '定金日期', '尾款', '尾款日期', '定金', '定金日期', '尾款', '尾款日期', '', '', '', ''];
-        
-        const rows = records.map(function(r) {
-          const totals = calcRecordTotals(r);
-          return [
-            r.date || '',
-            r.detail1 || '',
-            r.detail2 || '',
-            r.purpose || '',
-            r.incomeDeposit || 0,
-            r.incomeDepositDate || '',
-            r.incomeBalance || 0,
-            r.incomeBalanceDate || '',
-            r.expenseDeposit || 0,
-            r.expenseDepositDate || '',
-            r.expenseBalance || 0,
-            r.expenseBalanceDate || '',
-            totals.totalIncome,
-            totals.totalExpense,
-            totals.profit,
-            r.remarks || ''
-          ];
-        });
-
-        const ws = XLSX.utils.aoa_to_sheet([h1, h2].concat(rows));
-        
-        ws['!merges'] = [
-          { s: { r: 0, c: 0 }, e: { r: 1, c: 0 } },
-          { s: { r: 0, c: 1 }, e: { r: 0, c: 3 } },
-          { s: { r: 0, c: 4 }, e: { r: 0, c: 7 } },
-          { s: { r: 0, c: 8 }, e: { r: 0, c: 11 } },
-          { s: { r: 0, c: 12 }, e: { r: 1, c: 12 } },
-          { s: { r: 0, c: 13 }, e: { r: 1, c: 13 } },
-          { s: { r: 0, c: 14 }, e: { r: 1, c: 14 } },
-          { s: { r: 0, c: 15 }, e: { r: 1, c: 15 } }
-        ];
-
-        ws['!cols'] = [
-          {wch:12},{wch:12},{wch:12},{wch:12},
-          {wch:10},{wch:12},{wch:10},{wch:12},
-          {wch:10},{wch:12},{wch:10},{wch:12},
-          {wch:12},{wch:12},{wch:12},{wch:15}
-        ];
-
-        const wb = XLSX.utils.book_new();
-        XLSX.utils.book_append_sheet(wb, ws, '财务记录');
-        
-        let fileName = '财务表-寿光锋鸟-' + getToday();
-        if (currentFilter.startMonth || currentFilter.endMonth) {
-          fileName += '-筛选';
-        }
-        XLSX.writeFile(wb, fileName + '.xlsx');
-        
-        toast('导出成功！');
-      } catch (err) {
-        toast('导出失败: ' + err.message, 'error');
-      }
-    }
-
-    function initUpload() {
-      const area = document.getElementById('uploadArea');
-      if (!area) return;
-      
-      area.addEventListener('dragover', function(e) {
-        e.preventDefault();
-        area.classList.add('dragover');
-      });
-      
-      area.addEventListener('dragleave', function() {
-        area.classList.remove('dragover');
-      });
-      
-      area.addEventListener('drop', function(e) {
-        e.preventDefault();
-        area.classList.remove('dragover');
-        if (e.dataTransfer.files.length > 0) {
-          processFile(e.dataTransfer.files[0]);
-        }
-      });
-    }
-
-    function handleFileSelect(e) {
-      if (e.target.files.length > 0) {
-        processFile(e.target.files[0]);
-      }
-    }
-
-    function processFile(file) {
-      const ext = file.name.split('.').pop().toLowerCase();
-      if (['xlsx', 'xls', 'csv'].indexOf(ext) < 0) {
-        toast('请上传 Excel 或 CSV 文件', 'error');
-        return;
-      }
-
-      document.getElementById('fileName').textContent = file.name;
-      
-      const reader = new FileReader();
-      reader.onload = function(e) {
-        try {
-          const data = new Uint8Array(e.target.result);
-          const wb = XLSX.read(data, { type: 'array', cellDates: true });
-          const ws = wb.Sheets[wb.SheetNames[0]];
-          const json = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
-
-          if (json.length === 0) {
-            toast('文件中没有数据', 'warning');
-            return;
-          }
-
-          importData = json;
-          
-          document.getElementById('rowCount').textContent = json.length + ' 条';
-          document.getElementById('fileInfo').classList.add('show');
-
-          const keys = Object.keys(json[0]);
-          document.getElementById('previewHead').innerHTML = '<tr>' + keys.map(function(k){return '<th>'+k+'</th>';}).join('') + '</tr>';
-          document.getElementById('previewBody').innerHTML = json.slice(0, 5).map(function(row) {
-            return '<tr>' + keys.map(function(k){return '<td>'+(row[k]||'')+'</td>';}).join('') + '</tr>';
-          }).join('');
-          document.getElementById('previewBox').classList.add('show');
-
-          document.getElementById('importBtn').disabled = false;
-          document.getElementById('clearBtn').style.display = 'inline-flex';
-
-          toast('解析成功！', 'success');
-        } catch (err) {
-          toast('解析失败: ' + err.message, 'error');
-        }
-      };
-      reader.readAsArrayBuffer(file);
-    }
-
-    async function startImport() {
-      if (importData.length === 0) return;
-
-      const btn = document.getElementById('importBtn');
-      btn.disabled = true;
-      btn.innerHTML = '<i class="bi bi-arrow-repeat" style="animation: spin 1s linear infinite;"></i> 导入中...';
-
-      try {
-        const res = await fetch('/api/import', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ records: importData })
-        });
-
-        const data = await res.json();
-
-        if (data.success) {
-          toast(data.message);
-          setTimeout(function() {
-            closeImportModal();
-            loadData();
-          }, 1000);
-        } else {
-          toast(data.error || '导入失败', 'error');
-        }
-      } catch (err) {
-        toast('导入失败: ' + err.message, 'error');
-      }
-
-      btn.disabled = false;
-      btn.innerHTML = '<i class="bi bi-upload"></i> 开始导入';
-    }
-
-    async function clearAllData() {
-      if (!confirm('确定要清空所有数据吗？此操作不可恢复！')) return;
-
-      try {
-        const res = await fetch('/api/clear', { method: 'DELETE' });
-        const data = await res.json();
-
-        if (data.success) {
-          toast(data.message);
-          loadData();
-        } else {
-          toast(data.error, 'error');
-        }
-      } catch (err) {
-        toast('清空失败: ' + err.message, 'error');
-      }
-    }
-
-    function downloadTemplate() {
-      const tpl = [{
-        '日期': '2024-01-01',
-        '明细一': '张三',
-        '明细二': '材料采购',
-        '用于': '项目A',
-        '收入定金': 5000,
-        '收入定金日期': '2024-01-01',
-        '收入尾款': 10000,
-        '收入尾款日期': '2024-01-15',
-        '支出定金': 0,
-        '支出定金日期': '',
-        '支出尾款': 0,
-        '支出尾款日期': '',
-        '备注': '示例'
-      }];
-
-      const ws = XLSX.utils.json_to_sheet(tpl);
-      const wb = XLSX.utils.book_new();
-      XLSX.utils.book_append_sheet(wb, ws, '模板');
-      XLSX.writeFile(wb, '财务记录模板.xlsx');
-      toast('模板下载成功！');
-    }
-
-    function openImportModal() {
-      document.getElementById('importModal').classList.add('show');
-      resetImportModal();
-    }
-
-    function closeImportModal() {
-      document.getElementById('importModal').classList.remove('show');
-      resetImportModal();
-    }
-
-    function resetImportModal() {
-      importData = [];
-      document.getElementById('fileInput').value = '';
-      document.getElementById('fileInfo').classList.remove('show');
-      document.getElementById('previewBox').classList.remove('show');
-      document.getElementById('importBtn').disabled = true;
-      document.getElementById('clearBtn').style.display = 'none';
     }
 
     function fmtMoney(v) {
@@ -1921,17 +2233,8 @@ function handleIndexPage(isShareMode) {
       return (parseFloat(v) || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
 
-    ['importModal', 'deleteModal'].forEach(function(id) {
-      var el = document.getElementById(id);
-      if (el) {
-        el.addEventListener('click', function(e) {
-          if (e.target.id === id) {
-            document.getElementById(id).classList.remove('show');
-          }
-        });
-      }
-    });
-  </script>
+    ${adminJs}
+  <\/script>
 </body>
 </html>`;
 
