@@ -1,5 +1,5 @@
 // ============================================
-// 财务表-财务统计
+// 财务表-寿光锋鸟财务统计
 // Cloudflare Worker - KV绑定名称: cw
 // ============================================
 
@@ -21,10 +21,13 @@ async function handleRequest(request) {
   }
 
   try {
+    // 路由处理
     if (url.pathname === '/' || url.pathname === '/index.html') {
-      return handleIndexPage(false);
-    } else if (url.pathname === '/share') {
+      // 主页 - 分享模式（只读）
       return handleIndexPage(true);
+    } else if (url.pathname === '/admin') {
+      // 管理后台 - 编辑模式
+      return handleIndexPage(false);
     } else if (url.pathname === '/api/records' && request.method === 'GET') {
       return handleGetRecords(request, corsHeaders);
     } else if (url.pathname === '/api/records' && request.method === 'POST') {
@@ -39,9 +42,9 @@ async function handleRequest(request) {
       const id = url.pathname.split('/api/records/')[1];
       return handleDeleteRecord(id, corsHeaders);
     } else if (url.pathname === '/api/statistics') {
-      return handleGetStatistics(corsHeaders);
+      return handleGetStatistics(request, corsHeaders);
     } else if (url.pathname === '/api/export') {
-      return handleExportData(corsHeaders);
+      return handleExportData(request, corsHeaders);
     } else if (url.pathname === '/api/import' && request.method === 'POST') {
       return handleImportData(request, corsHeaders);
     } else if (url.pathname === '/api/clear' && request.method === 'DELETE') {
@@ -65,44 +68,55 @@ function generateId() {
   return Date.now().toString(36) + Math.random().toString(36).substr(2);
 }
 
+// 解析月份范围参数
+function parseMonthFilter(url) {
+  const startMonth = url.searchParams.get('startMonth');
+  const endMonth = url.searchParams.get('endMonth');
+  return { startMonth, endMonth };
+}
+
+// 检查日期是否在月份范围内
+function isDateInRange(dateStr, startMonth, endMonth) {
+  if (!dateStr) return false;
+  const recordMonth = dateStr.substring(0, 7);
+  if (startMonth && recordMonth < startMonth) return false;
+  if (endMonth && recordMonth > endMonth) return false;
+  return true;
+}
+
 // 获取所有记录
 async function handleGetRecords(request, corsHeaders) {
   try {
+    const url = new URL(request.url);
+    const { startMonth, endMonth } = parseMonthFilter(url);
+    
     const keys = await cw.list({ prefix: 'record_' });
     let records = [];
 
     for (const key of keys.keys) {
       const record = await cw.get(key.name, { type: 'json' });
       if (record) {
-        records.push(record);
+        if (startMonth || endMonth) {
+          if (isDateInRange(record.date, startMonth, endMonth)) {
+            records.push(record);
+          }
+        } else {
+          records.push(record);
+        }
       }
     }
 
-    // 按日期排序
     records.sort((a, b) => {
       if (!a.date) return 1;
       if (!b.date) return -1;
       return a.date.localeCompare(b.date);
     });
 
-    // 计算累计值
-    let runningIncome = 0;
-    let runningExpense = 0;
-    
-    records.forEach(record => {
-      const incomeTotal = (parseFloat(record.incomeDeposit) || 0) + (parseFloat(record.incomeBalance) || 0);
-      const expenseTotal = (parseFloat(record.expenseDeposit) || 0) + (parseFloat(record.expenseBalance) || 0);
-      runningIncome += incomeTotal;
-      runningExpense += expenseTotal;
-      record.totalIncome = runningIncome;
-      record.totalExpense = runningExpense;
-      record.balance = runningIncome - runningExpense;
-    });
-
     return new Response(JSON.stringify({
       success: true,
       data: records,
-      total: records.length
+      total: records.length,
+      filter: { startMonth, endMonth }
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
@@ -238,28 +252,40 @@ async function handleDeleteRecord(id, corsHeaders) {
 }
 
 // 统计
-async function handleGetStatistics(corsHeaders) {
+async function handleGetStatistics(request, corsHeaders) {
   try {
+    const url = new URL(request.url);
+    const { startMonth, endMonth } = parseMonthFilter(url);
+    
     const keys = await cw.list({ prefix: 'record_' });
     let totalIncome = 0;
     let totalExpense = 0;
+    let count = 0;
 
     for (const key of keys.keys) {
       const record = await cw.get(key.name, { type: 'json' });
       if (record) {
+        if (startMonth || endMonth) {
+          if (!isDateInRange(record.date, startMonth, endMonth)) {
+            continue;
+          }
+        }
+        
         totalIncome += (parseFloat(record.incomeDeposit) || 0) + (parseFloat(record.incomeBalance) || 0);
         totalExpense += (parseFloat(record.expenseDeposit) || 0) + (parseFloat(record.expenseBalance) || 0);
+        count++;
       }
     }
 
     return new Response(JSON.stringify({
       success: true,
       data: {
-        totalRecords: keys.keys.length,
+        totalRecords: count,
         totalIncome,
         totalExpense,
         balance: totalIncome - totalExpense
-      }
+      },
+      filter: { startMonth, endMonth }
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
     });
@@ -291,7 +317,6 @@ async function handleImportData(request, corsHeaders) {
       try {
         const id = generateId();
         
-        // 灵活匹配列名
         const record = {
           id,
           date: formatDateValue(row['日期'] || row.date || ''),
@@ -356,30 +381,28 @@ async function handleClearData(corsHeaders) {
 }
 
 // 导出
-async function handleExportData(corsHeaders) {
+async function handleExportData(request, corsHeaders) {
   try {
+    const url = new URL(request.url);
+    const { startMonth, endMonth } = parseMonthFilter(url);
+    
     const keys = await cw.list({ prefix: 'record_' });
     let records = [];
 
     for (const key of keys.keys) {
       const record = await cw.get(key.name, { type: 'json' });
-      if (record) records.push(record);
+      if (record) {
+        if (startMonth || endMonth) {
+          if (isDateInRange(record.date, startMonth, endMonth)) {
+            records.push(record);
+          }
+        } else {
+          records.push(record);
+        }
+      }
     }
 
     records.sort((a, b) => (a.date || '').localeCompare(b.date || ''));
-
-    let runningIncome = 0;
-    let runningExpense = 0;
-    
-    records.forEach(record => {
-      const incomeTotal = (parseFloat(record.incomeDeposit) || 0) + (parseFloat(record.incomeBalance) || 0);
-      const expenseTotal = (parseFloat(record.expenseDeposit) || 0) + (parseFloat(record.expenseBalance) || 0);
-      runningIncome += incomeTotal;
-      runningExpense += expenseTotal;
-      record.totalIncome = runningIncome;
-      record.totalExpense = runningExpense;
-      record.balance = runningIncome - runningExpense;
-    });
 
     return new Response(JSON.stringify({ success: true, data: records }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' }
@@ -477,7 +500,6 @@ function handleIndexPage(isShareMode) {
       overflow-x: hidden;
     }
     
-    /* 头部 */
     .header {
       background: var(--white);
       border-radius: 12px;
@@ -493,28 +515,61 @@ function handleIndexPage(isShareMode) {
       margin-bottom: 12px;
       display: flex;
       align-items: center;
+      justify-content: center;
       gap: 8px;
+      text-align: center;
     }
     
     .header-btns {
       display: flex;
       flex-wrap: wrap;
       gap: 8px;
+      justify-content: center;
     }
     
     .btn {
-      padding: 8px 14px;
+      padding: 8px 12px;
       border: none;
       border-radius: 8px;
-      font-size: 0.85rem;
+      font-size: 0.8rem;
       font-weight: 600;
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      gap: 5px;
+      gap: 4px;
       transition: all 0.2s;
       white-space: nowrap;
+      flex: 1 1 auto;
+      min-width: 70px;
+      max-width: 120px;
+    }
+    
+    @media (min-width: 576px) {
+      .btn {
+        flex: 0 0 auto;
+        padding: 8px 14px;
+        font-size: 0.85rem;
+        min-width: auto;
+        max-width: none;
+      }
+      .header-title {
+        font-size: 1.4rem;
+      }
+    }
+    
+    @media (max-width: 400px) {
+      .btn {
+        padding: 6px 8px;
+        font-size: 0.75rem;
+        min-width: 55px;
+      }
+      .btn i {
+        display: none;
+      }
+      .header-title {
+        font-size: 1rem;
+      }
     }
     
     .btn-primary { background: var(--primary); color: var(--white); }
@@ -523,10 +578,73 @@ function handleIndexPage(isShareMode) {
     .btn-warning { background: var(--warning); color: var(--white); }
     .btn-danger { background: var(--danger); color: var(--white); }
     .btn-light { background: var(--light); color: var(--dark); }
+    .btn-secondary { background: #6b7280; color: var(--white); }
     
     .btn:active { transform: scale(0.95); }
     
-    /* 统计卡片 */
+    .filter-card {
+      background: var(--white);
+      border-radius: 12px;
+      padding: 15px;
+      margin-bottom: 15px;
+      box-shadow: 0 4px 15px rgba(0,0,0,0.1);
+    }
+    
+    .filter-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: center;
+    }
+    
+    .filter-group {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    .filter-group label {
+      font-size: 0.85rem;
+      color: var(--gray);
+      white-space: nowrap;
+    }
+    
+    .filter-group input[type="month"] {
+      padding: 8px 10px;
+      border: 2px solid var(--border);
+      border-radius: 8px;
+      font-size: 0.85rem;
+      width: 140px;
+    }
+    
+    .filter-group input:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+    
+    .filter-actions {
+      display: flex;
+      gap: 8px;
+      margin-left: auto;
+    }
+    
+    @media (max-width: 576px) {
+      .filter-row {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .filter-group {
+        width: 100%;
+      }
+      .filter-group input[type="month"] {
+        flex: 1;
+      }
+      .filter-actions {
+        margin-left: 0;
+        justify-content: center;
+      }
+    }
+    
     .stats {
       display: grid;
       grid-template-columns: repeat(2, 1fr);
@@ -565,7 +683,6 @@ function handleIndexPage(isShareMode) {
     .stat-label { font-size: 0.8rem; color: var(--gray); }
     .stat-value { font-size: 1.2rem; font-weight: 700; color: var(--dark); }
     
-    /* 快速添加 */
     .add-form-card {
       background: var(--white);
       border-radius: 12px;
@@ -653,9 +770,9 @@ function handleIndexPage(isShareMode) {
       flex: 1;
       padding: 12px;
       font-size: 1rem;
+      max-width: none;
     }
     
-    /* 表格区域 */
     .table-card {
       background: var(--white);
       border-radius: 12px;
@@ -747,7 +864,6 @@ function handleIndexPage(isShareMode) {
     
     .empty-state i { font-size: 3rem; margin-bottom: 15px; opacity: 0.5; }
     
-    /* 模态框 */
     .modal {
       position: fixed;
       inset: 0;
@@ -810,7 +926,6 @@ function handleIndexPage(isShareMode) {
       justify-content: flex-end;
     }
     
-    /* 上传区域 */
     .upload-area {
       border: 3px dashed var(--border);
       border-radius: 12px;
@@ -883,21 +998,6 @@ function handleIndexPage(isShareMode) {
       color: #854d0e;
     }
     
-    /* 分享输入框 */
-    .share-input-group {
-      display: flex;
-      gap: 10px;
-    }
-    
-    .share-input-group input {
-      flex: 1;
-      padding: 12px;
-      border: 2px solid var(--border);
-      border-radius: 8px;
-      font-size: 0.9rem;
-    }
-    
-    /* Toast */
     .toast-box {
       position: fixed;
       top: 15px;
@@ -933,10 +1033,10 @@ function handleIndexPage(isShareMode) {
     .toast.info { background: var(--info); }
     .toast.warning { background: var(--warning); }
     
-    /* 隐藏分享模式下的元素 */
-    .share-mode .hide-share { display: none !important; }
+    .admin-only { display: none; }
+    .admin-mode .admin-only { display: inline-flex; }
+    .admin-mode .share-only { display: none; }
     
-    /* 加载动画 */
     .loading {
       display: flex;
       justify-content: center;
@@ -956,30 +1056,63 @@ function handleIndexPage(isShareMode) {
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+    
+    .filter-tag {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: #dbeafe;
+      color: #1e40af;
+      padding: 4px 10px;
+      border-radius: 20px;
+      font-size: 0.8rem;
+      margin-left: 10px;
+    }
+    
+    .filter-tag .clear-filter {
+      cursor: pointer;
+      font-weight: bold;
+    }
+    
+    .mode-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 4px;
+      font-size: 0.7rem;
+      margin-left: 8px;
+      font-weight: normal;
+    }
+    
+    .mode-badge.admin {
+      background: var(--danger);
+      color: white;
+    }
+    
+    .mode-badge.view {
+      background: var(--info);
+      color: white;
+    }
   </style>
 </head>
-<body class="${isShareMode ? 'share-mode' : ''}">
+<body class="${isShareMode ? '' : 'admin-mode'}">
   <div class="toast-box" id="toastBox"></div>
 
   <div class="app">
-    <!-- 头部 -->
     <div class="header">
       <div class="header-title">
         <i class="bi bi-cash-coin"></i>
         财务表-寿光锋鸟财务统计
+        ${isShareMode ? '<span class="mode-badge view">只读</span>' : '<span class="mode-badge admin">管理</span>'}
       </div>
       <div class="header-btns">
-        <button class="btn btn-primary hide-share" onclick="toggleAddForm()">
+        <button class="btn btn-primary admin-only" onclick="toggleAddForm()">
           <i class="bi bi-plus-circle"></i> 添加
         </button>
-        <button class="btn btn-info hide-share" onclick="openImportModal()">
+        <button class="btn btn-info admin-only" onclick="openImportModal()">
           <i class="bi bi-upload"></i> 导入
         </button>
-        <button class="btn btn-success" onclick="exportExcel()">
+        <button class="btn btn-success admin-only" onclick="exportExcel()">
           <i class="bi bi-download"></i> 导出
-        </button>
-        <button class="btn btn-warning hide-share" onclick="openShareModal()">
-          <i class="bi bi-share"></i> 分享
         </button>
         <button class="btn btn-light" onclick="loadData()">
           <i class="bi bi-arrow-clockwise"></i> 刷新
@@ -987,22 +1120,42 @@ function handleIndexPage(isShareMode) {
       </div>
     </div>
 
-    <!-- 统计 -->
+    <div class="filter-card">
+      <div class="filter-row">
+        <div class="filter-group">
+          <label><i class="bi bi-calendar-range"></i> 起始月份</label>
+          <input type="month" id="startMonth" placeholder="选择起始月份">
+        </div>
+        <div class="filter-group">
+          <label>至</label>
+          <input type="month" id="endMonth" placeholder="选择结束月份">
+        </div>
+        <div class="filter-actions">
+          <button class="btn btn-primary" onclick="applyFilter()">
+            <i class="bi bi-search"></i> 查询
+          </button>
+          <button class="btn btn-light" onclick="clearFilter()">
+            <i class="bi bi-x-lg"></i> 清除
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div class="stats">
       <div class="stat-card income">
         <div class="stat-icon"><i class="bi bi-arrow-down"></i></div>
         <div class="stat-label">总收入</div>
-        <div class="stat-value" id="statIncome">¥0</div>
+        <div class="stat-value" id="statIncome">￥0</div>
       </div>
       <div class="stat-card expense">
         <div class="stat-icon"><i class="bi bi-arrow-up"></i></div>
         <div class="stat-label">总支出</div>
-        <div class="stat-value" id="statExpense">¥0</div>
+        <div class="stat-value" id="statExpense">￥0</div>
       </div>
       <div class="stat-card balance">
         <div class="stat-icon"><i class="bi bi-wallet2"></i></div>
-        <div class="stat-label">结余</div>
-        <div class="stat-value" id="statBalance">¥0</div>
+        <div class="stat-label">总利润</div>
+        <div class="stat-value" id="statBalance">￥0</div>
       </div>
       <div class="stat-card count">
         <div class="stat-icon"><i class="bi bi-file-text"></i></div>
@@ -1011,8 +1164,7 @@ function handleIndexPage(isShareMode) {
       </div>
     </div>
 
-    <!-- 添加表单 -->
-    <div class="add-form-card hide-share" id="addFormCard">
+    <div class="add-form-card admin-only" id="addFormCard">
       <div class="add-form-header">
         <span><i class="bi bi-plus-lg"></i> 添加记录</span>
         <button class="btn btn-light" style="padding: 4px 10px; font-size: 0.8rem;" onclick="toggleAddForm()">收起</button>
@@ -1085,11 +1237,13 @@ function handleIndexPage(isShareMode) {
       </div>
     </div>
 
-    <!-- 数据表格 -->
     <div class="table-card">
       <div class="table-header">
-        <span><i class="bi bi-table"></i> 财务明细</span>
-        <span class="hide-share" style="font-size: 0.75rem; opacity: 0.7;">双击编辑</span>
+        <span>
+          <i class="bi bi-table"></i> 财务明细
+          <span id="filterTag"></span>
+        </span>
+        <span class="admin-only" style="font-size: 0.75rem; opacity: 0.7;">双击编辑</span>
       </div>
       <div class="table-wrapper" id="tableWrapper">
         <div class="loading"><div class="spinner"></div></div>
@@ -1098,7 +1252,6 @@ function handleIndexPage(isShareMode) {
     </div>
   </div>
 
-  <!-- 导入模态框 -->
   <div class="modal" id="importModal">
     <div class="modal-box">
       <div class="modal-header">
@@ -1145,7 +1298,6 @@ function handleIndexPage(isShareMode) {
     </div>
   </div>
 
-  <!-- 删除确认模态框 -->
   <div class="modal" id="deleteModal">
     <div class="modal-box" style="max-width: 350px;">
       <div class="modal-header">
@@ -1165,38 +1317,22 @@ function handleIndexPage(isShareMode) {
     </div>
   </div>
 
-  <!-- 分享模态框 -->
-  <div class="modal" id="shareModal">
-    <div class="modal-box" style="max-width: 450px;">
-      <div class="modal-header">
-        <h3><i class="bi bi-share" style="color: var(--warning);"></i> 分享链接</h3>
-        <button class="modal-close" onclick="closeShareModal()">&times;</button>
-      </div>
-      <div class="modal-body">
-        <p style="color: var(--gray); margin-bottom: 15px; font-size: 0.9rem;">分享链接仅供查看，无法编辑</p>
-        <div class="share-input-group">
-          <input type="text" id="shareUrlInput" readonly value="">
-          <button class="btn btn-primary" onclick="copyShareUrl()">
-            <i class="bi bi-clipboard"></i> 复制
-          </button>
-        </div>
-      </div>
-    </div>
-  </div>
-
   <script>
-    // 全局变量
     let allRecords = [];
     let importData = [];
     let deleteId = null;
     let editingCell = null;
-    const isShareMode = ${isShareMode};
+    let currentFilter = { startMonth: '', endMonth: '' };
+    const isAdminMode = ${!isShareMode};
 
-    // 初始化
     document.addEventListener('DOMContentLoaded', function() {
-      document.getElementById('fDate').value = getToday();
+      if (isAdminMode) {
+        document.getElementById('fDate').value = getToday();
+      }
       loadData();
-      initUpload();
+      if (isAdminMode) {
+        initUpload();
+      }
     });
 
     function getToday() {
@@ -1204,7 +1340,6 @@ function handleIndexPage(isShareMode) {
       return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
     }
 
-    // Toast
     function toast(msg, type) {
       type = type || 'success';
       const box = document.getElementById('toastBox');
@@ -1220,12 +1355,59 @@ function handleIndexPage(isShareMode) {
       }, 3000);
     }
 
-    // 加载数据
+    function applyFilter() {
+      const startMonth = document.getElementById('startMonth').value;
+      const endMonth = document.getElementById('endMonth').value;
+      
+      if (startMonth && endMonth && startMonth > endMonth) {
+        toast('起始月份不能大于结束月份', 'warning');
+        return;
+      }
+      
+      currentFilter = { startMonth, endMonth };
+      loadData();
+      updateFilterTag();
+    }
+
+    function clearFilter() {
+      document.getElementById('startMonth').value = '';
+      document.getElementById('endMonth').value = '';
+      currentFilter = { startMonth: '', endMonth: '' };
+      loadData();
+      updateFilterTag();
+    }
+
+    function updateFilterTag() {
+      const tag = document.getElementById('filterTag');
+      if (currentFilter.startMonth || currentFilter.endMonth) {
+        let text = '';
+        if (currentFilter.startMonth && currentFilter.endMonth) {
+          text = currentFilter.startMonth + ' 至 ' + currentFilter.endMonth;
+        } else if (currentFilter.startMonth) {
+          text = currentFilter.startMonth + ' 起';
+        } else {
+          text = '至 ' + currentFilter.endMonth;
+        }
+        tag.innerHTML = '<span class="filter-tag">' + text + ' <span class="clear-filter" onclick="clearFilter()">×</span></span>';
+      } else {
+        tag.innerHTML = '';
+      }
+    }
+
+    function buildApiUrl(base) {
+      let url = base;
+      const params = [];
+      if (currentFilter.startMonth) params.push('startMonth=' + currentFilter.startMonth);
+      if (currentFilter.endMonth) params.push('endMonth=' + currentFilter.endMonth);
+      if (params.length > 0) url += '?' + params.join('&');
+      return url;
+    }
+
     async function loadData() {
       try {
         const [recRes, statRes] = await Promise.all([
-          fetch('/api/records'),
-          fetch('/api/statistics')
+          fetch(buildApiUrl('/api/records')),
+          fetch(buildApiUrl('/api/statistics'))
         ]);
         
         const recData = await recRes.json();
@@ -1237,9 +1419,9 @@ function handleIndexPage(isShareMode) {
         }
 
         if (statData.success) {
-          document.getElementById('statIncome').textContent = '¥' + formatNum(statData.data.totalIncome);
-          document.getElementById('statExpense').textContent = '¥' + formatNum(statData.data.totalExpense);
-          document.getElementById('statBalance').textContent = '¥' + formatNum(statData.data.balance);
+          document.getElementById('statIncome').textContent = '￥' + formatNum(statData.data.totalIncome);
+          document.getElementById('statExpense').textContent = '￥' + formatNum(statData.data.totalExpense);
+          document.getElementById('statBalance').textContent = '￥' + formatNum(statData.data.balance);
           document.getElementById('statCount').textContent = statData.data.totalRecords;
         }
       } catch (err) {
@@ -1247,7 +1429,16 @@ function handleIndexPage(isShareMode) {
       }
     }
 
-    // 渲染表格
+    function calcRecordTotals(r) {
+      const incomeTotal = (parseFloat(r.incomeDeposit) || 0) + (parseFloat(r.incomeBalance) || 0);
+      const expenseTotal = (parseFloat(r.expenseDeposit) || 0) + (parseFloat(r.expenseBalance) || 0);
+      return {
+        totalIncome: incomeTotal,
+        totalExpense: expenseTotal,
+        profit: incomeTotal - expenseTotal
+      };
+    }
+
     function renderTable(records) {
       const wrapper = document.getElementById('tableWrapper');
       const footer = document.getElementById('tableFooter');
@@ -1259,19 +1450,17 @@ function handleIndexPage(isShareMode) {
       }
 
       let html = '<table class="data-table"><thead>';
-      // 第一行表头
       html += '<tr>';
       html += '<th rowspan="2">日期</th>';
       html += '<th colspan="3">用途</th>';
       html += '<th colspan="4" class="income-h">收入</th>';
       html += '<th colspan="4" class="expense-h">支出</th>';
-      html += '<th rowspan="2" class="sum-h">共收入</th>';
-      html += '<th rowspan="2" class="sum-h">共支出</th>';
-      html += '<th rowspan="2" class="sum-h">结余</th>';
+      html += '<th rowspan="2" class="sum-h">本单收入</th>';
+      html += '<th rowspan="2" class="sum-h">本单支出</th>';
+      html += '<th rowspan="2" class="sum-h">本单利润</th>';
       html += '<th rowspan="2">备注</th>';
-      if (!isShareMode) html += '<th rowspan="2">操作</th>';
+      if (isAdminMode) html += '<th rowspan="2">操作</th>';
       html += '</tr>';
-      // 第二行表头
       html += '<tr>';
       html += '<th>明细一</th><th>明细二</th><th>用于</th>';
       html += '<th class="income-h">定金</th><th class="income-h">定金日期</th>';
@@ -1281,7 +1470,9 @@ function handleIndexPage(isShareMode) {
       html += '</tr></thead><tbody>';
 
       records.forEach(function(r) {
-        const ec = isShareMode ? '' : 'editable';
+        const ec = isAdminMode ? 'editable' : '';
+        const totals = calcRecordTotals(r);
+        
         html += '<tr data-id="' + r.id + '">';
         html += '<td class="' + ec + '" data-field="date">' + (r.date || '') + '</td>';
         html += '<td class="' + ec + '" data-field="detail1">' + (r.detail1 || '') + '</td>';
@@ -1295,12 +1486,12 @@ function handleIndexPage(isShareMode) {
         html += '<td class="' + ec + '" data-field="expenseDepositDate">' + (r.expenseDepositDate || '') + '</td>';
         html += '<td class="' + ec + ' expense-val" data-field="expenseBalance">' + fmtMoney(r.expenseBalance) + '</td>';
         html += '<td class="' + ec + '" data-field="expenseBalanceDate">' + (r.expenseBalanceDate || '') + '</td>';
-        html += '<td class="income-val">' + fmtMoney(r.totalIncome) + '</td>';
-        html += '<td class="expense-val">' + fmtMoney(r.totalExpense) + '</td>';
-        html += '<td class="' + (r.balance >= 0 ? 'positive' : 'negative') + '">' + fmtMoney(r.balance) + '</td>';
+        html += '<td class="income-val">' + fmtMoney(totals.totalIncome) + '</td>';
+        html += '<td class="expense-val">' + fmtMoney(totals.totalExpense) + '</td>';
+        html += '<td class="' + (totals.profit >= 0 ? 'positive' : 'negative') + '">' + fmtMoney(totals.profit) + '</td>';
         html += '<td class="' + ec + '" data-field="remarks">' + (r.remarks || '') + '</td>';
-        if (!isShareMode) {
-          html += '<td><button class="btn btn-danger" style="padding:5px 10px;font-size:0.75rem;" onclick="showDeleteModal(\\'' + r.id + '\\')"><i class="bi bi-trash"></i></button></td>';
+        if (isAdminMode) {
+          html += '<td><button class="btn btn-danger" style="padding:5px 10px;font-size:0.75rem;max-width:none;" onclick="showDeleteModal(\\'' + r.id + '\\')"><i class="bi bi-trash"></i></button></td>';
         }
         html += '</tr>';
       });
@@ -1309,15 +1500,13 @@ function handleIndexPage(isShareMode) {
       wrapper.innerHTML = html;
       footer.textContent = '共 ' + records.length + ' 条记录';
 
-      // 绑定双击编辑
-      if (!isShareMode) {
+      if (isAdminMode) {
         document.querySelectorAll('.editable').forEach(function(cell) {
           cell.addEventListener('dblclick', startCellEdit);
         });
       }
     }
 
-    // 双击编辑
     function startCellEdit(e) {
       if (editingCell) return;
       
@@ -1398,7 +1587,6 @@ function handleIndexPage(isShareMode) {
       editingCell = null;
     }
 
-    // 添加表单
     function toggleAddForm() {
       const card = document.getElementById('addFormCard');
       if (card.classList.contains('show')) {
@@ -1456,7 +1644,6 @@ function handleIndexPage(isShareMode) {
       return false;
     }
 
-    // 删除
     function showDeleteModal(id) {
       deleteId = id;
       document.getElementById('deleteModal').classList.add('show');
@@ -1486,10 +1673,9 @@ function handleIndexPage(isShareMode) {
       }
     }
 
-    // 导出Excel
     async function exportExcel() {
       try {
-        const res = await fetch('/api/export');
+        const res = await fetch(buildApiUrl('/api/export'));
         const result = await res.json();
 
         if (!result.success) {
@@ -1499,10 +1685,11 @@ function handleIndexPage(isShareMode) {
 
         const records = result.data;
         
-        const h1 = ['日期', '用途', '', '', '收入', '', '', '', '支出', '', '', '', '共收入', '共支出', '结余', '备注'];
+        const h1 = ['日期', '用途', '', '', '收入', '', '', '', '支出', '', '', '', '本单收入', '本单支出', '本单利润', '备注'];
         const h2 = ['', '明细一', '明细二', '用于', '定金', '定金日期', '尾款', '尾款日期', '定金', '定金日期', '尾款', '尾款日期', '', '', '', ''];
         
         const rows = records.map(function(r) {
+          const totals = calcRecordTotals(r);
           return [
             r.date || '',
             r.detail1 || '',
@@ -1516,9 +1703,9 @@ function handleIndexPage(isShareMode) {
             r.expenseDepositDate || '',
             r.expenseBalance || 0,
             r.expenseBalanceDate || '',
-            r.totalIncome || 0,
-            r.totalExpense || 0,
-            r.balance || 0,
+            totals.totalIncome,
+            totals.totalExpense,
+            totals.profit,
             r.remarks || ''
           ];
         });
@@ -1545,7 +1732,12 @@ function handleIndexPage(isShareMode) {
 
         const wb = XLSX.utils.book_new();
         XLSX.utils.book_append_sheet(wb, ws, '财务记录');
-        XLSX.writeFile(wb, '财务表-寿光锋鸟-' + getToday() + '.xlsx');
+        
+        let fileName = '财务表-寿光锋鸟-' + getToday();
+        if (currentFilter.startMonth || currentFilter.endMonth) {
+          fileName += '-筛选';
+        }
+        XLSX.writeFile(wb, fileName + '.xlsx');
         
         toast('导出成功！');
       } catch (err) {
@@ -1553,38 +1745,9 @@ function handleIndexPage(isShareMode) {
       }
     }
 
-    // 分享
-    function openShareModal() {
-      const url = window.location.origin + '/share';
-      document.getElementById('shareUrlInput').value = url;
-      document.getElementById('shareModal').classList.add('show');
-    }
-
-    function closeShareModal() {
-      document.getElementById('shareModal').classList.remove('show');
-    }
-
-    function copyShareUrl() {
-      const input = document.getElementById('shareUrlInput');
-      input.select();
-      input.setSelectionRange(0, 99999);
-      
-      try {
-        document.execCommand('copy');
-        toast('已复制到剪贴板！');
-      } catch (err) {
-        // 尝试新API
-        navigator.clipboard.writeText(input.value).then(function() {
-          toast('已复制到剪贴板！');
-        }).catch(function() {
-          toast('复制失败，请手动复制', 'error');
-        });
-      }
-    }
-
-    // 导入功能
     function initUpload() {
       const area = document.getElementById('uploadArea');
+      if (!area) return;
       
       area.addEventListener('dragover', function(e) {
         e.preventDefault();
@@ -1637,7 +1800,6 @@ function handleIndexPage(isShareMode) {
           document.getElementById('rowCount').textContent = json.length + ' 条';
           document.getElementById('fileInfo').classList.add('show');
 
-          // 预览
           const keys = Object.keys(json[0]);
           document.getElementById('previewHead').innerHTML = '<tr>' + keys.map(function(k){return '<th>'+k+'</th>';}).join('') + '</tr>';
           document.getElementById('previewBody').innerHTML = json.slice(0, 5).map(function(row) {
@@ -1750,7 +1912,6 @@ function handleIndexPage(isShareMode) {
       document.getElementById('clearBtn').style.display = 'none';
     }
 
-    // 工具函数
     function fmtMoney(v) {
       var n = parseFloat(v) || 0;
       return n === 0 ? '' : n.toFixed(2);
@@ -1760,13 +1921,15 @@ function handleIndexPage(isShareMode) {
       return (parseFloat(v) || 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
     }
 
-    // 点击外部关闭模态框
-    ['importModal', 'deleteModal', 'shareModal'].forEach(function(id) {
-      document.getElementById(id).addEventListener('click', function(e) {
-        if (e.target.id === id) {
-          document.getElementById(id).classList.remove('show');
-        }
-      });
+    ['importModal', 'deleteModal'].forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el) {
+        el.addEventListener('click', function(e) {
+          if (e.target.id === id) {
+            document.getElementById(id).classList.remove('show');
+          }
+        });
+      }
     });
   </script>
 </body>
