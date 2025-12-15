@@ -1,20 +1,16 @@
-/* TradingView 云端逻辑 v5.1 (拟人打字版) */
-/* 修复数字输入错乱和回车无效的问题：增加按键间隔 */
+/* TradingView 云端逻辑 v6.0 (React劫持注入版) */
+/* 解决输入错乱核心方案：触发弹窗 -> 抓取输入框 -> 暴力注入值 -> 提交 */
 
 (function() {
     if (document.getElementById('tv-helper-panel')) return;
     
-    console.log('>>> [Cloud v5.1] 拟人输入模式启动');
+    console.log('>>> [Cloud v6.0] 劫持注入模式启动');
 
     // ================= 配置区 =================
     const CONFIG = {
         multiplier: 4,               // 分屏倍数
         presets: [3, 5, 10, 15],     // 预设时间
-        
-        // --- 核心延迟设置 (单位: 毫秒) ---
-        chartActivateDelay: 300,     // 点击图表后，等待激活的时间
-        keyPressInterval: 200,       // 输数字的手速 (按完1，等多久按5)
-        confirmDelay: 800            // 输完数字后，等多久按回车 (太快会导致回车无效)
+        dialogWait: 300              // 等待输入框弹出的时间 (毫秒)
     };
     // ==========================================
 
@@ -35,28 +31,25 @@
             return btn;
         },
 
-        // 强制激活图表
+        // 激活图表
         activateChart: function(widget) {
             if (!widget) return;
             const target = widget.querySelector('canvas') || widget; 
             const rect = target.getBoundingClientRect();
-            // 模拟在图表中心点击
             const eventOpts = {
                 bubbles: true, cancelable: true, view: window,
                 clientX: rect.left + rect.width / 2, 
                 clientY: rect.top + rect.height / 2, 
                 buttons: 1
             };
-            
             target.dispatchEvent(new MouseEvent('mousedown', eventOpts));
-            setTimeout(() => {
-                target.dispatchEvent(new MouseEvent('mouseup', eventOpts));
-                target.dispatchEvent(new MouseEvent('click', eventOpts));
-            }, 50);
+            target.dispatchEvent(new MouseEvent('mouseup', eventOpts));
+            target.dispatchEvent(new MouseEvent('click', eventOpts));
         },
 
-        // 模拟按键 (发送给 document.body)
-        pressKey: function(key) {
+        // 仅发送一个触发键 (骗出弹窗)
+        triggerDialog: function(firstChar) {
+            const key = firstChar.toString();
             const code = `Digit${key}`;
             const keyCode = key.charCodeAt(0);
             const evtProps = {
@@ -69,80 +62,108 @@
             document.body.dispatchEvent(new KeyboardEvent('keyup', evtProps));
         },
 
-        // 模拟回车
-        pressEnter: function() {
+        // 【核心黑科技】React 暴力赋值
+        // 普通的 input.value = '15' 不会触发 React 更新，必须用这种方式
+        reactSetValue: function(input, value) {
+            const lastValue = input.value;
+            input.value = value;
+            const tracker = input._valueTracker;
+            if (tracker) {
+                tracker.setValue(lastValue);
+            }
+            // 触发 React 的 onChange 监听
+            const event = new Event('input', { bubbles: true });
+            input.dispatchEvent(event);
+        },
+
+        // 在特定元素上回车
+        confirmInput: function(target) {
             const enterCode = 13;
             const evtProps = {
                 key: 'Enter', code: 'Enter', 
                 keyCode: enterCode, which: enterCode, charCode: enterCode,
                 bubbles: true, cancelable: true, view: window
             };
-            document.body.dispatchEvent(new KeyboardEvent('keydown', evtProps));
-            document.body.dispatchEvent(new KeyboardEvent('keypress', evtProps));
-            document.body.dispatchEvent(new KeyboardEvent('keyup', evtProps));
+            target.dispatchEvent(new KeyboardEvent('keydown', evtProps));
+            target.dispatchEvent(new KeyboardEvent('keypress', evtProps));
+            target.dispatchEvent(new KeyboardEvent('keyup', evtProps));
         }
     };
 
     // --- 业务逻辑 ---
 
-    // 切换单/双屏
     const setLayout = (type) => {
         const btn = document.querySelector('[data-name="header-toolbar-layout-button"]');
         if (!btn) return;
-        
         btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
-        
         setTimeout(() => {
             const items = document.querySelectorAll('[data-name="menu-inner"] div[role="button"]');
-            if (type === '1' && items[0]) {
-                items[0].dispatchEvent(new MouseEvent('click', {bubbles: true}));
-            } else if (type === '2') {
+            if (type === '1' && items[0]) items[0].dispatchEvent(new MouseEvent('click', {bubbles: true}));
+            else if (type === '2') {
                 if (items.length > 3) items[3].dispatchEvent(new MouseEvent('click', {bubbles: true}));
                 else if (items[1]) items[1].dispatchEvent(new MouseEvent('click', {bubbles: true}));
             }
         }, 300);
     };
 
-    // 设置时间 (核心流程优化)
+    // 设置时间 (注入流)
     const setTime = async (minutes) => {
         const widgets = Array.from(document.querySelectorAll('.chart-widget'));
         if (widgets.length === 0) return;
-        
-        // 排序：左 -> 右
         widgets.sort((a, b) => a.getBoundingClientRect().x - b.getBoundingClientRect().x);
 
-        const doChange = async (widget, min) => {
+        const doInject = async (widget, min) => {
             if (!widget) return;
             
             // 1. 激活图表
             utils.activateChart(widget);
-            
-            // 等待激活完成
-            await new Promise(r => setTimeout(r, CONFIG.chartActivateDelay));
+            await new Promise(r => setTimeout(r, 200));
 
-            // 2. 逐个输入数字 (带间隔)
-            const str = min.toString();
-            for (let char of str) {
-                utils.pressKey(char);
-                // 【关键】输完一个数字，歇一会再输下一个
-                await new Promise(r => setTimeout(r, CONFIG.keyPressInterval));
+            // 2. 按下第一个数字，触发弹窗
+            const strMin = min.toString();
+            utils.triggerDialog(strMin[0]);
+
+            // 3. 等待输入框出现 (轮询检测)
+            let inputEl = null;
+            for(let i=0; i<10; i++) { // 尝试10次，每次50ms
+                await new Promise(r => setTimeout(r, 50));
+                // 策略A: 检查当前聚焦元素
+                if (document.activeElement && document.activeElement.tagName === 'INPUT') {
+                    inputEl = document.activeElement;
+                    break;
+                }
+                // 策略B: 搜索页面上可见的 dialog input
+                const dialogs = document.querySelectorAll('[class*="dialog"] input, [class*="popup"] input');
+                if (dialogs.length > 0) {
+                    // 找最后一个出现的通常是正确的
+                    inputEl = dialogs[dialogs.length - 1]; 
+                    break;
+                }
             }
 
-            // 3. 等待对话框完全响应
-            await new Promise(r => setTimeout(r, CONFIG.confirmDelay));
+            if (inputEl) {
+                console.log('>>> 捕获到输入框，开始注入:', min);
+                
+                // 4. 暴力注入完整数值 (解决输入错乱)
+                utils.reactSetValue(inputEl, strMin);
+                
+                // 5. 稍微等一下让 React 反应过来
+                await new Promise(r => setTimeout(r, 100));
 
-            // 4. 回车确认
-            utils.pressEnter();
+                // 6. 对着这个输入框按回车 (解决回车无效)
+                utils.confirmInput(inputEl);
+            } else {
+                console.warn('>>> 未检测到输入框弹出，可能焦点未切换成功');
+            }
         };
 
-        // 设左屏
-        await doChange(widgets[0], minutes);
+        // 执行左屏
+        await doInject(widgets[0], minutes);
 
-        // 设右屏
+        // 执行右屏
         if (widgets[1]) {
-            // 中间多等一会
-            await new Promise(r => setTimeout(r, 600));
-            await doChange(widgets[1], minutes * CONFIG.multiplier);
+            await new Promise(r => setTimeout(r, 500)); // 间隔长一点更稳
+            await doInject(widgets[1], minutes * CONFIG.multiplier);
         }
     };
 
