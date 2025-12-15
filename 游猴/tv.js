@@ -1,23 +1,22 @@
-/* TradingView 云端逻辑 v3.1 (画布激活增强版) */
-/* 修复了点击图表不生效、无法输入数字的问题 */
+/* TradingView 云端逻辑 v3.2 (键盘事件修复版) */
+/* 修复了数字输入无效的问题：将按键事件目标改为 document */
 
 (function() {
-    // 1. 防止重复注入
+    // 防止重复注入
     if (document.getElementById('tv-helper-panel')) return;
     
-    console.log('>>> [Cloud v3.1] 脚本启动，使用 Canvas 激活模式');
+    console.log('>>> [Cloud v3.2] 键盘增强版启动');
 
     // ================= 配置区 =================
     const CONFIG = {
         multiplier: 4,               // 分屏倍数
         presets: [3, 5, 10, 15],     // 预设时间
-        delay: 300                   // 动作间隔 (太快会丢失)
+        delay: 400                   // 动作间隔
     };
     // ==========================================
 
-    // --- 增强版工具集 ---
     const utils = {
-        // 创建按钮 (彻底解决拖拽冲突)
+        // 创建按钮
         createBtn: function(text, color, onClick) {
             const btn = document.createElement('button');
             btn.innerText = text;
@@ -27,132 +26,125 @@
                 font-size: 12px; font-family: sans-serif; transition: all 0.2s;
                 min-width: 40px; text-align: center;
             `;
-            
-            // 鼠标悬停变色
             btn.onmouseenter = () => btn.style.backgroundColor = text === '↻' ? '#444' : '#2962ff';
             btn.onmouseleave = () => btn.style.backgroundColor = '#2a2e39';
-
-            // 【关键】阻断 mousedown 冒泡，防止触发面板拖拽
-            btn.onmousedown = (e) => { e.stopPropagation(); };
-            
-            // 绑定点击事件
-            btn.onclick = (e) => {
-                e.stopPropagation(); // 防止冒泡
-                e.preventDefault();  // 防止默认行为
-                onClick();
-            };
+            btn.onmousedown = (e) => e.stopPropagation(); // 防止拖拽
+            btn.onclick = (e) => { e.stopPropagation(); onClick(); };
             return btn;
         },
 
-        // 模拟点击 (核心修复：支持点击 Canvas)
-        click: function(el) {
-            if (!el) return;
-            const rect = el.getBoundingClientRect();
-            // 计算中心点
+        // 1. 点击激活图表 (点击 Canvas)
+        clickChart: function(widget) {
+            if (!widget) return;
+            const canvas = widget.querySelector('canvas') || widget;
+            const rect = canvas.getBoundingClientRect();
             const x = rect.left + rect.width / 2;
             const y = rect.top + rect.height / 2;
             
-            // 依次触发完整的鼠标事件链
             ['mouseover', 'mousedown', 'mouseup', 'click'].forEach(evtType => {
-                const evt = new MouseEvent(evtType, {
+                canvas.dispatchEvent(new MouseEvent(evtType, {
                     bubbles: true, cancelable: true, view: window,
                     clientX: x, clientY: y, buttons: 1
-                });
-                el.dispatchEvent(evt);
+                }));
             });
         },
 
-        // 模拟键盘输入 (兼容性增强)
-        typeKey: function(key) {
-            // 对应数字键的 keyCode (48-57)
-            const keyCode = key.charCodeAt(0); 
-            const evtOpts = { 
-                key: key, code: `Digit${key}`, keyCode: keyCode, which: keyCode,
-                bubbles: true, cancelable: true, view: window 
+        // 2. 全局模拟按键 (发送给 Document)
+        // TradingView 的快捷键监听器在 document 上
+        pressKey: function(char) {
+            const key = char.toString();
+            const code = `Digit${key}`;
+            const keyCode = key.charCodeAt(0); // 0=48, 1=49...
+
+            // 构造详细的事件参数
+            const eventInit = {
+                key: key,
+                code: code,
+                keyCode: keyCode,
+                which: keyCode,
+                charCode: keyCode,
+                bubbles: true,
+                cancelable: true,
+                view: window
             };
-            
-            // TradingView 主要监听 keydown/keypress
-            document.dispatchEvent(new KeyboardEvent('keydown', evtOpts));
-            document.dispatchEvent(new KeyboardEvent('keypress', evtOpts));
-            document.dispatchEvent(new KeyboardEvent('keyup', evtOpts));
+
+            // 发送完整的键盘事件链
+            document.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+            document.dispatchEvent(new KeyboardEvent('keypress', eventInit));
+            document.dispatchEvent(new KeyboardEvent('keyup', eventInit));
         },
 
-        enter: function() {
-            const evtOpts = { 
-                key: 'Enter', code: 'Enter', keyCode: 13, which: 13, 
-                bubbles: true, cancelable: true, view: window 
+        // 3. 模拟回车
+        pressEnter: function() {
+            const eventInit = {
+                key: 'Enter', code: 'Enter', keyCode: 13, which: 13, charCode: 13,
+                bubbles: true, cancelable: true, view: window
             };
-            document.dispatchEvent(new KeyboardEvent('keydown', evtOpts));
-            document.dispatchEvent(new KeyboardEvent('keyup', evtOpts));
+            document.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+            document.dispatchEvent(new KeyboardEvent('keypress', eventInit));
+            document.dispatchEvent(new KeyboardEvent('keyup', eventInit));
         }
     };
 
     // --- 业务逻辑 ---
 
-    // 1. 切换布局
+    // 切换布局
     const setLayout = (type) => {
         const btn = document.querySelector('[data-name="header-toolbar-layout-button"]');
-        if (!btn) return alert('请先登录或检查网络');
+        if (!btn) return;
         
-        utils.click(btn);
+        // 点击布局菜单
+        btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
         
-        // 菜单弹出需要时间，稍作延迟
         setTimeout(() => {
             const items = document.querySelectorAll('[data-name="menu-inner"] div[role="button"]');
             if (type === '1' && items[0]) {
-                utils.click(items[0]);
+                items[0].dispatchEvent(new MouseEvent('click', {bubbles: true}));
             } else if (type === '2') {
-                // 尝试找双屏垂直图标 (通常是第4个，索引3)
-                // 如果菜单项很少，说明只有基础版，可能无法双屏
-                if (items.length > 3) utils.click(items[3]);
-                else if (items[1]) utils.click(items[1]);
+                if (items.length > 3) items[3].dispatchEvent(new MouseEvent('click', {bubbles: true}));
+                else if (items[1]) items[1].dispatchEvent(new MouseEvent('click', {bubbles: true}));
             }
         }, 300);
     };
 
-    // 2. 设置时间 (核心修复)
+    // 设置时间 (核心流程)
     const setTime = async (minutes) => {
         const widgets = Array.from(document.querySelectorAll('.chart-widget'));
         if (widgets.length === 0) return;
 
-        // 按屏幕位置排序 (左 -> 右)
+        // 排序：左 -> 右
         widgets.sort((a, b) => a.getBoundingClientRect().x - b.getBoundingClientRect().x);
 
-        // --- 内部执行函数 ---
-        const applyToChart = (widget, min) => {
+        const changeInterval = (widget, min) => {
             return new Promise(resolve => {
                 if (!widget) return resolve();
 
-                // 【关键修复】找到 widget 内部的 canvas 元素进行点击
-                // 只有点击 canvas，TradingView 才会认为你选中了这个图表
-                const canvas = widget.querySelector('canvas');
-                const target = canvas || widget; // 找不到 canvas 就点 widget (保底)
-
-                // 1. 激活图表
-                utils.click(target);
+                // 1. 激活图表 (告诉 TV 这是当前操作的窗口)
+                utils.clickChart(widget);
 
                 setTimeout(() => {
-                    // 2. 输入数字
+                    // 2. 输入数字 (向 document 发送)
                     const str = min.toString();
-                    for (let char of str) utils.typeKey(char);
+                    for (let i = 0; i < str.length; i++) {
+                        utils.pressKey(str[i]);
+                    }
                     
-                    // 3. 回车确认
+                    // 3. 稍等片刻后回车
                     setTimeout(() => { 
-                        utils.enter(); 
+                        utils.pressEnter(); 
                         resolve(); 
-                    }, 200); // 等待输入框反应
-                }, 150); // 等待点击激活
+                    }, 250); // 给 TV 弹出“修改周期”对话框一点时间
+                }, 150);
             });
         };
 
-        // 执行序列
-        // 先设左屏
-        await applyToChart(widgets[0], minutes);
+        // 左屏
+        await changeInterval(widgets[0], minutes);
 
-        // 再设右屏 (如果有)
+        // 右屏
         if (widgets[1]) {
             setTimeout(async () => {
-                await applyToChart(widgets[1], minutes * CONFIG.multiplier);
+                await changeInterval(widgets[1], minutes * CONFIG.multiplier);
             }, CONFIG.delay);
         }
     };
@@ -168,9 +160,7 @@
             display: flex; gap: 8px; border: 1px solid #434651; 
             align-items: center; user-select: none;
         `;
-        panel.title = "按住空白处拖动";
 
-        // 分组容器样式
         const groupStyle = 'display:flex; gap:5px; border-right:1px solid #555; padding-right:10px; margin-right:2px;';
 
         // 组1: 布局
@@ -184,52 +174,44 @@
         grp2.style.cssText = groupStyle;
         CONFIG.presets.forEach(m => {
             const btn = utils.createBtn(`${m}m`, '#d1d4dc', () => setTime(m));
-            btn.title = `主:${m}分 / 副:${m * CONFIG.multiplier}分`;
+            btn.title = `主:${m}分 | 副:${m * CONFIG.multiplier}分`;
             grp2.appendChild(btn);
         });
 
         // 组3: 刷新
         const btnRef = utils.createBtn('↻', '#f0ad4e', () => location.reload());
-        btnRef.style.border = 'none'; // 去掉边框显得特殊点
+        btnRef.style.border = 'none';
 
         panel.appendChild(grp1);
         panel.appendChild(grp2);
         panel.appendChild(btnRef);
         document.body.appendChild(panel);
 
-        // --- 拖拽逻辑 (无冲突版) ---
+        // 拖拽逻辑
         let isDrag = false, sx, sy, ix, iy;
-        
-        // 只有点在 panel 本身才触发，点在 button 上已经被 button 的 stopPropagation 拦住了
         panel.onmousedown = (e) => {
-            if (e.target.tagName === 'BUTTON') return; // 双重保险
+            if (e.target.tagName === 'BUTTON') return;
             isDrag = true;
             sx = e.clientX; sy = e.clientY;
             ix = panel.offsetLeft; iy = panel.offsetTop;
             panel.style.cursor = 'grabbing';
-            panel.style.margin = 0; // 开始拖拽时移除 margin 带来的干扰
-            panel.style.transform = 'none'; // 移除 transform
-            // 设置初始位置防止跳动
+            panel.style.margin = 0;
+            panel.style.transform = 'none';
             panel.style.left = ix + 'px';
             panel.style.top = iy + 'px';
         };
-
         window.addEventListener('mousemove', (e) => {
             if (!isDrag) return;
             e.preventDefault();
-            const nx = ix + (e.clientX - sx);
-            const ny = iy + (e.clientY - sy);
-            panel.style.left = nx + 'px';
-            panel.style.top = ny + 'px';
+            panel.style.left = (ix + e.clientX - sx) + 'px';
+            panel.style.top = (iy + e.clientY - sy) + 'px';
         });
-
         window.addEventListener('mouseup', () => {
             isDrag = false;
             panel.style.cursor = 'default';
         });
     };
 
-    // 启动
     setTimeout(buildUI, 1000);
 
 })();
