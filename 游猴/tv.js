@@ -1,16 +1,17 @@
-/* TradingView 云端逻辑 v6.0 (React劫持注入版) */
-/* 解决输入错乱核心方案：触发弹窗 -> 抓取输入框 -> 暴力注入值 -> 提交 */
+/* TradingView 云端逻辑 v6.1 (双重确认版) */
+/* 修复“没有回车”问题：注入数字后，直接点击下方的搜索结果，代替回车键 */
 
 (function() {
     if (document.getElementById('tv-helper-panel')) return;
     
-    console.log('>>> [Cloud v6.0] 劫持注入模式启动');
+    console.log('>>> [Cloud v6.1] 智能确认模式启动');
 
     // ================= 配置区 =================
     const CONFIG = {
         multiplier: 4,               // 分屏倍数
         presets: [3, 5, 10, 15],     // 预设时间
-        dialogWait: 300              // 等待输入框弹出的时间 (毫秒)
+        dialogWait: 300,             // 等待弹窗
+        resultWait: 200              // 输完数字后，等待搜索结果出现的时间
     };
     // ==========================================
 
@@ -31,7 +32,6 @@
             return btn;
         },
 
-        // 激活图表
         activateChart: function(widget) {
             if (!widget) return;
             const target = widget.querySelector('canvas') || widget; 
@@ -47,7 +47,6 @@
             target.dispatchEvent(new MouseEvent('click', eventOpts));
         },
 
-        // 仅发送一个触发键 (骗出弹窗)
         triggerDialog: function(firstChar) {
             const key = firstChar.toString();
             const code = `Digit${key}`;
@@ -62,8 +61,7 @@
             document.body.dispatchEvent(new KeyboardEvent('keyup', evtProps));
         },
 
-        // 【核心黑科技】React 暴力赋值
-        // 普通的 input.value = '15' 不会触发 React 更新，必须用这种方式
+        // React 暴力赋值
         reactSetValue: function(input, value) {
             const lastValue = input.value;
             input.value = value;
@@ -71,22 +69,54 @@
             if (tracker) {
                 tracker.setValue(lastValue);
             }
-            // 触发 React 的 onChange 监听
-            const event = new Event('input', { bubbles: true });
-            input.dispatchEvent(event);
+            // 发送全套事件，确保 UI 更新
+            input.dispatchEvent(new Event('input', { bubbles: true }));
+            input.dispatchEvent(new Event('change', { bubbles: true }));
         },
 
-        // 在特定元素上回车
-        confirmInput: function(target) {
+        // 终极确认：点击搜索结果
+        confirmByClick: function(dialogContainer, minutes) {
+            // 1. 尝试按回车 (备选方案)
             const enterCode = 13;
             const evtProps = {
-                key: 'Enter', code: 'Enter', 
-                keyCode: enterCode, which: enterCode, charCode: enterCode,
+                key: 'Enter', code: 'Enter', keyCode: enterCode, which: enterCode, 
                 bubbles: true, cancelable: true, view: window
             };
-            target.dispatchEvent(new KeyboardEvent('keydown', evtProps));
-            target.dispatchEvent(new KeyboardEvent('keypress', evtProps));
-            target.dispatchEvent(new KeyboardEvent('keyup', evtProps));
+            document.body.dispatchEvent(new KeyboardEvent('keydown', evtProps));
+            
+            // 2. 【核心】寻找列表里的结果并点击
+            // TV 的搜索结果通常在 dialog 里的 div[data-role="menuitem"] 或者 class 包含 item 的元素
+            // 我们找包含数字的那个选项
+            
+            // 获取所有菜单项
+            // 注意：弹出的菜单可能不在 input 的父容器里，而是挂在 body 根部的 popup 层
+            const allItems = document.querySelectorAll('div[data-role="menuitem"], div[class*="item-"]');
+            
+            // 倒序查找，因为最新的弹窗通常在 DOM 最后
+            for (let i = allItems.length - 1; i >= 0; i--) {
+                const item = allItems[i];
+                const text = item.innerText.replace(/\s/g, ''); // 去掉空格 "15分" -> "15分"
+                
+                // 检查是否包含我们的分钟数 (例如 "15" 或 "15m" 或 "15Minutes")
+                if (text.startsWith(minutes.toString())) {
+                    console.log('>>> 找到搜索结果，点击:', item);
+                    
+                    // 模拟点击
+                    const rect = item.getBoundingClientRect();
+                    const clickOpts = {
+                        bubbles: true, cancelable: true, view: window,
+                        clientX: rect.left + rect.width/2, clientY: rect.top + rect.height/2
+                    };
+                    item.dispatchEvent(new MouseEvent('mousedown', clickOpts));
+                    item.dispatchEvent(new MouseEvent('mouseup', clickOpts));
+                    item.dispatchEvent(new MouseEvent('click', clickOpts));
+                    
+                    // 点击一次通常就够了，找到一个就退出
+                    return true;
+                }
+            }
+            console.warn('>>> 未找到可点击的搜索结果，仅发送了回车');
+            return false;
         }
     };
 
@@ -106,7 +136,6 @@
         }, 300);
     };
 
-    // 设置时间 (注入流)
     const setTime = async (minutes) => {
         const widgets = Array.from(document.querySelectorAll('.chart-widget'));
         if (widgets.length === 0) return;
@@ -119,50 +148,44 @@
             utils.activateChart(widget);
             await new Promise(r => setTimeout(r, 200));
 
-            // 2. 按下第一个数字，触发弹窗
+            // 2. 触发弹窗
             const strMin = min.toString();
             utils.triggerDialog(strMin[0]);
 
-            // 3. 等待输入框出现 (轮询检测)
+            // 3. 抓取输入框
             let inputEl = null;
-            for(let i=0; i<10; i++) { // 尝试10次，每次50ms
+            // 增加重试次数，确保抓到
+            for(let i=0; i<15; i++) { 
                 await new Promise(r => setTimeout(r, 50));
-                // 策略A: 检查当前聚焦元素
                 if (document.activeElement && document.activeElement.tagName === 'INPUT') {
                     inputEl = document.activeElement;
                     break;
                 }
-                // 策略B: 搜索页面上可见的 dialog input
                 const dialogs = document.querySelectorAll('[class*="dialog"] input, [class*="popup"] input');
                 if (dialogs.length > 0) {
-                    // 找最后一个出现的通常是正确的
                     inputEl = dialogs[dialogs.length - 1]; 
                     break;
                 }
             }
 
             if (inputEl) {
-                console.log('>>> 捕获到输入框，开始注入:', min);
-                
-                // 4. 暴力注入完整数值 (解决输入错乱)
+                // 4. 暴力注入
                 utils.reactSetValue(inputEl, strMin);
                 
-                // 5. 稍微等一下让 React 反应过来
-                await new Promise(r => setTimeout(r, 100));
+                // 5. 等待搜索结果渲染出来 (这步很重要，必须等列表刷新)
+                await new Promise(r => setTimeout(r, CONFIG.resultWait));
 
-                // 6. 对着这个输入框按回车 (解决回车无效)
-                utils.confirmInput(inputEl);
-            } else {
-                console.warn('>>> 未检测到输入框弹出，可能焦点未切换成功');
+                // 6. 点击搜索结果 (代替回车)
+                utils.confirmByClick(null, min);
             }
         };
 
-        // 执行左屏
+        // 左屏
         await doInject(widgets[0], minutes);
 
-        // 执行右屏
+        // 右屏
         if (widgets[1]) {
-            await new Promise(r => setTimeout(r, 500)); // 间隔长一点更稳
+            await new Promise(r => setTimeout(r, 600)); 
             await doInject(widgets[1], minutes * CONFIG.multiplier);
         }
     };
@@ -202,7 +225,6 @@
         panel.appendChild(btnRef);
         document.body.appendChild(panel);
 
-        // 拖拽
         let isDrag = false, sx, sy, ix, iy;
         panel.onmousedown = (e) => {
             if (e.target.tagName === 'BUTTON') return;
