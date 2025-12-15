@@ -1,20 +1,21 @@
-/* TradingView 云端逻辑 v6.2 (靶向爆破版) */
-/* 修复“不回车”问题：
-   1. 回车键直接发送给 Input 元素，而不是 document
-   2. 增加模糊搜索点击，只要看到包含数字的菜单项就点
+/* TradingView 云端逻辑 v7.0 (焦点锁定+回车轰炸版) */
+/* 修复“不回车”的最终方案：
+   1. 注入数字后，执行 input.focus() 确保光标在里面
+   2. 发送全套 Enter 事件
+   3. 如果还是不行，直接点击列表里匹配的选项
 */
 
 (function() {
     if (document.getElementById('tv-helper-panel')) return;
     
-    console.log('>>> [Cloud v6.2] 靶向确认模式启动');
+    console.log('>>> [Cloud v7.0] 焦点回车模式启动');
 
     // ================= 配置区 =================
     const CONFIG = {
         multiplier: 4,               // 分屏倍数
         presets: [3, 5, 10, 15],     // 预设时间
-        dialogWait: 300,             // 等输入框弹出的时间
-        resultWait: 500              // 【关键】输完数字后，多等一会，让搜索结果加载出来
+        dialogWait: 300,             // 等待弹窗时间
+        inputProcessingWait: 400     // 【关键】输完数字后，等多久让TV去搜索结果
     };
     // ==========================================
 
@@ -51,7 +52,7 @@
             target.dispatchEvent(new MouseEvent('click', eventOpts));
         },
 
-        // 触发弹窗
+        // 触发弹窗 (输入第一个数字)
         triggerDialog: function(firstChar) {
             const key = firstChar.toString();
             const code = `Digit${key}`;
@@ -78,44 +79,53 @@
             input.dispatchEvent(new Event('change', { bubbles: true }));
         },
 
-        // 【核心改进】靶向确认逻辑
-        forceConfirm: function(inputElement, minutes) {
-            // 1. 靶向回车：直接对着 Input 元素按回车 (之前是对 body 按)
+        // 【核心】终极回车方案
+        stormConfirm: function(inputElement, minutes) {
+            // 1. 强制聚焦 (这一步至关重要，没有焦点，回车就是空气)
+            inputElement.focus();
+            
+            console.log('>>> [Confirm] 已强制聚焦，准备回车');
+
+            // 2. 构造最强的回车事件
             const enterCode = 13;
-            const enterEvent = {
-                key: 'Enter', code: 'Enter', keyCode: enterCode, which: enterCode, 
+            const eventInit = {
+                key: 'Enter', code: 'Enter', 
+                keyCode: enterCode, which: enterCode, charCode: enterCode,
                 bubbles: true, cancelable: true, view: window
             };
-            inputElement.dispatchEvent(new KeyboardEvent('keydown', enterEvent));
-            inputElement.dispatchEvent(new KeyboardEvent('keypress', enterEvent));
-            inputElement.dispatchEvent(new KeyboardEvent('keyup', enterEvent));
 
-            console.log('>>> 已发送靶向回车');
+            // 3. 连发三道金牌
+            inputElement.dispatchEvent(new KeyboardEvent('keydown', eventInit));
+            inputElement.dispatchEvent(new KeyboardEvent('keypress', eventInit));
+            inputElement.dispatchEvent(new KeyboardEvent('keyup', eventInit));
 
-            // 2. 视觉搜索点击 (双重保险)
-            // 搜索所有可能的菜单项
+            // 4. 双重保险：尝试查找并点击“高亮”的菜单项
+            // 当你输入"15"后，列表里的"15分钟"通常会变成 active 状态
             setTimeout(() => {
-                const candidates = document.querySelectorAll('div[class*="item-"], div[data-role="menuitem"], span[class*="title-"]');
+                // 查找所有可能的菜单项
+                const items = document.querySelectorAll('div[data-role="menuitem"], div[class*="item-"]');
                 const targetText = minutes.toString();
-                
-                for (let i = candidates.length - 1; i >= 0; i--) {
-                    const el = candidates[i];
-                    // 获取文本并去除空格
+
+                for (let i = items.length - 1; i >= 0; i--) {
+                    const el = items[i];
                     const text = el.innerText.trim();
                     
-                    // 逻辑：如果文本包含数字 (比如 "15" 或 "15分钟") 且 元素是可见的
-                    if ((text === targetText || text.startsWith(targetText + ' ') || text.startsWith(targetText + 'm')) && el.offsetParent !== null) {
-                        console.log('>>> 视觉捕获菜单项，执行点击:', text);
-                        
+                    // 匹配逻辑：
+                    // 1. 文本以数字开头 (如 "15 分钟")
+                    // 2. 或者是 "active" / "selected" 状态 (TV通常会给第一个结果加状态)
+                    const isMatch = text.startsWith(targetText + ' ') || text === targetText || text === targetText + 'm';
+                    const isActive = el.classList.contains('active') || el.classList.contains('selected');
+
+                    if ((isMatch || isActive) && el.offsetParent !== null) {
+                        console.log('>>> [Confirm] 捕获到菜单项，直接点击:', text);
                         const clickOpts = { bubbles: true, cancelable: true, view: window };
                         el.dispatchEvent(new MouseEvent('mousedown', clickOpts));
                         el.dispatchEvent(new MouseEvent('mouseup', clickOpts));
                         el.dispatchEvent(new MouseEvent('click', clickOpts));
-                        return; // 点到一个就收工
+                        return;
                     }
                 }
-                console.warn('>>> 未找到视觉匹配项，仅依靠回车');
-            }, 50);
+            }, 100);
         }
     };
 
@@ -158,7 +168,6 @@
                     inputEl = document.activeElement;
                     break;
                 }
-                // 备用选择器
                 const dialogs = document.querySelectorAll('div[class*="dialog"] input');
                 if (dialogs.length > 0) {
                     inputEl = dialogs[dialogs.length - 1]; 
@@ -167,15 +176,15 @@
             }
 
             if (inputEl) {
-                // 4. 暴力注入
+                // 4. 暴力注入数字
                 utils.reactSetValue(inputEl, min.toString());
                 
-                // 5. 【关键】等待搜索结果加载 (时间调长到了 500ms)
-                // 如果这里等得不够久，菜单还没出来，点击就会失败
-                await new Promise(r => setTimeout(r, CONFIG.resultWait));
+                // 5. 【关键】给 TV 一点时间去刷新下方的搜索列表
+                // 如果回车按太快，列表还没出来，TV 就不知道你要选哪个
+                await new Promise(r => setTimeout(r, CONFIG.inputProcessingWait));
 
-                // 6. 靶向确认 (回车 + 点击)
-                utils.forceConfirm(inputEl, min);
+                // 6. 执行回车轰炸
+                utils.stormConfirm(inputEl, min);
             }
         };
 
@@ -184,7 +193,7 @@
 
         // 右屏
         if (widgets[1]) {
-            await new Promise(r => setTimeout(r, 800)); // 增加间隔，防止干扰
+            await new Promise(r => setTimeout(r, 800)); 
             await doInject(widgets[1], minutes * CONFIG.multiplier);
         }
     };
