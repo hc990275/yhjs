@@ -1,22 +1,24 @@
-/* TradingView 云端逻辑 v5.0 (焦点暴力夺取版) */
-/* 不点顶部菜单，纯键盘流，修复输入不生效的问题 */
+/* TradingView 云端逻辑 v5.1 (拟人打字版) */
+/* 修复数字输入错乱和回车无效的问题：增加按键间隔 */
 
 (function() {
     if (document.getElementById('tv-helper-panel')) return;
     
-    console.log('>>> [Cloud v5.0] 键盘输入模式启动');
+    console.log('>>> [Cloud v5.1] 拟人输入模式启动');
 
     // ================= 配置区 =================
     const CONFIG = {
         multiplier: 4,               // 分屏倍数
         presets: [3, 5, 10, 15],     // 预设时间
-        chartActivateDelay: 200,     // 点击图表后的等待时间
-        typingDelay: 600             // 输入数字后等待回车的时间 (关键!)
+        
+        // --- 核心延迟设置 (单位: 毫秒) ---
+        chartActivateDelay: 300,     // 点击图表后，等待激活的时间
+        keyPressInterval: 200,       // 输数字的手速 (按完1，等多久按5)
+        confirmDelay: 800            // 输完数字后，等多久按回车 (太快会导致回车无效)
     };
     // ==========================================
 
     const utils = {
-        // 创建防冲突按钮
         createBtn: function(text, color, onClick) {
             const btn = document.createElement('button');
             btn.innerText = text;
@@ -33,40 +35,35 @@
             return btn;
         },
 
-        // 核心：强制激活图表 (模拟真实鼠标按下抬起)
+        // 强制激活图表
         activateChart: function(widget) {
             if (!widget) return;
-            // 找到图表内接收点击的核心层
             const target = widget.querySelector('canvas') || widget; 
             const rect = target.getBoundingClientRect();
-            const x = rect.left + rect.width / 2;
-            const y = rect.top + rect.height / 2;
-
-            // 发送全套鼠标事件，确保 TV 认为你点击了这里
+            // 模拟在图表中心点击
             const eventOpts = {
                 bubbles: true, cancelable: true, view: window,
-                clientX: x, clientY: y, buttons: 1
+                clientX: rect.left + rect.width / 2, 
+                clientY: rect.top + rect.height / 2, 
+                buttons: 1
             };
             
             target.dispatchEvent(new MouseEvent('mousedown', eventOpts));
             setTimeout(() => {
                 target.dispatchEvent(new MouseEvent('mouseup', eventOpts));
                 target.dispatchEvent(new MouseEvent('click', eventOpts));
-            }, 10);
+            }, 50);
         },
 
-        // 模拟按键 (发送给 document.body，确保全局捕获)
+        // 模拟按键 (发送给 document.body)
         pressKey: function(key) {
             const code = `Digit${key}`;
             const keyCode = key.charCodeAt(0);
-            
-            // 构造最完整的事件对象，兼容老旧浏览器逻辑
             const evtProps = {
                 key: key, code: code, 
                 keyCode: keyCode, which: keyCode, charCode: keyCode,
                 bubbles: true, cancelable: true, view: window
             };
-
             document.body.dispatchEvent(new KeyboardEvent('keydown', evtProps));
             document.body.dispatchEvent(new KeyboardEvent('keypress', evtProps));
             document.body.dispatchEvent(new KeyboardEvent('keyup', evtProps));
@@ -88,12 +85,11 @@
 
     // --- 业务逻辑 ---
 
-    // 切换单/双屏 (这个必须点菜单，没办法)
+    // 切换单/双屏
     const setLayout = (type) => {
         const btn = document.querySelector('[data-name="header-toolbar-layout-button"]');
         if (!btn) return;
         
-        // 点击布局按钮
         btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true, view: window}));
         
         setTimeout(() => {
@@ -107,44 +103,45 @@
         }, 300);
     };
 
-    // 设置时间 (纯键盘逻辑)
+    // 设置时间 (核心流程优化)
     const setTime = async (minutes) => {
         const widgets = Array.from(document.querySelectorAll('.chart-widget'));
         if (widgets.length === 0) return;
         
-        // 排序
+        // 排序：左 -> 右
         widgets.sort((a, b) => a.getBoundingClientRect().x - b.getBoundingClientRect().x);
 
-        // 执行函数
         const doChange = async (widget, min) => {
             if (!widget) return;
             
-            // 1. 强制激活图表
+            // 1. 激活图表
             utils.activateChart(widget);
             
-            // 等待焦点切换 (TV 反应比较慢，必须等)
+            // 等待激活完成
             await new Promise(r => setTimeout(r, CONFIG.chartActivateDelay));
 
-            // 2. 输入数字
+            // 2. 逐个输入数字 (带间隔)
             const str = min.toString();
             for (let char of str) {
                 utils.pressKey(char);
+                // 【关键】输完一个数字，歇一会再输下一个
+                await new Promise(r => setTimeout(r, CONFIG.keyPressInterval));
             }
 
-            // 3. 等待输入框弹出来 (这是最关键的一步，必须等!)
-            await new Promise(r => setTimeout(r, CONFIG.typingDelay));
+            // 3. 等待对话框完全响应
+            await new Promise(r => setTimeout(r, CONFIG.confirmDelay));
 
-            // 4. 回车
+            // 4. 回车确认
             utils.pressEnter();
         };
 
         // 设左屏
         await doChange(widgets[0], minutes);
 
-        // 设右屏 (如果有)
+        // 设右屏
         if (widgets[1]) {
-            // 中间多等一会，防止输入串台
-            await new Promise(r => setTimeout(r, 400));
+            // 中间多等一会
+            await new Promise(r => setTimeout(r, 600));
             await doChange(widgets[1], minutes * CONFIG.multiplier);
         }
     };
@@ -163,13 +160,11 @@
 
         const groupStyle = 'display:flex; gap:5px; border-right:1px solid #555; padding-right:10px; margin-right:2px;';
 
-        // 组1: 布局
         const grp1 = document.createElement('div');
         grp1.style.cssText = groupStyle;
         grp1.appendChild(utils.createBtn('单屏', '#d1d4dc', () => setLayout('1')));
         grp1.appendChild(utils.createBtn('双屏', '#d1d4dc', () => setLayout('2')));
 
-        // 组2: 时间
         const grp2 = document.createElement('div');
         grp2.style.cssText = groupStyle;
         CONFIG.presets.forEach(m => {
@@ -178,7 +173,6 @@
             grp2.appendChild(btn);
         });
 
-        // 组3: 刷新
         const btnRef = utils.createBtn('↻', '#f0ad4e', () => location.reload());
         btnRef.style.border = 'none';
 
@@ -187,7 +181,7 @@
         panel.appendChild(btnRef);
         document.body.appendChild(panel);
 
-        // 拖拽逻辑
+        // 拖拽
         let isDrag = false, sx, sy, ix, iy;
         panel.onmousedown = (e) => {
             if (e.target.tagName === 'BUTTON') return;
