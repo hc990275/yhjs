@@ -1,52 +1,51 @@
 /* 
-   云端脚本：TradingView 金指数据监控 V9.0 (UI缩放增强+容错版)
+   云端脚本：TradingView 金指数据监控 V10.0 (修复拖动+历史记录+阈值调整)
 */
 
 (function() {
-    console.log(">>> [云端 V9] 启动缩放增强版...");
+    console.log(">>> [云端 V10] 启动...");
 
-    // --- 1. 全局状态管理 ---
+    // --- 1. 全局状态管理 (增加历史队列) ---
     if (!window.__TV_STATE) {
         window.__TV_STATE = {
-            history: {}, 
+            // 存储 MACD 快线的历史数据队列 (只存最近5次)
+            fastLineHistory: {
+                w0: [], // 左分屏
+                w1: []  // 右分屏
+            },
             isCollapsed: false,
-            uiScale: 1.1 // 默认放大一点点 (1.1倍)
+            uiScale: 1.0
         };
     }
 
     // --- 2. UI 构建 ---
-    var old = document.getElementById('tv-monitor-panel-v8'); // 沿用ID防止冲突
+    var old = document.getElementById('tv-monitor-panel-v8');
     if(old) old.remove();
 
     var panel = document.createElement('div');
     panel.id = 'tv-monitor-panel-v8';
     
-    // 基础样式
-    panel.style.cssText = "position:fixed; top:80px; right:60px; background:rgba(25, 25, 25, 0.98); color:#ecf0f1; font-family:'Segoe UI', sans-serif; z-index:999999; border-radius:8px; border: 1px solid #555; box-shadow: 0 10px 40px rgba(0,0,0,0.6); display:flex; flex-direction:column; overflow:hidden;";
+    // 样式优化：默认定位
+    panel.style.cssText = "position:fixed; top:100px; right:100px; background:rgba(30, 30, 30, 0.98); color:#ecf0f1; font-family:'Microsoft YaHei', sans-serif; z-index:999999; border-radius:8px; border: 1px solid #666; box-shadow: 0 8px 30px rgba(0,0,0,0.5); display:flex; flex-direction:column; overflow:hidden;";
     
-    // 应用缩放的函数
     function applyScale() {
-        // 动态调整宽度和字体大小
-        var baseWidth = 360;
-        var baseFont = 12;
+        var baseWidth = 400; // 稍微加宽一点以显示历史数据
+        var baseFont = 13;
         panel.style.width = (baseWidth * window.__TV_STATE.uiScale) + "px";
         panel.style.fontSize = (baseFont * window.__TV_STATE.uiScale) + "px";
     }
-    applyScale(); // 初始化应用
+    applyScale();
 
     // 2.1 标题栏
     var header = document.createElement('div');
-    header.style.cssText = "padding:0.6em 1em; background:#2d3436; cursor:move; font-weight:bold; color:#00b894; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #444; user-select:none;";
+    header.style.cssText = "padding:0.6em; background:#2d3436; cursor:move; font-weight:bold; color:#fab1a0; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #555; user-select:none;";
     
-    // 标题栏按钮布局
     header.innerHTML = `
-        <span>📊 监控系统</span>
-        <div style="display:flex; gap:0.5em; align-items:center;">
-            <button id="btn-zoom-out" style="background:#444; color:white; border:none; border-radius:4px; cursor:pointer; padding:2px 6px; font-size:0.9em;">A-</button>
-            <button id="btn-zoom-in" style="background:#0984e3; color:white; border:none; border-radius:4px; cursor:pointer; padding:2px 6px; font-size:0.9em;">A+</button>
-            <span style="width:10px;"></span>
-            <span id="btn-log" style="cursor:pointer; font-size:1.1em;" title="记录颜色">📋</span>
-            <span id="btn-collapse" style="cursor:pointer; font-size:1.1em;">${window.__TV_STATE.isCollapsed ? '➕' : '➖'}</span>
+        <span>📊 V10 监控</span>
+        <div style="display:flex; gap:6px; align-items:center;">
+            <button id="btn-zoom-out" style="background:#555; color:white; border:none; border-radius:4px; cursor:pointer; font-size:0.8em; padding:2px 6px;">A-</button>
+            <button id="btn-zoom-in" style="background:#0984e3; color:white; border:none; border-radius:4px; cursor:pointer; font-size:0.8em; padding:2px 6px;">A+</button>
+            <span id="btn-collapse" style="cursor:pointer; margin-left:5px;">${window.__TV_STATE.isCollapsed ? '➕' : '➖'}</span>
         </div>
     `;
     panel.appendChild(header);
@@ -61,67 +60,59 @@
     document.body.appendChild(panel);
     if (window.__TV_HOT_CONTEXT) window.__TV_HOT_CONTEXT.panel = panel;
 
-    // --- 3. 交互逻辑 (缩放/折叠/拖动) ---
+    // --- 3. 修复后的拖动逻辑 ---
+    // 关键点：鼠标按下时，将 right: auto，并将 left 固定为当前计算值
+    var isDragging = false, dragStartX, dragStartY;
     
-    // 放大
-    header.querySelector('#btn-zoom-in').onclick = function(e) {
-        e.stopPropagation();
-        window.__TV_STATE.uiScale += 0.1;
-        applyScale();
-    };
-    // 缩小
-    header.querySelector('#btn-zoom-out').onclick = function(e) {
-        e.stopPropagation();
-        if(window.__TV_STATE.uiScale > 0.6) {
-            window.__TV_STATE.uiScale -= 0.1;
-            applyScale();
-        }
-    };
-
-    // 折叠
-    header.querySelector('#btn-collapse').onclick = function(e) {
-        e.stopPropagation();
-        window.__TV_STATE.isCollapsed = !window.__TV_STATE.isCollapsed;
-        this.innerText = window.__TV_STATE.isCollapsed ? '➕' : '➖';
-        content.style.display = window.__TV_STATE.isCollapsed ? "none" : "block";
-    };
-
-    // 颜色日志
-    header.querySelector('#btn-log').onclick = function(e) {
-        e.stopPropagation();
-        scanAndLogColors(); 
-        alert("颜色代码已打印到控制台 (F12 -> Console)");
-    };
-
-    // 拖动
-    var isDragging = false, startX, startY, initialLeft, initialTop;
     header.onmousedown = function(e) {
+        e.preventDefault(); // 防止选中文本
         isDragging = true;
-        startX = e.clientX;
-        startY = e.clientY;
-        initialLeft = panel.offsetLeft;
-        initialTop = panel.offsetTop;
+        dragStartX = e.clientX - panel.offsetLeft;
+        dragStartY = e.clientY - panel.offsetTop;
+        
+        // ★★★ 关键修复：解除 right 定位，锁定 left ★★★
+        panel.style.right = 'auto';
+        panel.style.left = panel.offsetLeft + "px";
         panel.style.opacity = "0.8";
+        panel.style.cursor = "grabbing";
     };
+
     document.onmousemove = function(e) {
         if (isDragging) {
-            var dx = e.clientX - startX;
-            var dy = e.clientY - startY;
-            panel.style.left = (initialLeft + dx) + "px";
-            panel.style.top = (initialTop + dy) + "px";
+            var newLeft = e.clientX - dragStartX;
+            var newTop = e.clientY - dragStartY;
+            
+            // 简单防跑飞限制
+            if(newTop < 0) newTop = 0;
+            
+            panel.style.left = newLeft + "px";
+            panel.style.top = newTop + "px";
         }
     };
+
     document.onmouseup = function() {
-        isDragging = false;
-        panel.style.opacity = "1";
+        if(isDragging) {
+            isDragging = false;
+            panel.style.opacity = "1";
+            panel.style.cursor = "default";
+        }
     };
 
-    // --- 4. 辅助工具 ---
+    // --- 4. 交互逻辑 ---
+    header.querySelector('#btn-zoom-in').onclick = function(e) { e.stopPropagation(); window.__TV_STATE.uiScale += 0.1; applyScale(); };
+    header.querySelector('#btn-zoom-out').onclick = function(e) { e.stopPropagation(); if(window.__TV_STATE.uiScale > 0.6) window.__TV_STATE.uiScale -= 0.1; applyScale(); };
+    header.querySelector('#btn-collapse').onclick = function(e) { 
+        e.stopPropagation(); 
+        window.__TV_STATE.isCollapsed = !window.__TV_STATE.isCollapsed; 
+        this.innerText = window.__TV_STATE.isCollapsed ? '➕' : '➖';
+        content.style.display = window.__TV_STATE.isCollapsed ? "none" : "block"; 
+    };
+
+    // --- 5. 数据辅助 ---
     function parseNum(str) {
         if(!str) return 0;
         return parseFloat(str.replace(/,/g, '').replace(/−/g, '-')) || 0;
     }
-
     function rgbToHex(el) {
         if(!el) return "#fff";
         var rgb = window.getComputedStyle(el).color;
@@ -131,25 +122,8 @@
         var r = (+rgb[0]).toString(16), g = (+rgb[1]).toString(16), b = (+rgb[2]).toString(16);
         return "#" + (r.length==1?"0"+r:r) + (g.length==1?"0"+g:g) + (b.length==1?"0"+b:b);
     }
-
-    // --- 5. 核心逻辑 (V9 容错优化) ---
-
-    function scanAndLogColors() {
-        console.log("=== 📋 颜色抓取日志 ===");
-        var widgets = document.querySelectorAll('.chart-widget');
-        widgets.forEach((widget, idx) => {
-            if(idx > 1) return;
-            var titles = Array.from(widget.querySelectorAll('div[class*="title-"]'));
-            var mainTitle = titles.find(t => (t.innerText.includes("金指") || t.innerText.includes("数据智能")));
-            if(mainTitle) {
-                var values = getIndicatorValues(mainTitle);
-                values.forEach((v, i) => {
-                    console.log(`分屏${idx+1} [Index ${i}] 数值:${v.text} 颜色:%c${v.color}`, `color:${v.color};background:#333`);
-                });
-            }
-        });
-    }
-
+    
+    // 递归获取数值
     function getIndicatorValues(titleEl) {
         var p = titleEl; 
         var results = [];
@@ -174,6 +148,7 @@
         return results;
     }
 
+    // --- 6. 核心业务逻辑 (V10) ---
     function updatePanel() {
         if(window.__TV_STATE.isCollapsed) return;
 
@@ -181,102 +156,114 @@
         var widgets = document.querySelectorAll('.chart-widget');
 
         if(widgets.length < 1) {
-            content.innerHTML = "<div style='padding:1em'>等待图表加载...</div>";
+            content.innerHTML = "<div style='padding:10px'>⏳ 正在等待图表...</div>";
             return;
         }
 
         widgets.forEach((widget, wIdx) => {
             if(wIdx > 1) return;
             
-            var screenName = wIdx === 0 ? "分屏 1 (左)" : "分屏 2 (右)";
-            html += `<div style="background:#333; color:#ffeaa7; padding:0.4em 0.8em; font-weight:bold; margin-top:${wIdx>0?'0.8em':'0'}; border-left:4px solid #00b894;">${screenName}</div>`;
+            var screenName = wIdx === 0 ? "📺 分屏 1 (左)" : "📺 分屏 2 (右)";
+            html += `<div style="background:#444; color:#fff; padding:4px 8px; font-weight:bold; margin-top:${wIdx>0?'8px':'0'}; font-size:0.9em;">${screenName}</div>`;
 
             var allTitles = Array.from(widget.querySelectorAll('div[class*="title-"]')).filter(t => t.innerText.trim().length > 0);
             
-            // --- 指标一：主图 ---
+            // --- 🎯 指标一：主图 (只保留中轨) ---
             var mainChartTitle = allTitles[0];
             if(mainChartTitle) {
                 var vals = getIndicatorValues(mainChartTitle);
-                // V9 修改：不再强制要求13个数据，有多少显示多少，防止报错
-                
-                html += `<table style="width:100%; border-collapse:collapse; margin-bottom:0.5em;">`;
-                
-                // 尝试提取中轨 (Index 0, 3)
+                // 需求：1(Index 0) 和 4(Index 3)
                 if(vals[0] && vals[3]) {
                     var midLen = (vals[3].val - vals[0].val).toFixed(2);
                     html += `
-                        <tr style="border-bottom:1px solid #444;">
-                            <td style="width:20%; color:#aaa;">中轨</td>
-                            <td style="color:${rgbToHex(vals[0].el)}">L:${vals[0].text}</td>
-                            <td style="color:${rgbToHex(vals[3].el)}">H:${vals[3].text}</td>
-                            <td style="text-align:right;"><span style="background:#555; padding:0 0.3em; border-radius:3px;">长:${midLen}</span></td>
-                        </tr>`;
+                        <div style="display:flex; justify-content:space-between; padding:4px 8px; border-bottom:1px dashed #555; background:#222;">
+                            <span style="color:#aaa;">中轨长度</span>
+                            <span style="color:#00b894; font-weight:bold;">${midLen}</span>
+                            <span style="font-size:0.8em; color:#666;">(L:${vals[0].text} H:${vals[3].text})</span>
+                        </div>`;
                 } else {
-                    html += `<tr><td colspan="4" style="color:gray">中轨数据未找到</td></tr>`;
+                    html += `<div style="padding:4px; color:gray; font-size:0.8em;">中轨数据不足</div>`;
                 }
-
-                // 尝试提取牛熊 (Index 10, 11, 12) -> 对应原来的 11, 12, 13
-                // 注意：你截图显示只找到了8个，说明牛熊线可能在 Index 4-7 之间，或者没显示出来
-                // 这里我们做个容错：如果找不到 Index 10，就显示 "未显示"
-                if(vals[10] && vals[11]) {
-                    var midVal = vals[12] ? vals[12].text : "-";
-                    html += `
-                        <tr>
-                            <td style="color:#aaa;">牛熊</td>
-                            <td style="color:${rgbToHex(vals[10].el)}">上:${vals[10].text}</td>
-                            <td style="color:${rgbToHex(vals[11].el)}">下:${vals[11].text}</td>
-                            <td style="text-align:right;">中:${midVal}</td>
-                        </tr>`;
-                } else {
-                    // 如果找不到牛熊，提示当前找到多少个，方便调试
-                    html += `<tr><td colspan="4" style="color:orange; font-size:0.9em;">牛熊数据缺失 (当前只找到 ${vals.length} 个值)</td></tr>`;
-                }
-                html += `</table>`;
             }
 
-            // --- 指标三：MACD ---
-            // 尝试找第3个标题，或者包含 MACD 的
+            // --- 🎯 指标三：MACD ---
             var macdTitle = allTitles[2] || allTitles.find(t => t.innerText.includes("MACD"));
             
             if(macdTitle) {
                 var mVals = getIndicatorValues(macdTitle);
                 // 需求：Index 8(动能), 9(快), 10(慢)
-                if(mVals.length >= 11) { // 稍微放宽一点
+                if(mVals.length >= 11) {
                     var histo = mVals[8];
                     var fast = mVals[9];
                     var slow = mVals[10];
 
-                    var historyKey = `w${wIdx}_histo`;
-                    var prevHisto = window.__TV_STATE.history[historyKey] || histo.val;
-                    var histoTrend = histo.val > prevHisto ? "<span style='color:#ff7675'>↑</span>" : (histo.val < prevHisto ? "<span style='color:#00b894'>↓</span>" : "-");
-                    window.__TV_STATE.history[historyKey] = histo.val;
-
-                    var crossState = fast.val > slow.val ? "<span style='color:#ff7675;font-weight:bold;'>金叉</span>" : (fast.val < slow.val ? "<span style='color:#00b894;font-weight:bold;'>死叉</span>" : "粘合");
-
-                    // 速度计算
-                    var fastKey = `w${wIdx}_fast`;
-                    var prevFast = window.__TV_STATE.history[fastKey];
-                    var speedTip = "<span style='color:gray'>...</span>";
-                    if (prevFast !== undefined) {
-                        var delta = fast.val - prevFast;
-                        var absDelta = Math.abs(delta);
-                        if (absDelta < 0.01) speedTip = "<span style='color:#f1c40f'>→平缓</span>";
-                        else if (delta > 0) speedTip = absDelta > 0.05 ? "<span style='color:#d63031;font-weight:bold;'>🚀急涨</span>" : "<span style='color:#ff7675'>↗缓涨</span>";
-                        else speedTip = absDelta > 0.05 ? "<span style='color:#00b894;font-weight:bold;'>📉急跌</span>" : "<span style='color:#55efc4'>↘缓跌</span>";
+                    // 1. 动能柱逻辑 (跟上一次比)
+                    // 这里的 "上一次" 指的是脚本的上一次刷新，而不是上一根K线
+                    // 如果要跟上一根K线比，需要更复杂的逻辑，目前按用户描述“数值比前一根大就是涨”
+                    // 假设用户看的是实时变动的当前根
+                    var diffHisto = 0; // 暂存变化趋势
+                    
+                    // 2. 历史数据记录 (5次)
+                    var historyArr = window.__TV_STATE.fastLineHistory["w"+wIdx];
+                    
+                    // 防止重复插入相同数据 (每秒刷新太快)
+                    // 只有当数值变化时，或者队列为空时才推入
+                    if(historyArr.length === 0 || historyArr[historyArr.length-1] !== fast.val) {
+                        historyArr.push(fast.val);
+                        if(historyArr.length > 5) historyArr.shift(); // 保持5个
                     }
-                    window.__TV_STATE.history[fastKey] = fast.val;
 
-                    html += `<div style="border-top:1px dashed #555; padding-top:0.3em; font-size:0.9em;">
-                        <div style="display:flex; justify-content:space-between;">
-                            <span>${crossState} | 动能:${histo.text}${histoTrend}</span>
-                            <span>${speedTip}</span>
+                    // 3. 快线平缓/急涨逻辑 (阈值 = 1.0)
+                    var speedTip = "<span style='color:gray'>-</span>";
+                    if(historyArr.length >= 2) {
+                        // 取最新值 和 上一个记录值 对比
+                        var current = fast.val;
+                        var prev = historyArr[historyArr.length - 2]; 
+                        var delta = current - prev;
+                        var absDelta = Math.abs(delta);
+
+                        // ★★★ V10 核心修改：阈值设为 1.0 ★★★
+                        var THRESHOLD = 1.0; 
+
+                        if (absDelta < THRESHOLD) {
+                            speedTip = "<span style='color:#f1c40f'>→ 平缓</span>";
+                        } else if (delta > 0) {
+                            speedTip = "<span style='color:#d63031; font-weight:bold;'>🚀 急涨 (+" + delta.toFixed(2) + ")</span>";
+                        } else {
+                            speedTip = "<span style='color:#00b894; font-weight:bold;'>📉 急跌 (" + delta.toFixed(2) + ")</span>";
+                        }
+                    }
+
+                    // 4. 金叉死叉
+                    var crossState = fast.val > slow.val 
+                        ? "<span style='color:#ff7675; font-weight:bold;'>金叉 (多)</span>" 
+                        : "<span style='color:#00b894; font-weight:bold;'>死叉 (空)</span>";
+                    
+                    if(Math.abs(fast.val - slow.val) < 0.5) crossState = "<span>♾️ 粘合</span>";
+
+                    // 5. 渲染
+                    html += `<div style="padding:4px 8px; font-size:0.9em;">
+                        <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                            <span>MACD: ${crossState}</span>
+                            <span>动能: <span style="color:${rgbToHex(histo.el)}">${histo.text}</span></span>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; background:#333; padding:2px 4px; border-radius:4px;">
+                            <span>快线趋势:</span>
+                            ${speedTip}
+                        </div>
+                        <div style="margin-top:4px; font-size:0.8em; color:#aaa;">
+                            <div>📜 近5次记录:</div>
+                            <div style="word-break:break-all; color:#74b9ff; font-family:monospace;">
+                                ${historyArr.join(" -> ")}
+                            </div>
                         </div>
                     </div>`;
+
                 } else {
-                    html += `<div style="color:gray; font-size:0.9em;">MACD数据不足 (找到${mVals.length}个)</div>`;
+                    html += `<div style="padding:4px; color:gray;">MACD数据不足</div>`;
                 }
             } else {
-                 html += `<div style="color:gray; font-size:0.9em;">未找到MACD指标</div>`;
+                 html += `<div style="padding:4px; color:gray;">未找到MACD</div>`;
             }
         });
 
