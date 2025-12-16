@@ -1,9 +1,9 @@
 /* 
-   云端脚本：TradingView 金指数据监控 V12.0 (红黄蓝智能识别版)
+   云端脚本：TradingView 金指数据监控 V14.0 (强制位置锁定版)
 */
 
 (function() {
-    console.log(">>> [云端 V12] 启动红黄蓝识别...");
+    console.log(">>> [云端 V14] 启动位置锁定...");
 
     // --- 1. 全局状态 ---
     if (!window.__TV_STATE) {
@@ -23,7 +23,7 @@
     panel.style.cssText = "position:fixed; top:100px; right:100px; background:rgba(20, 20, 20, 0.98); color:#ecf0f1; font-family:'Microsoft YaHei', sans-serif; z-index:999999; border-radius:8px; border: 1px solid #555; box-shadow: 0 8px 30px rgba(0,0,0,0.6); display:flex; flex-direction:column; overflow:hidden;";
     
     function applyScale() {
-        var baseWidth = 420; // 加宽以显示状态文字
+        var baseWidth = 420;
         var baseFont = 13;
         panel.style.width = (baseWidth * window.__TV_STATE.uiScale) + "px";
         panel.style.fontSize = (baseFont * window.__TV_STATE.uiScale) + "px";
@@ -34,11 +34,10 @@
     var header = document.createElement('div');
     header.style.cssText = "padding:0.6em; background:#2d3436; cursor:move; font-weight:bold; color:#74b9ff; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #444; user-select:none;";
     header.innerHTML = `
-        <span>📊 V12 红黄蓝监控</span>
+        <span>📊 V14 位置锁定</span>
         <div style="display:flex; gap:6px; align-items:center;">
             <button id="btn-zoom-out" style="background:#555; color:white; border:none; border-radius:4px; cursor:pointer; font-size:0.8em; padding:2px 6px;">A-</button>
             <button id="btn-zoom-in" style="background:#0984e3; color:white; border:none; border-radius:4px; cursor:pointer; font-size:0.8em; padding:2px 6px;">A+</button>
-            <span id="btn-log" style="cursor:pointer; font-size:1.1em;" title="记录颜色日志">📋</span>
             <span id="btn-collapse" style="cursor:pointer; margin-left:5px;">${window.__TV_STATE.isCollapsed ? '➕' : '➖'}</span>
         </div>
     `;
@@ -90,11 +89,6 @@
         this.innerText = window.__TV_STATE.isCollapsed ? '➕' : '➖';
         content.style.display = window.__TV_STATE.isCollapsed ? "none" : "block"; 
     };
-    header.querySelector('#btn-log').onclick = function(e) {
-        e.stopPropagation();
-        scanAndLogColors(); 
-        alert("已打印颜色代码到控制台 (F12)");
-    };
 
     // --- 5. 辅助函数 ---
     function parseNum(str) {
@@ -112,50 +106,21 @@
         return "#" + (r.length==1?"0"+r:r) + (g.length==1?"0"+g:g) + (b.length==1?"0"+b:b);
     }
 
-    // ★★★ 核心：红黄蓝智能识别 ★★★
+    // 红黄蓝识别
     function analyzeColor(el) {
         var rgb = window.getComputedStyle(el).color; 
         if(!rgb) return { state: "未知", color: "#aaa" };
-
-        // 移除空格，统一格式 comparison
         var c = rgb.replace(/\s/g, '');
-
-        // --- 1. 红色系 (多头) ---
-        // 包含: 玫红(254,67,101), 纯红(255,0,0), 橙红(254,114,75)
         if(c.includes("254,67,101") || c.includes("255,0,0") || c.includes("254,114,75")) {
             return { state: "🔴 红色看涨", color: "#ff4757", bg: "rgba(255, 71, 87, 0.2)" };
         }
-        
-        // --- 2. 蓝色系 (空头) ---
-        // 包含: 亮蓝(0,102,255), 深蓝(0,4,255), 浅蓝(82,189,255)
         if(c.includes("0,102,255") || c.includes("0,4,255") || c.includes("82,189,255") || c.includes("82,174,255")) {
              return { state: "🔵 蓝色看跌", color: "#00a8ff", bg: "rgba(0, 168, 255, 0.2)" };
         }
-        
-        // --- 3. 黄色系 (过渡/震荡) ---
-        // 包含: 纯黄(255,255,0), 金黄(255,213,0), 橙黄(254,208,25)
         if(c.includes("255,255,0") || c.includes("255,213,0") || c.includes("254,208,25") || c.includes("254,161,50")) {
              return { state: "🟡 黄色过渡", color: "#fbc531", bg: "rgba(251, 197, 49, 0.2)" };
         }
-
-        // 未知颜色
         return { state: "⚪ 观察中", color: rgbToHex(el), bg: "transparent" };
-    }
-
-    function scanAndLogColors() {
-        console.log("=== 📋 V12 颜色数据库 ===");
-        var widgets = document.querySelectorAll('.chart-widget');
-        widgets.forEach((widget, idx) => {
-            if(idx > 1) return;
-            var titles = Array.from(widget.querySelectorAll('div[class*="title-"]'));
-            var mainTitle = titles.find(t => (t.innerText.includes("金指") || t.innerText.includes("数据智能")));
-            if(mainTitle) {
-                var values = getIndicatorValues(mainTitle);
-                values.forEach((v, i) => {
-                    console.log(`分屏${idx+1} [Index ${i}] 数值:${v.text} 颜色:%c${v.color}`, `color:${v.color};background:#333`);
-                });
-            }
-        });
     }
 
     function getIndicatorValues(titleEl) {
@@ -182,7 +147,7 @@
         return results;
     }
 
-    // --- 6. 业务逻辑 ---
+    // --- 6. 核心业务逻辑 (强制位置索引) ---
     function updatePanel() {
         if(window.__TV_STATE.isCollapsed) return;
 
@@ -200,25 +165,21 @@
             var screenName = wIdx === 0 ? "📺 分屏 1 (左)" : "📺 分屏 2 (右)";
             html += `<div style="background:#333; color:#fff; padding:4px 8px; font-weight:bold; margin-top:${wIdx>0?'8px':'0'}; font-size:0.9em;">${screenName}</div>`;
 
+            // 获取所有标题
+            // 注意：这里我们信任 DOM 顺序：主图 -> 副图1 -> 副图2 -> 副图3
             var allTitles = Array.from(widget.querySelectorAll('div[class*="title-"]')).filter(t => t.innerText.trim().length > 0);
             
-            // --- 🎯 指标一：中轨 红黄蓝识别 ---
+            // --- 🎯 指标一：主图 (Index 0) ---
             var mainChartTitle = allTitles[0];
             if(mainChartTitle) {
                 var vals = getIndicatorValues(mainChartTitle);
                 if(vals[0] && vals[3]) {
                     var midLen = (vals[3].val - vals[0].val).toFixed(2);
-                    
-                    // ★★★ V12 智能识别 ★★★
                     var trendInfo = analyzeColor(vals[0].el); 
-
                     html += `
                         <div style="display:flex; justify-content:space-between; align-items:center; padding:6px 10px; border-bottom:1px dashed #555; background:${trendInfo.bg}; transition: background 0.5s;">
                             <div style="display:flex; flex-direction:column;">
-                                <span style="color:#ddd; font-size:0.8em;">中轨状态</span>
-                                <span style="color:${trendInfo.color}; font-weight:bold; font-size:1.1em;">
-                                    ${trendInfo.state}
-                                </span>
+                                <span style="color:${trendInfo.color}; font-weight:bold; font-size:1.1em;">${trendInfo.state}</span>
                             </div>
                             <div style="text-align:right;">
                                 <div style="color:#aaa; font-size:0.8em;">长度</div>
@@ -226,18 +187,28 @@
                             </div>
                         </div>`;
                 } else {
-                    html += `<div style="padding:4px; color:gray; font-size:0.8em;">中轨数据不足</div>`;
+                    html += `<div style="padding:4px; color:gray; font-size:0.8em;">主图数据不足</div>`;
                 }
+            } else {
+                html += `<div style="padding:4px; color:#e17055; font-size:0.8em;">❌ 找不到主图 (Title[0])</div>`;
             }
 
-            // --- 🎯 指标三：MACD ---
-            var macdTitle = allTitles[2] || allTitles.find(t => t.innerText.includes("MACD"));
+            // --- 🎯 指标三：MACD (强制读取 Index 2) ---
+            // 逻辑：直接读第3个标题。因为用户说名字都一样。
+            // Index: 0=主图, 1=副图1, 2=MACD
+            var macdTitle = null;
+            if (allTitles.length > 2) {
+                macdTitle = allTitles[2];
+            }
+            
             if(macdTitle) {
                 var mVals = getIndicatorValues(macdTitle);
-                if(mVals.length >= 11) {
-                    var histo = mVals[8];
-                    var fast = mVals[9];
-                    var slow = mVals[10];
+                
+                // 检查：是否获取到足够的数据
+                if(mVals.length >= 10) { 
+                    var histo = mVals[8] || mVals[0];
+                    var fast = mVals[9] || mVals[1];
+                    var slow = mVals[10] || mVals[2];
                     
                     var historyArr = window.__TV_STATE.fastLineHistory["w"+wIdx];
                     if(historyArr.length === 0 || historyArr[historyArr.length-1] !== fast.val) {
@@ -250,15 +221,9 @@
                         var current = fast.val;
                         var prev = historyArr[historyArr.length - 2]; 
                         var delta = current - prev;
-                        var THRESHOLD = 1.0; 
-
-                        if (Math.abs(delta) < THRESHOLD) {
-                            speedTip = "<span style='color:#f1c40f'>→ 平缓</span>";
-                        } else if (delta > 0) {
-                            speedTip = "<span style='color:#ff4757; font-weight:bold;'>🚀 急涨</span>";
-                        } else {
-                            speedTip = "<span style='color:#2ed573; font-weight:bold;'>📉 急跌</span>";
-                        }
+                        if (Math.abs(delta) < 1.0) speedTip = "<span style='color:#f1c40f'>→ 平缓</span>";
+                        else if (delta > 0) speedTip = "<span style='color:#ff4757; font-weight:bold;'>🚀 急涨</span>";
+                        else speedTip = "<span style='color:#2ed573; font-weight:bold;'>📉 急跌</span>";
                     }
 
                     var crossState = fast.val > slow.val 
@@ -267,21 +232,27 @@
                     
                     html += `<div style="padding:4px 8px; font-size:0.9em;">
                         <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                            <span>MACD <span style="font-size:0.8em;color:#666;">(Pos:3)</span></span>
                             <span>${crossState}</span>
-                            <span>动能: <span style="color:${rgbToHex(histo.el)}">${histo.text}</span></span>
                         </div>
                         <div style="display:flex; justify-content:space-between; align-items:center; background:#333; padding:2px 4px; border-radius:4px;">
-                            <span>快线: ${speedTip}</span>
+                            <span>动能: <span style="color:${rgbToHex(histo.el)}">${histo.text}</span></span>
+                            <span>${speedTip}</span>
                         </div>
                         <div style="margin-top:4px; font-size:0.8em; color:#aaa; font-family:monospace;">
                             ${historyArr.join(" > ")}
                         </div>
                     </div>`;
                 } else {
-                    html += `<div style="padding:4px; color:gray;">MACD数据不足</div>`;
+                    html += `<div style="padding:4px; color:#fdcb6e; font-size:0.8em;">
+                        已锁定第3个指标<br>但数值似乎被隐藏 (Found:${mVals.length})
+                    </div>`;
                 }
             } else {
-                 html += `<div style="padding:4px; color:gray;">未找到MACD</div>`;
+                 html += `<div style="padding:4px; color:#e17055; font-size:0.8em;">
+                    ❌ 未找到第3个指标<br>
+                    <span style="color:#aaa; font-size:0.7em;">当前只有 ${allTitles.length} 个指标</span>
+                 </div>`;
             }
         });
 
