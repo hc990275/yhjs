@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         TradingView 金指数据监控 V7.5 (快线状态+能量提醒版)
+// @name         TradingView 金指数据监控 V7.6 (自适应窗口版)
 // @namespace    http://tampermonkey.net/
-// @version      7.5
-// @description  抓取数值颜色、支持面板拖动、四角缩放、左右分屏对比、快线状态分析
+// @version      7.7
+// @description  抓取数值颜色、支持面板拖动、四角缩放、左右分屏对比、快线状态分析、窗口自适应、确认按钮
 // @author       You
 // @match        *://*.tradingview.com/*
 // @grant        none
@@ -10,7 +10,7 @@
 
 (function() {
     'use strict';
-    console.log(">>> [云端 V7.5] 启动快线状态分析监控...");
+    console.log(">>> [云端 V7.7] 启动快线状态分析监控（确认按钮版）...");
 
     // --- 0. 清理旧面板 ---
     var old = document.getElementById('tv-monitor-panel-v7');
@@ -65,13 +65,51 @@
         .status-down { color: #ff5252; text-shadow: 0 0 5px rgba(255,82,82,0.5); }
         .status-flat { color: #ffc107; }
         .energy-warning { background: rgba(255,152,0,0.2); border: 1px solid #ff9800; border-radius: 4px; padding: 4px 6px; margin-top: 4px; }
+        
+        /* 自适应内容样式 */
+        .tv-panel-content {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+            overflow-y: auto;
+            overflow-x: hidden;
+            min-height: 0;
+        }
+        .tv-panel-content::-webkit-scrollbar {
+            width: 6px;
+        }
+        .tv-panel-content::-webkit-scrollbar-thumb {
+            background: #555;
+            border-radius: 3px;
+        }
+        .tv-panel-content::-webkit-scrollbar-track {
+            background: #222;
+        }
+        .tv-analysis-box {
+            flex-shrink: 0;
+            margin-bottom: 6px;
+        }
+        .tv-data-grid {
+            display: grid;
+            gap: 4px;
+        }
+        .tv-screen-box {
+            background: #222;
+            padding: 8px;
+            border-radius: 5px;
+            border: 1px solid #444;
+        }
+        .tv-resonance-box {
+            flex-shrink: 0;
+            margin-top: 6px;
+        }
     `;
     document.head.appendChild(globalStyle);
 
     // --- 1. 主监控面板创建 (默认隐藏) ---
     var panel = document.createElement('div');
     panel.id = 'tv-monitor-panel-v7';
-    panel.style.cssText = "position:fixed; top:100px; right:20px; width:380px; height:400px; background:rgba(20,20,20,0.95); color:#ecf0f1; font-family:'Consolas',monospace; font-size:12px; z-index:999999; border-radius:8px; border:1px solid #444; box-shadow:0 8px 20px rgba(0,0,0,0.6); display:none; flex-direction:column; overflow:hidden;";
+    panel.style.cssText = "position:fixed; top:100px; right:20px; width:380px; height:400px; background:rgba(20,20,20,0.95); color:#ecf0f1; font-family:'Consolas',monospace; font-size:12px; z-index:999999; border-radius:8px; border:1px solid #444; box-shadow:0 8px 20px rgba(0,0,0,0.6); display:none; flex-direction:column; overflow:hidden; min-width:200px; min-height:150px;";
     
     // 添加缩放手柄
     var resizeHandles = ['nw', 'ne', 'sw', 'se', 'n', 's', 'w', 'e'];
@@ -100,7 +138,8 @@
 
     var content = document.createElement('div');
     content.id = 'panel-content';
-    content.style.cssText = "padding:8px; overflow-y:auto; flex:1;";
+    content.className = 'tv-panel-content';
+    content.style.cssText = "padding:8px;";
     panel.appendChild(content);
 
     document.body.appendChild(panel);
@@ -108,7 +147,7 @@
     // --- 2. 分析框面板创建 ---
     var analysisPanel = document.createElement('div');
     analysisPanel.id = 'tv-analysis-panel';
-    analysisPanel.style.cssText = "position:fixed; top:60px; left:20px; width:360px; height:auto; max-height:80vh; background:rgba(15,15,25,0.98); color:#ecf0f1; font-family:'Consolas',monospace; font-size:11px; z-index:999998; border-radius:8px; border:2px solid #e74c3c; box-shadow:0 8px 25px rgba(231,76,60,0.3); display:flex; flex-direction:column; overflow:hidden;";
+    analysisPanel.style.cssText = "position:fixed; top:60px; left:20px; width:360px; height:450px; background:rgba(15,15,25,0.98); color:#ecf0f1; font-family:'Consolas',monospace; font-size:11px; z-index:999998; border-radius:8px; border:2px solid #e74c3c; box-shadow:0 8px 25px rgba(231,76,60,0.3); display:flex; flex-direction:column; overflow:hidden; min-width:250px; min-height:200px;";
 
     // 添加缩放手柄到分析框
     resizeHandles.forEach(function(dir) {
@@ -167,7 +206,8 @@
 
     var analysisContent = document.createElement('div');
     analysisContent.id = 'analysis-content';
-    analysisContent.style.cssText = "padding:8px; overflow-y:auto; flex:1;";
+    analysisContent.className = 'tv-panel-content';
+    analysisContent.style.cssText = "padding:8px;";
     analysisPanel.appendChild(analysisContent);
 
     document.body.appendChild(analysisPanel);
@@ -514,17 +554,17 @@
                 var crossColor = isGoldenCross ? '#ffd700' : '#9b59b6';
                 var borderColor = fastStatus.class === 'status-up' ? '#00ff7f' : (fastStatus.class === 'status-down' ? '#ff5252' : '#ffc107');
 
-                html += "<div style='background:#222;padding:8px;margin-bottom:4px;border-radius:4px;border-left:4px solid " + borderColor + ";'>";
+                html += "<div class='tv-analysis-box' style='background:#222;padding:8px;border-radius:4px;border-left:4px solid " + borderColor + ";'>";
                 
                 // 第一行：屏幕名 + 快线状态 + 金叉死叉
-                html += "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;'>";
+                html += "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:4px;'>";
                 html += "<span style='color:#ffd700;font-weight:bold;font-size:13px;'>" + screen.name + "</span>";
                 html += "<span class='" + fastStatus.class + "' style='font-size:15px;font-weight:bold;'>" + fastStatus.simple + "</span>";
                 html += "<span style='color:" + crossColor + ";font-size:11px;'>" + crossIcon + "</span>";
                 html += "</div>";
                 
-                // 第二行：数据
-                html += "<div style='display:grid;grid-template-columns:1fr 1fr;gap:4px;font-size:10px;'>";
+                // 第二行：数据 - 自适应网格
+                html += "<div class='tv-data-grid' style='grid-template-columns:repeat(auto-fit,minmax(100px,1fr));font-size:10px;'>";
                 html += "<div>中轨: <span style='color:" + railHex + ";font-weight:bold;'>" + railLength + "</span></div>";
                 html += "<div style='color:" + momStatus.color + ";'>" + momStatus.side + ": " + momentum.toFixed(3) + "</div>";
                 html += "<div>快线: <span style='color:#2196f3;'>" + fastLine.toFixed(3) + "</span> <span class='" + fastStatus.class + "' style='font-size:9px;'>(" + (fastLineChange >= 0 ? '+' : '') + fastLineChange.toFixed(4) + ")</span></div>";
@@ -544,8 +584,8 @@
                 var momStatus = result.momentumStatus || { side: '—', status: '—', color: '#888' };
                 var borderColor = fastStatus.class === 'status-up' ? '#00ff7f' : (fastStatus.class === 'status-down' ? '#ff5252' : '#ffc107');
 
-                html += "<div style='background:#222;padding:10px;margin-bottom:6px;border-radius:5px;border:1px solid #444;border-left:4px solid " + borderColor + ";'>";
-                html += "<div style='color:#ffd700;font-weight:bold;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid #333;display:flex;justify-content:space-between;align-items:center;'>";
+                html += "<div class='tv-analysis-box tv-screen-box' style='border-left:4px solid " + borderColor + ";'>";
+                html += "<div style='color:#ffd700;font-weight:bold;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid #333;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;'>";
                 html += "<span style='font-size:13px;'>" + screen.name + "</span>";
                 if (config.analysisMode === 'period') {
                     html += "<span style='font-size:9px;color:#888;'>周期:" + (config.periodTime/1000) + "秒</span>";
@@ -554,7 +594,7 @@
                 html += "<span class='" + fastStatus.class + "' style='font-size:16px;font-weight:bold;'>" + fastStatus.text + "</span>";
                 html += "</div>";
 
-                // 中轨
+                // 中轨 - 自适应
                 html += "<div style='margin-bottom:8px;padding:6px;background:rgba(0,0,0,0.2);border-radius:4px;'>";
                 html += "<span style='color:#aaa;font-size:10px;'>📈 中轨长度:</span> ";
                 html += "<span style='color:" + railHex + ";font-size:16px;font-weight:bold;'>" + railLength + "</span>";
@@ -569,16 +609,16 @@
 
                     html += "<div style='padding:8px;border-radius:4px;" + crossBg + "'>";
                     
-                    // 金叉死叉 + 快线状态 + 动能状态
+                    // 金叉死叉 + 快线状态 + 动能状态 - 自适应flex
                     html += "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:4px;'>";
                     html += "<span style='font-size:14px;font-weight:bold;'>" + crossText + "</span>";
                     html += "<span class='" + fastStatus.class + "' style='font-size:12px;font-weight:bold;'>快线" + fastStatus.text + "</span>";
                     html += "<span style='color:" + momStatus.color + ";font-size:11px;'>" + momStatus.side + momStatus.status + "</span>";
                     html += "</div>";
                     
-                    // 数值详情
-                    html += "<div style='display:grid;grid-template-columns:1fr 1fr 1fr;gap:6px;font-size:10px;background:rgba(0,0,0,0.2);padding:6px;border-radius:3px;'>";
-                    html += "<div style='text-align:center;'><div style='color:#888;font-size:9px;'>动能柱(9)</div><div style='color:" + momStatus.color + ";font-weight:bold;font-size:12px;'>" + momentum.toFixed(3) + "</div><div style='font-size:8px;color:#666;'>(" + (momentumChange >= 0 ? '+' : '') + momentumChange.toFixed(4) + ")</div></div>";
+                    // 数值详情 - 自适应网格
+                    html += "<div class='tv-data-grid' style='grid-template-columns:repeat(auto-fit,minmax(80px,1fr));font-size:10px;background:rgba(0,0,0,0.2);padding:6px;border-radius:3px;'>";
+                    html += "<div style='text-align:center;'><div style='color:#888;font-size:9px;'>动能(9)</div><div style='color:" + momStatus.color + ";font-weight:bold;font-size:12px;'>" + momentum.toFixed(3) + "</div><div style='font-size:8px;color:#666;'>(" + (momentumChange >= 0 ? '+' : '') + momentumChange.toFixed(4) + ")</div></div>";
                     html += "<div style='text-align:center;'><div style='color:#888;font-size:9px;'>快线(10)</div><div style='color:#2196f3;font-weight:bold;font-size:12px;'>" + fastLine.toFixed(3) + "</div><div class='" + fastStatus.class + "' style='font-size:8px;'>(" + (fastLineChange >= 0 ? '+' : '') + fastLineChange.toFixed(4) + ")</div></div>";
                     html += "<div style='text-align:center;'><div style='color:#888;font-size:9px;'>慢线(11)</div><div style='color:#ffeb3b;font-weight:bold;font-size:12px;'>" + slowLine.toFixed(3) + "</div></div>";
                     html += "</div>";
@@ -601,9 +641,9 @@
         if (leftResult && rightResult && leftResult.fastLineStatus && rightResult.fastLineStatus) {
             // 双屏同时金叉
             if (leftResult.isGoldenCross && rightResult.isGoldenCross) {
-                html += "<div style='background:linear-gradient(135deg,rgba(255,215,0,0.3),rgba(255,165,0,0.2));border:3px solid #ffd700;border-radius:8px;padding:12px;margin-top:8px;text-align:center;animation:strongPulse 1s infinite;'>";
-                html += "<div style='color:#ffd700;font-size:18px;font-weight:bold;text-shadow:0 0 15px #ffd700;'>🌟🌟 双屏金叉共振！！🌟🌟</div>";
-                html += "<div style='color:#ffeb3b;font-size:11px;margin-top:4px;'>左右两屏同时处于金叉状态</div>";
+                html += "<div class='tv-resonance-box' style='background:linear-gradient(135deg,rgba(255,215,0,0.3),rgba(255,165,0,0.2));border:3px solid #ffd700;border-radius:8px;padding:10px;text-align:center;animation:strongPulse 1s infinite;'>";
+                html += "<div style='color:#ffd700;font-size:16px;font-weight:bold;text-shadow:0 0 15px #ffd700;'>🌟🌟 双屏金叉共振！！🌟🌟</div>";
+                html += "<div style='color:#ffeb3b;font-size:10px;margin-top:3px;'>左右两屏同时处于金叉状态</div>";
                 html += "</div>";
                 
                 document.getElementById('alert-status').textContent = '🌟🌟 双屏金叉！';
@@ -611,9 +651,9 @@
             }
             // 双屏同时死叉
             else if (!leftResult.isGoldenCross && !rightResult.isGoldenCross && historyData.left.fastLine.length > 2) {
-                html += "<div style='background:linear-gradient(135deg,rgba(138,43,226,0.3),rgba(75,0,130,0.2));border:3px solid #8a2be2;border-radius:8px;padding:12px;margin-top:8px;text-align:center;animation:strongPulse 1s infinite;'>";
-                html += "<div style='color:#9b59b6;font-size:18px;font-weight:bold;text-shadow:0 0 15px #8a2be2;'>💀💀 双屏死叉共振！！💀💀</div>";
-                html += "<div style='color:#bb86fc;font-size:11px;margin-top:4px;'>左右两屏同时处于死叉状态</div>";
+                html += "<div class='tv-resonance-box' style='background:linear-gradient(135deg,rgba(138,43,226,0.3),rgba(75,0,130,0.2));border:3px solid #8a2be2;border-radius:8px;padding:10px;text-align:center;animation:strongPulse 1s infinite;'>";
+                html += "<div style='color:#9b59b6;font-size:16px;font-weight:bold;text-shadow:0 0 15px #8a2be2;'>💀💀 双屏死叉共振！！💀💀</div>";
+                html += "<div style='color:#bb86fc;font-size:10px;margin-top:3px;'>左右两屏同时处于死叉状态</div>";
                 html += "</div>";
                 
                 document.getElementById('alert-status').textContent = '💀💀 双屏死叉！';
@@ -621,9 +661,9 @@
             }
             // 双屏快线同时上涨
             else if (leftResult.fastLineStatus.class === 'status-up' && rightResult.fastLineStatus.class === 'status-up') {
-                html += "<div style='background:rgba(0,255,127,0.2);border:2px solid #00ff7f;border-radius:6px;padding:10px;margin-top:6px;text-align:center;animation:pulse 1s infinite;'>";
-                html += "<div style='color:#00ff7f;font-size:16px;font-weight:bold;text-shadow:0 0 10px #00ff7f;'>🚀🚀 双屏快线同步上涨！🚀🚀</div>";
-                html += "<div style='font-size:10px;color:#7bed9f;margin-top:3px;'>左: +" + leftResult.fastLineChange.toFixed(4) + " | 右: +" + rightResult.fastLineChange.toFixed(4) + "</div>";
+                html += "<div class='tv-resonance-box' style='background:rgba(0,255,127,0.2);border:2px solid #00ff7f;border-radius:6px;padding:8px;text-align:center;animation:pulse 1s infinite;'>";
+                html += "<div style='color:#00ff7f;font-size:14px;font-weight:bold;text-shadow:0 0 10px #00ff7f;'>🚀🚀 双屏快线同步上涨！🚀🚀</div>";
+                html += "<div style='font-size:9px;color:#7bed9f;margin-top:2px;'>左: +" + leftResult.fastLineChange.toFixed(4) + " | 右: +" + rightResult.fastLineChange.toFixed(4) + "</div>";
                 html += "</div>";
                 
                 document.getElementById('alert-status').textContent = '🚀 双屏上涨';
@@ -631,9 +671,9 @@
             }
             // 双屏快线同时下跌
             else if (leftResult.fastLineStatus.class === 'status-down' && rightResult.fastLineStatus.class === 'status-down') {
-                html += "<div style='background:rgba(255,82,82,0.2);border:2px solid #ff5252;border-radius:6px;padding:10px;margin-top:6px;text-align:center;animation:pulse 1s infinite;'>";
-                html += "<div style='color:#ff5252;font-size:16px;font-weight:bold;text-shadow:0 0 10px #ff5252;'>💥💥 双屏快线同步下跌！💥💥</div>";
-                html += "<div style='font-size:10px;color:#ff6b6b;margin-top:3px;'>左: " + leftResult.fastLineChange.toFixed(4) + " | 右: " + rightResult.fastLineChange.toFixed(4) + "</div>";
+                html += "<div class='tv-resonance-box' style='background:rgba(255,82,82,0.2);border:2px solid #ff5252;border-radius:6px;padding:8px;text-align:center;animation:pulse 1s infinite;'>";
+                html += "<div style='color:#ff5252;font-size:14px;font-weight:bold;text-shadow:0 0 10px #ff5252;'>💥💥 双屏快线同步下跌！💥💥</div>";
+                html += "<div style='font-size:9px;color:#ff6b6b;margin-top:2px;'>左: " + leftResult.fastLineChange.toFixed(4) + " | 右: " + rightResult.fastLineChange.toFixed(4) + "</div>";
                 html += "</div>";
                 
                 document.getElementById('alert-status').textContent = '💥 双屏下跌';
