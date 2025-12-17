@@ -1,10 +1,10 @@
 /* 
-   云端脚本：TradingView 金指数据监控 V7.0 (颜色识别+拖动+对比版)
+   云端脚本：TradingView 金指数据监控 V7.0
    功能：抓取数值颜色、支持面板拖动、左右分屏并排对比
 */
 
 (function() {
-    console.log(">>> [云端 V7] 启动颜色对比监控...");
+    console.log(">>> [云端 V7]");
 
     // --- 1. 面板创建与样式 (支持拖动) ---
     // 如果旧面板存在，先移除
@@ -136,7 +136,7 @@
         // --- 5. 生成对比表格 ---
         var html = "";
         
-        // 假设左右两边的指标顺序是一样的（主图vs主图，副图vs副图）
+        // 左右两边的指标顺序是一样的（主图vs主图，副图vs副图）
         // 这里的 maxLen 是为了防止某一屏指标没加载出来
         var maxRows = Math.max(chartData[0]?.length || 0, chartData[1]?.length || 0);
 
@@ -151,7 +151,7 @@
             
             // 表头
             html += "<div style='display:grid; grid-template-columns: 30px 1fr 1fr; gap:2px; font-size:10px; color:#aaa; margin-bottom:2px;'>";
-            html += "<div>ID</div><div>左屏(40分)</div><div>右屏(10分)</div></div>";
+            html += "<div>ID</div><div>左屏</div><div>右屏</div></div>";
 
             // 数据行对比
             var maxVals = Math.max(leftItem?.data.length || 0, rightItem?.data.length || 0);
