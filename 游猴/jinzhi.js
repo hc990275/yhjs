@@ -38,11 +38,11 @@
         alertDuration: {
             long: 5000,      // 做多遮罩5秒
             short: 5000,     // 做空遮罩5秒
-            bounce: 8000,    // 归零反弹8秒（延长）
-            pullback: 8000   // 归零反抽8秒（延长）
+            bounce: 5000,    // 归零反弹5秒（延长）
+            pullback: 5000   // 归零反抽5秒（延长）
         },
-        alertCooldown: 30000,  // 同类型信号间隔30秒
-        maxAlertCount: 3       // 每个信号最多提醒3次
+        alertCooldown: 3000,  // 同类型信号间隔3秒
+        maxAlertCount: 2       // 每个信号最多提醒2次
     };
 
     // --- 从本地存储加载配置 ---
