@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         TradingView 金指数据监控 V7.1 (颜色识别+拖动+对比+分析框版)
+// @name         TradingView 金指数据监控 V7.2 (完整分析版+警报)
 // @namespace    http://tampermonkey.net/
-// @version      7.1
-// @description  抓取数值颜色、支持面板拖动、左右分屏并排对比、分析框显示中轨和MACD
+// @version      7.2
+// @description  抓取数值颜色、支持面板拖动、左右分屏对比、分析框显示中轨和MACD、双向共振警报
 // @author       You
 // @match        *://*.tradingview.com/*
 // @grant        none
@@ -10,7 +10,7 @@
 
 (function() {
     'use strict';
-    console.log(">>> [云端 V7.1] 启动颜色对比监控 + 分析框...");
+    console.log(">>> [云端 V7.2] 启动颜色对比监控 + 分析框 + 警报...");
 
     // --- 0. 清理旧面板 ---
     var old = document.getElementById('tv-monitor-panel-v7');
@@ -18,36 +18,70 @@
     var oldAnalysis = document.getElementById('tv-analysis-panel');
     if(oldAnalysis) oldAnalysis.remove();
 
-    // --- 1. 主监控面板创建 ---
+    // --- 音频上下文用于警报 ---
+    var audioCtx = null;
+    var lastAlertTime = 0;
+    var alertCooldown = 5000; // 5秒冷却时间
+
+    function playAlertSound(type) {
+        var now = Date.now();
+        if (now - lastAlertTime < alertCooldown) return; // 冷却中
+        lastAlertTime = now;
+
+        try {
+            if (!audioCtx) {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            }
+            
+            var oscillator = audioCtx.createOscillator();
+            var gainNode = audioCtx.createGain();
+            
+            oscillator.connect(gainNode);
+            gainNode.connect(audioCtx.destination);
+            
+            if (type === 'up') {
+                // 上涨警报：高音连续
+                oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
+                oscillator.frequency.setValueAtTime(1100, audioCtx.currentTime + 0.1);
+                oscillator.frequency.setValueAtTime(1320, audioCtx.currentTime + 0.2);
+            } else {
+                // 下跌警报：低音连续
+                oscillator.frequency.setValueAtTime(440, audioCtx.currentTime);
+                oscillator.frequency.setValueAtTime(330, audioCtx.currentTime + 0.1);
+                oscillator.frequency.setValueAtTime(220, audioCtx.currentTime + 0.2);
+            }
+            
+            gainNode.gain.setValueAtTime(0.3, audioCtx.currentTime);
+            gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+            
+            oscillator.start(audioCtx.currentTime);
+            oscillator.stop(audioCtx.currentTime + 0.5);
+        } catch(e) {
+            console.log("警报声音播放失败:", e);
+        }
+    }
+
+    // --- 1. 主监控面板创建 (默认隐藏) ---
     var panel = document.createElement('div');
     panel.id = 'tv-monitor-panel-v7';
-    panel.style.cssText = "position:fixed; top:100px; right:100px; width:400px; background:rgba(20, 20, 20, 0.95); color:#ecf0f1; font-family:'Consolas', monospace; font-size:12px; z-index:999999; border-radius:8px; border: 1px solid #444; box-shadow: 0 8px 20px rgba(0,0,0,0.6); display:flex; flex-direction:column; overflow:hidden; resize:both; min-width:300px; min-height:150px;";
+    panel.style.cssText = "position:fixed; top:100px; right:100px; width:420px; background:rgba(20, 20, 20, 0.95); color:#ecf0f1; font-family:'Consolas', monospace; font-size:12px; z-index:999999; border-radius:8px; border: 1px solid #444; box-shadow: 0 8px 20px rgba(0,0,0,0.6); display:none; flex-direction:column; overflow:hidden; resize:both; min-width:300px; min-height:150px;";
     
     // 标题栏 (用于拖动)
     var header = document.createElement('div');
     header.style.cssText = "padding:8px; background:#2d3436; cursor:move; font-weight:bold; color:#00b894; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #444; user-select:none;";
-    header.innerHTML = "<span>⚖️ 金指系统多空共振 V7</span><span style='font-size:10px;color:#aaa'>按住拖动 | 右下角缩放</span>";
+    header.innerHTML = "<span>⚖️ 金指系统多空共振 V7 - 原始数据</span><span style='font-size:10px;color:#aaa'>按住拖动 | 右下角缩放</span>";
     panel.appendChild(header);
 
     // 录制控制栏
     var controlBar = document.createElement('div');
     controlBar.style.cssText = "display:flex; align-items:center; gap:8px; padding:6px 10px; background:#1a1a1a; border-bottom:1px solid #444;";
-    controlBar.innerHTML = `
-        <button id="btn-start" style="padding:4px 10px; border-radius:4px; font-size:11px; cursor:pointer; border:none; background:#27ae60; color:#fff;">▶️ 开始记录</button>
-        <button id="btn-stop" style="padding:4px 10px; border-radius:4px; font-size:11px; cursor:pointer; border:none; background:#c0392b; color:#fff;" disabled>⏹️ 停止记录</button>
-        <button id="btn-export" style="padding:4px 10px; border-radius:4px; font-size:11px; cursor:pointer; border:none; background:#2980b9; color:#fff;">📥 导出数据</button>
-        <span id="record-status" style="font-size:10px; color:#888; margin-left:auto;">未开始</span>
-    `;
+    controlBar.innerHTML = '<button id="btn-start" style="padding:4px 10px; border-radius:4px; font-size:11px; cursor:pointer; border:none; background:#27ae60; color:#fff;">▶️ 开始记录</button><button id="btn-stop" style="padding:4px 10px; border-radius:4px; font-size:11px; cursor:pointer; border:none; background:#c0392b; color:#fff;" disabled>⏹️ 停止记录</button><button id="btn-export" style="padding:4px 10px; border-radius:4px; font-size:11px; cursor:pointer; border:none; background:#2980b9; color:#fff;">📥 导出数据</button><span id="record-status" style="font-size:10px; color:#888; margin-left:auto;">未开始</span>';
     panel.appendChild(controlBar);
 
     // 记录统计栏
     var statsBar = document.createElement('div');
     statsBar.style.cssText = "display:flex; align-items:center; gap:15px; padding:4px 10px; background:#111; border-bottom:1px solid #444; font-size:11px;";
-    statsBar.innerHTML = `
-        <span>📊 已记录: <span id="record-count" style="color:#00bcd4; font-weight:bold;">0</span> 条</span>
-        <span>⏱️ 时长: <span id="record-duration" style="color:#ffc107;">00:00:00</span></span>
-        <span id="recording-indicator" style="display:none; color:#f44336;">● 录制中</span>
-    `;
+    statsBar.innerHTML = '<span>📊 已记录: <span id="record-count" style="color:#00bcd4; font-weight:bold;">0</span> 条</span><span>⏱️ 时长: <span id="record-duration" style="color:#ffc107;">00:00:00</span></span><span id="recording-indicator" style="display:none; color:#f44336;">● 录制中</span>';
     panel.appendChild(statsBar);
 
     // 内容区
@@ -60,16 +94,22 @@
     // --- 2. 分析框面板创建 ---
     var analysisPanel = document.createElement('div');
     analysisPanel.id = 'tv-analysis-panel';
-    analysisPanel.style.cssText = "position:fixed; top:100px; left:100px; width:420px; background:rgba(15, 15, 25, 0.98); color:#ecf0f1; font-family:'Consolas', monospace; font-size:12px; z-index:999998; border-radius:10px; border: 2px solid #e74c3c; box-shadow: 0 10px 30px rgba(231, 76, 60, 0.3); display:flex; flex-direction:column; overflow:hidden; resize:both; min-width:320px; min-height:200px;";
+    analysisPanel.style.cssText = "position:fixed; top:100px; left:100px; width:480px; background:rgba(15, 15, 25, 0.98); color:#ecf0f1; font-family:'Consolas', monospace; font-size:12px; z-index:999998; border-radius:10px; border: 2px solid #e74c3c; box-shadow: 0 10px 30px rgba(231, 76, 60, 0.3); display:flex; flex-direction:column; overflow:hidden; resize:both; min-width:350px; min-height:200px;";
 
     var analysisHeader = document.createElement('div');
     analysisHeader.style.cssText = "padding:10px 14px; background:linear-gradient(135deg, #c0392b 0%, #e74c3c 100%); cursor:move; font-weight:bold; color:#fff; display:flex; justify-content:space-between; align-items:center; border-bottom:2px solid #922b21; user-select:none;";
     analysisHeader.innerHTML = "<span>🎯 分析框</span><span style='font-size:10px; opacity:0.8;'>按住拖动 | 右下角缩放</span>";
     analysisPanel.appendChild(analysisHeader);
 
+    // 分析框控制栏
+    var analysisControlBar = document.createElement('div');
+    analysisControlBar.style.cssText = "display:flex; align-items:center; gap:8px; padding:6px 10px; background:#1a1a1a; border-bottom:1px solid #444;";
+    analysisControlBar.innerHTML = '<button id="btn-toggle-raw" style="padding:4px 12px; border-radius:4px; font-size:11px; cursor:pointer; border:none; background:#8e44ad; color:#fff;">📋 查看原始数据</button><button id="btn-toggle-sound" style="padding:4px 12px; border-radius:4px; font-size:11px; cursor:pointer; border:none; background:#27ae60; color:#fff;">🔔 警报开启</button><span id="alert-status" style="font-size:10px; color:#888; margin-left:auto;">等待数据...</span>';
+    analysisPanel.appendChild(analysisControlBar);
+
     var analysisContent = document.createElement('div');
     analysisContent.id = 'analysis-content';
-    analysisContent.style.cssText = "padding:12px; overflow-y:auto; flex:1;";
+    analysisContent.style.cssText = "padding:12px; overflow-y:auto; flex:1; max-height:600px;";
     analysisPanel.appendChild(analysisContent);
 
     document.body.appendChild(analysisPanel);
@@ -114,19 +154,31 @@
     var isRecording = false;
     var recordStartTime = null;
     var durationTimer = null;
+    var soundEnabled = true;
+    
+    // 历史数据用于趋势判断
     var historyData = {
-        left: { fastLine: [] },
-        right: { fastLine: [] }
+        left: { fastLine: [], momentum: [] },
+        right: { fastLine: [], momentum: [] }
     };
 
     // --- 5. 辅助函数 ---
+    function parseNumber(str) {
+        if (!str) return 0;
+        // 处理特殊负号字符 "−" (Unicode U+2212) 转为普通减号
+        var cleaned = str.replace(/−/g, '-').replace(/,/g, '').trim();
+        var num = parseFloat(cleaned);
+        return isNaN(num) ? 0 : num;
+    }
+
     function getColorName(rgbStr) {
         if(!rgbStr) return "N/A";
-        if(rgbStr.includes("255, 82, 82")) return "🔴红";
-        if(rgbStr.includes("0, 255")) return "🟢绿"; 
-        if(rgbStr.includes("33, 150, 243")) return "🔵蓝";
+        if(rgbStr.includes("254, 67, 101") || rgbStr.includes("255, 0, 0") || rgbStr.includes("255, 80, 112")) return "🔴红";
+        if(rgbStr.includes("0, 255") || rgbStr.includes("82, 189") || rgbStr.includes("82, 154")) return "🟢绿"; 
+        if(rgbStr.includes("33, 150, 243") || rgbStr.includes("41, 98, 255") || rgbStr.includes("34, 107, 255")) return "🔵蓝";
         if(rgbStr.includes("255, 255, 255")) return "⚪白";
-        if(rgbStr.includes("255, 235, 59")) return "🟡黄";
+        if(rgbStr.includes("255, 235, 59") || rgbStr.includes("255, 213, 0") || rgbStr.includes("230, 255, 41")) return "🟡黄";
+        if(rgbStr.includes("82, 174, 255")) return "🔵浅蓝";
         return "🎨色"; 
     }
 
@@ -152,6 +204,7 @@
     // --- 6. 分析框更新逻辑 ---
     function updateAnalysisPanel(chartData) {
         var html = '';
+        var analysisResults = { left: null, right: null };
         
         var screens = [
             { name: '左屏', data: chartData[0], key: 'left' },
@@ -166,32 +219,38 @@
                 return;
             }
 
+            var result = { trend: null, fastLineUp: null };
+
             html += "<div style='background:rgba(0,0,0,0.4); border-radius:6px; padding:10px; margin-bottom:10px; border:1px solid #555;'>";
             html += "<div style='color:#ffd700; font-weight:bold; margin-bottom:8px; padding-bottom:5px; border-bottom:1px solid #444;'>📊 " + screen.name + "分析</div>";
 
-            // 1. 主图分析 - 中轨长度 (假设第一个指标是主图)
+            // 1. 主图分析 - 中轨长度 (第一个指标的前4个数据)
             var mainChart = screen.data[0];
             if (mainChart && mainChart.data && mainChart.data.length >= 4) {
-                var id1 = parseFloat(mainChart.data[0].val) || 0;
-                var id4 = parseFloat(mainChart.data[3].val) || 0;
-                var railLength = (id4 - id1).toFixed(2);
+                var id1 = parseNumber(mainChart.data[0].val); // 中轨最小值
+                var id4 = parseNumber(mainChart.data[3].val); // 中轨最大值
+                var railLength = (id4 - id1).toFixed(3);
                 var railColor = mainChart.data[0].color || '#fff';
                 var railHex = rgbToHex(railColor);
 
-                html += "<div style='margin-bottom:8px;'>";
-                html += "<span style='color:#aaa;'>📈 主图中轨:</span> ";
-                html += "<span style='color:" + railHex + "; font-size:16px; font-weight:bold;'>" + railLength + "</span>";
-                html += "<span style='color:#666; font-size:10px; margin-left:8px;'>(ID4:" + id4.toFixed(2) + " - ID1:" + id1.toFixed(2) + ")</span>";
+                html += "<div style='margin-bottom:10px; padding:8px; background:rgba(255,255,255,0.05); border-radius:4px;'>";
+                html += "<div style='color:#aaa; margin-bottom:5px;'>📈 主图中轨分析</div>";
+                html += "<div style='display:flex; align-items:center; gap:10px;'>";
+                html += "<span style='color:#888;'>中轨长度:</span>";
+                html += "<span style='color:" + railHex + "; font-size:20px; font-weight:bold; text-shadow: 0 0 10px " + railHex + ";'>" + railLength + "</span>";
+                html += "</div>";
+                html += "<div style='color:#666; font-size:10px; margin-top:5px;'>ID1(最小):" + id1.toFixed(3) + " | ID4(最大):" + id4.toFixed(3) + "</div>";
                 html += "</div>";
             }
 
-            // 2. MACD分析 (假设第三个指标是MACD，即附图2)
+            // 2. MACD分析 (第三个指标，索引2)
             var macdChart = screen.data[2];
             if (macdChart && macdChart.data && macdChart.data.length >= 11) {
-                var momentum = parseFloat(macdChart.data[8].val) || 0;  // ID9 动能柱
-                var fastLine = parseFloat(macdChart.data[9].val) || 0;  // ID10 快线
-                var slowLine = parseFloat(macdChart.data[10].val) || 0; // ID11 慢线
+                var momentum = parseNumber(macdChart.data[8].val);  // ID9 动能柱
+                var fastLine = parseNumber(macdChart.data[9].val);  // ID10 快线
+                var slowLine = parseNumber(macdChart.data[10].val); // ID11 慢线
                 
+                // 判断金叉死叉
                 var isGoldenCross = fastLine > slowLine;
                 var crossType = isGoldenCross ? '金叉' : '死叉';
                 var crossEmoji = isGoldenCross ? '🌟' : '💀';
@@ -199,59 +258,118 @@
                     ? 'background:linear-gradient(90deg, rgba(255,215,0,0.2), transparent); border-left:3px solid #ffd700;'
                     : 'background:linear-gradient(90deg, rgba(138,43,226,0.2), transparent); border-left:3px solid #8a2be2;';
 
-                var trendColor = momentum >= 0 ? '#00ff7f' : '#ff5252';
-                var trendText = momentum >= 0 ? '📈 涨' : '📉 跌';
-
                 // 保存历史快线数据判断趋势
                 historyData[screen.key].fastLine.push(fastLine);
-                if (historyData[screen.key].fastLine.length > 5) {
+                historyData[screen.key].momentum.push(momentum);
+                if (historyData[screen.key].fastLine.length > 10) {
                     historyData[screen.key].fastLine.shift();
+                    historyData[screen.key].momentum.shift();
                 }
 
-                // 判断快线趋势
+                // 判断快线趋势 - 这是最重要的指标！
                 var fastLineTrend = '';
+                var fastLineUp = null;
                 var fastHistory = historyData[screen.key].fastLine;
                 if (fastHistory.length >= 2) {
-                    var lastFast = fastHistory[fastHistory.length - 2];
-                    if (isGoldenCross) {
-                        if (fastLine >= lastFast) {
-                            fastLineTrend = '<span style="color:#00ff7f;">↑持续上涨</span>';
-                        } else {
-                            fastLineTrend = '<span style="color:#ff9800;">⚠️ 快线减小，可能形成死叉</span>';
-                        }
+                    var prevFast = fastHistory[fastHistory.length - 2];
+                    var fastChange = fastLine - prevFast;
+                    
+                    if (fastChange > 0.001) {
+                        fastLineUp = true;
+                        fastLineTrend = '<div style="color:#00ff7f; font-size:14px; font-weight:bold; padding:5px; background:rgba(0,255,127,0.1); border-radius:4px; margin-top:5px;">📈 快线上升中 (+' + fastChange.toFixed(3) + ') = 涨势!</div>';
+                    } else if (fastChange < -0.001) {
+                        fastLineUp = false;
+                        fastLineTrend = '<div style="color:#ff5252; font-size:14px; font-weight:bold; padding:5px; background:rgba(255,82,82,0.1); border-radius:4px; margin-top:5px;">📉 快线下降中 (' + fastChange.toFixed(3) + ') = 跌势!</div>';
                     } else {
-                        if (fastLine <= lastFast) {
-                            fastLineTrend = '<span style="color:#ff5252;">↓持续下跌</span>';
-                        } else {
-                            fastLineTrend = '<span style="color:#ff9800;">⚠️ 快线变大，可能形成金叉</span>';
-                        }
+                        fastLineTrend = '<div style="color:#ffc107; font-size:12px; padding:5px; margin-top:5px;">➡️ 快线持平 (变化:' + fastChange.toFixed(3) + ')</div>';
                     }
                 }
 
-                html += "<div style='padding:8px; margin-bottom:8px; border-radius:4px; " + crossBg + "'>";
-                html += "<div style='margin-bottom:5px;'>";
-                html += "<span style='font-size:14px; font-weight:bold;'>" + crossEmoji + " " + crossType + "</span>";
-                html += "<span style='color:" + trendColor + "; margin-left:10px; font-weight:bold; text-shadow:0 0 8px " + trendColor + ";'>" + trendText + "</span>";
-                html += "</div>";
-                
-                html += "<div style='display:grid; grid-template-columns:1fr 1fr 1fr; gap:5px; font-size:11px;'>";
-                html += "<div>动能柱(9): <span style='color:" + trendColor + "; font-weight:bold;'>" + momentum.toFixed(2) + "</span></div>";
-                html += "<div style='color:#2196f3;'>快线(10): " + fastLine.toFixed(2) + "</div>";
-                html += "<div style='color:#ffeb3b;'>慢线(11): " + slowLine.toFixed(2) + "</div>";
-                html += "</div>";
-                
-                if (fastLineTrend) {
-                    html += "<div style='margin-top:5px; font-size:11px;'>" + fastLineTrend + "</div>";
+                result.fastLineUp = fastLineUp;
+
+                // 动能柱判断
+                var momentumColor = momentum >= 0 ? '#00ff7f' : '#ff5252';
+                var momentumText = momentum >= 0 ? '正数(涨)' : '负数(跌)';
+                result.trend = momentum >= 0 ? 'up' : 'down';
+
+                // 预警判断
+                var warning = '';
+                if (isGoldenCross && fastLineUp === false) {
+                    warning = '<div style="color:#ff9800; font-size:12px; padding:5px; background:rgba(255,152,0,0.1); border-radius:4px; margin-top:5px;">⚠️ 金叉但快线在减小，可能形成死叉！</div>';
+                } else if (!isGoldenCross && fastLineUp === true) {
+                    warning = '<div style="color:#ff9800; font-size:12px; padding:5px; background:rgba(255,152,0,0.1); border-radius:4px; margin-top:5px;">⚠️ 死叉但快线在变大，可能形成金叉！</div>';
                 }
+
+                html += "<div style='padding:8px; margin-bottom:8px; border-radius:4px; " + crossBg + "'>";
+                html += "<div style='display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;'>";
+                html += "<span style='font-size:16px; font-weight:bold;'>" + crossEmoji + " " + crossType + "</span>";
+                html += "<span style='color:" + momentumColor + "; font-weight:bold;'>动能柱: " + momentumText + "</span>";
                 html += "</div>";
+                
+                html += "<div style='display:grid; grid-template-columns:1fr 1fr 1fr; gap:8px; font-size:12px; padding:5px; background:rgba(0,0,0,0.2); border-radius:4px;'>";
+                html += "<div style='text-align:center;'><div style='color:#888;'>动能柱(9)</div><div style='color:" + momentumColor + "; font-size:14px; font-weight:bold;'>" + momentum.toFixed(3) + "</div></div>";
+                html += "<div style='text-align:center;'><div style='color:#888;'>快线(10)</div><div style='color:#2196f3; font-size:14px; font-weight:bold;'>" + fastLine.toFixed(3) + "</div></div>";
+                html += "<div style='text-align:center;'><div style='color:#888;'>慢线(11)</div><div style='color:#ffeb3b; font-size:14px; font-weight:bold;'>" + slowLine.toFixed(3) + "</div></div>";
+                html += "</div>";
+                
+                html += "<div style='color:#888; font-size:10px; margin-top:5px;'>计算验证: 快线-慢线 = " + (fastLine - slowLine).toFixed(3) + "</div>";
+                
+                html += fastLineTrend;
+                html += warning;
+                html += "</div>";
+            } else {
+                html += "<div style='color:#888; padding:5px;'>MACD数据不足 (需要第3个指标,至少11个数值)</div>";
             }
 
             html += "</div>";
+            analysisResults[screen.key] = result;
         });
+
+        // --- 双向共振判断 ---
+        var leftResult = analysisResults.left;
+        var rightResult = analysisResults.right;
+        
+        if (leftResult && rightResult && leftResult.fastLineUp !== null && rightResult.fastLineUp !== null) {
+            var bothUp = leftResult.fastLineUp === true && rightResult.fastLineUp === true;
+            var bothDown = leftResult.fastLineUp === false && rightResult.fastLineUp === false;
+            
+            if (bothUp || bothDown) {
+                var alertType = bothUp ? 'up' : 'down';
+                var alertColor = bothUp ? '#00ff7f' : '#ff5252';
+                var alertBg = bothUp ? 'rgba(0,255,127,0.2)' : 'rgba(255,82,82,0.2)';
+                var alertText = bothUp ? '🚀🚀🚀 双屏共振上涨！！！' : '💥💥💥 双屏共振下跌！！！';
+                var alertBorder = bothUp ? '#00ff7f' : '#ff5252';
+                
+                html += "<div style='background:" + alertBg + "; border:3px solid " + alertBorder + "; border-radius:8px; padding:15px; margin-top:10px; animation: alertBlink 0.5s infinite;'>";
+                html += "<div style='color:" + alertColor + "; font-size:20px; font-weight:bold; text-align:center; text-shadow: 0 0 20px " + alertColor + ";'>" + alertText + "</div>";
+                html += "<div style='color:#fff; font-size:12px; text-align:center; margin-top:5px;'>左右两屏快线同时" + (bothUp ? "上升" : "下降") + "，趋势确认！</div>";
+                html += "</div>";
+                
+                // 更新警报状态
+                document.getElementById('alert-status').textContent = alertText;
+                document.getElementById('alert-status').style.color = alertColor;
+                
+                // 播放警报声
+                if (soundEnabled) {
+                    playAlertSound(alertType);
+                }
+            } else {
+                document.getElementById('alert-status').textContent = '无共振信号';
+                document.getElementById('alert-status').style.color = '#888';
+            }
+        }
+
+        // 添加CSS动画
+        if (!document.getElementById('alert-blink-style')) {
+            var style = document.createElement('style');
+            style.id = 'alert-blink-style';
+            style.textContent = '@keyframes alertBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }';
+            document.head.appendChild(style);
+        }
 
         var now = new Date();
         var timeStr = now.getHours() + ":" + String(now.getMinutes()).padStart(2,'0') + ":" + String(now.getSeconds()).padStart(2,'0');
-        html += "<div style='text-align:right; font-size:10px; color:#666;'>最后分析: " + timeStr + "</div>";
+        html += "<div style='text-align:right; font-size:10px; color:#666; margin-top:10px;'>最后分析: " + timeStr + "</div>";
 
         analysisContent.innerHTML = html;
     }
@@ -265,10 +383,11 @@
             return;
         }
 
+        // 收集数据容器
         var chartData = []; 
 
         widgets.forEach(function(widget, wIndex) {
-            if(wIndex > 1) return;
+            if(wIndex > 1) return; // 只取前两个分屏
             
             var widgetInfo = [];
             var titleElements = Array.from(widget.querySelectorAll('div[class*="title-"]'));
@@ -321,7 +440,7 @@
             document.getElementById('record-count').textContent = recordedData.length;
         }
 
-        // --- 生成对比表格 ---
+        // --- 生成对比表格 (原始数据面板) ---
         var html = "";
         var maxRows = Math.max(chartData[0]?.length || 0, chartData[1]?.length || 0);
 
@@ -333,7 +452,7 @@
             
             html += "<div style='background:#333; padding:4px; margin-top:8px; font-weight:bold; color:#ffeaa7; border-radius:4px;'>📊 " + rowName + " (指标 " + (i+1) + ")</div>";
             
-            // 表头 - 修改为只显示左屏右屏
+            // 表头 - 只显示左屏右屏
             html += "<div style='display:grid; grid-template-columns: 30px 1fr 1fr; gap:2px; font-size:10px; color:#aaa; margin-bottom:2px;'>";
             html += "<div>ID</div><div>左屏</div><div>右屏</div></div>";
 
@@ -462,6 +581,31 @@
         document.getElementById('btn-start').addEventListener('click', startRecording);
         document.getElementById('btn-stop').addEventListener('click', stopRecording);
         document.getElementById('btn-export').addEventListener('click', exportData);
+        
+        // 切换原始数据面板显示
+        document.getElementById('btn-toggle-raw').addEventListener('click', function() {
+            if (panel.style.display === 'none') {
+                panel.style.display = 'flex';
+                this.textContent = '📋 隐藏原始数据';
+                this.style.background = '#c0392b';
+            } else {
+                panel.style.display = 'none';
+                this.textContent = '📋 查看原始数据';
+                this.style.background = '#8e44ad';
+            }
+        });
+        
+        // 切换警报声音
+        document.getElementById('btn-toggle-sound').addEventListener('click', function() {
+            soundEnabled = !soundEnabled;
+            if (soundEnabled) {
+                this.textContent = '🔔 警报开启';
+                this.style.background = '#27ae60';
+            } else {
+                this.textContent = '🔕 警报关闭';
+                this.style.background = '#7f8c8d';
+            }
+        });
     }, 100);
 
     // --- 10. 启动定时刷新 ---
