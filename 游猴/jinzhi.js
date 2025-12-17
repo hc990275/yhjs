@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         TradingView 金指数据监控 V7.8 (完整功能版)
+// @name         TradingView 金指数据监控 V7.9 (归零反弹/反抽版)
 // @namespace    http://tampermonkey.net/
-// @version      7.8
-// @description  抓取数值颜色、支持面板拖动、四角缩放、分析、资金滤网、交易建议、本地配置保存
+// @version      7.9
+// @description  抓取数值颜色、支持面板拖动、四角缩放、分析、资金滤网、交易建议、归零反弹/反抽、本地配置保存
 // @author       You
 // @match        *://*.tradingview.com/*
 // @grant        none
@@ -10,7 +10,7 @@
 
 (function() {
     'use strict';
-    console.log(">>> [云端 V7.8] 启动完整功能版监控...");
+    console.log(">>> [云端 V7.9] 启动归零反弹/反抽版监控...");
 
     // --- 0. 清理旧面板 ---
     var old = document.getElementById('tv-monitor-panel-v7');
@@ -23,13 +23,13 @@
     if(oldFullscreen) oldFullscreen.remove();
 
     // --- 本地存储键名 ---
-    var STORAGE_KEY = 'tv_monitor_config_v78';
+    var STORAGE_KEY = 'tv_monitor_config_v79';
 
     // --- 默认配置 ---
     var defaultConfig = {
         simpleMode: false,
         analysisMode: 'realtime',
-        periodTime: 5000,
+        periodTime: 60000, // 默认1分钟
         updateInterval: 500,
         // 分析框位置和大小
         analysisPanel: { left: 20, top: 60, width: 400, height: 500 },
@@ -48,7 +48,7 @@
                 return Object.assign({}, defaultConfig, parsed);
             }
         } catch(e) {
-            console.log('[V7.8] 加载配置失败:', e);
+            console.log('[V7.9] 加载配置失败:', e);
         }
         return Object.assign({}, defaultConfig);
     }
@@ -57,9 +57,9 @@
     function saveConfig() {
         try {
             localStorage.setItem(STORAGE_KEY, JSON.stringify(config));
-            console.log('[V7.8] 配置已保存');
+            console.log('[V7.9] 配置已保存');
         } catch(e) {
-            console.log('[V7.8] 保存配置失败:', e);
+            console.log('[V7.9] 保存配置失败:', e);
         }
     }
 
@@ -75,22 +75,31 @@
 
     // --- 历史数据存储 ---
     var historyData = {
-        left: { fastLine: [], momentum: [], timestamps: [] },
-        right: { fastLine: [], momentum: [], timestamps: [] }
+        left: { fastLine: [], momentum: [], timestamps: [], crossHistory: [] },
+        right: { fastLine: [], momentum: [], timestamps: [], crossHistory: [] }
     };
     var maxHistoryLength = 1000;
+
+    // --- 金叉死叉次数跟踪 ---
+    var crossCount = {
+        left: { golden: 0, death: 0, lastCross: null },
+        right: { golden: 0, death: 0, lastCross: null }
+    };
 
     // --- 警报音频 ---
     var audioCtx = null;
     function initAudio() {
         if (!audioCtx) {
-            audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            try {
+                audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            } catch(e) {
+                console.log('[V7.9] 音频初始化失败:', e);
+            }
         }
     }
     function playAlertSound() {
-        if (!config.alertEnabled) return;
+        if (!config.alertEnabled || !audioCtx) return;
         try {
-            initAudio();
             var oscillator = audioCtx.createOscillator();
             var gainNode = audioCtx.createGain();
             oscillator.connect(gainNode);
@@ -103,6 +112,7 @@
             oscillator.stop(audioCtx.currentTime + 0.5);
             // 第二声
             setTimeout(function() {
+                if (!audioCtx) return;
                 var osc2 = audioCtx.createOscillator();
                 var gain2 = audioCtx.createGain();
                 osc2.connect(gain2);
@@ -115,7 +125,7 @@
                 osc2.stop(audioCtx.currentTime + 0.5);
             }, 200);
         } catch(e) {
-            console.log('[V7.8] 播放警报失败:', e);
+            console.log('[V7.9] 播放警报失败:', e);
         }
     }
 
@@ -136,15 +146,17 @@
         .tv-resize-w { left: 0; top: 12px; bottom: 12px; width: 5px; cursor: w-resize; }
         .tv-resize-e { right: 0; top: 12px; bottom: 12px; width: 5px; cursor: e-resize; }
         @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.7; } }
-        @keyframes strongPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.8; transform: scale(1.02); } }
-        @keyframes flashBorder { 0%, 100% { border-color: #ffd700; } 50% { border-color: #ff6b6b; } }
+        @keyframes strongPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.8; transform: scale(1.05); } }
+        @keyframes flashBorder { 0%, 100% { box-shadow: 0 0 30px currentColor; } 50% { box-shadow: 0 0 60px currentColor, 0 0 100px currentColor; } }
         .status-up { color: #00ff7f; text-shadow: 0 0 5px rgba(0,255,127,0.5); }
         .status-down { color: #ff5252; text-shadow: 0 0 5px rgba(255,82,82,0.5); }
         .status-flat { color: #ffc107; }
-        .energy-warning { background: rgba(255,152,0,0.2); border: 1px solid #ff9800; border-radius: 4px; padding: 4px 6px; margin-top: 4px; }
+        .energy-warning { background: rgba(255,152,0,0.2); border: 1px solid #ff9800; border-radius: 4px; padding: 4px 6px; margin-top: 4px; font-size: 10px; }
         .trade-signal { padding: 6px 8px; border-radius: 4px; margin-top: 6px; font-weight: bold; }
         .trade-long { background: linear-gradient(135deg, rgba(0,255,127,0.3), rgba(0,200,100,0.1)); border: 2px solid #00ff7f; color: #00ff7f; }
         .trade-short { background: linear-gradient(135deg, rgba(255,82,82,0.3), rgba(200,50,50,0.1)); border: 2px solid #ff5252; color: #ff5252; }
+        .trade-bounce { background: linear-gradient(135deg, rgba(255,215,0,0.3), rgba(255,180,0,0.1)); border: 2px solid #ffd700; color: #ffd700; }
+        .trade-pullback { background: linear-gradient(135deg, rgba(138,43,226,0.3), rgba(100,30,180,0.1)); border: 2px solid #8a2be2; color: #8a2be2; }
         .tv-panel-content {
             display: flex;
             flex-direction: column;
@@ -160,49 +172,59 @@
         .tv-data-grid { display: grid; gap: 4px; }
         .tv-screen-box { background: #222; padding: 8px; border-radius: 5px; border: 1px solid #444; }
         .tv-resonance-box { flex-shrink: 0; margin-top: 6px; }
-        .resonance-status { padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: bold; margin-right: 8px; }
+        .resonance-status { padding: 2px 6px; border-radius: 3px; font-size: 10px; font-weight: bold; margin-right: 6px; }
         .resonance-long { background: #00ff7f; color: #000; animation: pulse 1s infinite; }
         .resonance-short { background: #ff5252; color: #fff; animation: pulse 1s infinite; }
         .resonance-golden { background: #ffd700; color: #000; animation: pulse 1s infinite; }
         .resonance-death { background: #8a2be2; color: #fff; animation: pulse 1s infinite; }
+        .resonance-bounce { background: linear-gradient(90deg, #ffd700, #ff8c00); color: #000; animation: pulse 0.5s infinite; }
+        .resonance-pullback { background: linear-gradient(90deg, #8a2be2, #4b0082); color: #fff; animation: pulse 0.5s infinite; }
+        .signal-list { display: flex; flex-direction: column; gap: 3px; margin-top: 4px; }
+        .signal-item { padding: 3px 6px; border-radius: 3px; font-size: 10px; }
         #tv-fullscreen-alert {
             position: fixed;
-            top: 0;
-            left: 0;
-            width: 100vw;
-            height: 100vh;
-            background: rgba(0,0,0,0.85);
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            width: auto;
+            max-width: 500px;
+            min-width: 300px;
+            height: auto;
+            background: rgba(0,0,0,0.95);
             z-index: 9999999;
             display: flex;
             flex-direction: column;
             justify-content: center;
             align-items: center;
-            animation: flashBorder 0.5s infinite;
-            border: 10px solid #ffd700;
+            padding: 30px 50px;
+            border-radius: 20px;
+            border: 4px solid #ffd700;
             box-sizing: border-box;
         }
         .fullscreen-text {
-            font-size: 48px;
+            font-size: 28px;
             font-weight: bold;
-            text-shadow: 0 0 30px currentColor;
+            text-shadow: 0 0 20px currentColor;
             margin: 10px 0;
+            text-align: center;
         }
         .fullscreen-sub {
-            font-size: 24px;
+            font-size: 16px;
             opacity: 0.9;
+            text-align: center;
         }
         .fullscreen-close {
-            margin-top: 30px;
-            padding: 15px 40px;
-            font-size: 20px;
+            margin-top: 20px;
+            padding: 10px 30px;
+            font-size: 14px;
             cursor: pointer;
             border: none;
-            border-radius: 8px;
+            border-radius: 6px;
             background: #fff;
             color: #000;
         }
         .time-input {
-            width: 60px;
+            width: 50px;
             padding: 2px 4px;
             border-radius: 3px;
             border: 1px solid #555;
@@ -214,7 +236,7 @@
     `;
     document.head.appendChild(globalStyle);
 
-    // --- 1. 全屏提示元素 ---
+    // --- 1. 全屏提示元素 (居中小窗口) ---
     var fullscreenAlert = document.createElement('div');
     fullscreenAlert.id = 'tv-fullscreen-alert';
     fullscreenAlert.style.display = 'none';
@@ -227,39 +249,57 @@
 
     var fullscreenTimeout = null;
     function showFullscreenAlert(type, detail) {
+        if (!config.alertEnabled) return;
+        
         var title = document.getElementById('fullscreen-title');
         var detailEl = document.getElementById('fullscreen-detail');
+        var alertEl = document.getElementById('tv-fullscreen-alert');
         
         if (type === 'long') {
             title.textContent = '🚀🚀🚀 双屏共振做多！！！';
             title.style.color = '#00ff7f';
-            fullscreenAlert.style.borderColor = '#00ff7f';
+            alertEl.style.borderColor = '#00ff7f';
+            alertEl.style.color = '#00ff7f';
         } else if (type === 'short') {
             title.textContent = '💥💥💥 双屏共振做空！！！';
             title.style.color = '#ff5252';
-            fullscreenAlert.style.borderColor = '#ff5252';
+            alertEl.style.borderColor = '#ff5252';
+            alertEl.style.color = '#ff5252';
+        } else if (type === 'bounce') {
+            title.textContent = '🌟🔄 双屏归零反弹！建议做多！';
+            title.style.color = '#ffd700';
+            alertEl.style.borderColor = '#ffd700';
+            alertEl.style.color = '#ffd700';
+        } else if (type === 'pullback') {
+            title.textContent = '💀🔄 双屏归零反抽！建议做空！';
+            title.style.color = '#8a2be2';
+            alertEl.style.borderColor = '#8a2be2';
+            alertEl.style.color = '#8a2be2';
         } else if (type === 'golden') {
             title.textContent = '🌟🌟🌟 双屏金叉共振！！！';
             title.style.color = '#ffd700';
-            fullscreenAlert.style.borderColor = '#ffd700';
+            alertEl.style.borderColor = '#ffd700';
+            alertEl.style.color = '#ffd700';
         } else if (type === 'death') {
             title.textContent = '💀💀💀 双屏死叉共振！！！';
             title.style.color = '#8a2be2';
-            fullscreenAlert.style.borderColor = '#8a2be2';
+            alertEl.style.borderColor = '#8a2be2';
+            alertEl.style.color = '#8a2be2';
         }
         
         detailEl.textContent = detail || '';
-        fullscreenAlert.style.display = 'flex';
+        alertEl.style.display = 'flex';
+        alertEl.style.animation = 'flashBorder 0.5s infinite';
         playAlertSound();
         
         if (fullscreenTimeout) clearTimeout(fullscreenTimeout);
         fullscreenTimeout = setTimeout(function() {
-            fullscreenAlert.style.display = 'none';
+            alertEl.style.display = 'none';
         }, 3000);
     }
 
     document.getElementById('fullscreen-close').onclick = function() {
-        fullscreenAlert.style.display = 'none';
+        document.getElementById('tv-fullscreen-alert').style.display = 'none';
         if (fullscreenTimeout) clearTimeout(fullscreenTimeout);
     };
 
@@ -289,7 +329,7 @@
     var header = document.createElement('div');
     header.id = 'panel-header';
     header.style.cssText = "padding:6px 10px; background:#2d3436; cursor:move; font-weight:bold; color:#00b894; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #444; user-select:none;";
-    header.innerHTML = "<span>⚖️ 原始数据 V7.8</span><button id='btn-close-raw' style='background:#c0392b;border:none;color:#fff;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:10px;'>✕ 关闭</button>";
+    header.innerHTML = "<span>⚖️ 原始数据 V7.9</span><button id='btn-close-raw' style='background:#c0392b;border:none;color:#fff;padding:2px 8px;border-radius:3px;cursor:pointer;font-size:10px;'>✕ 关闭</button>";
     panel.appendChild(header);
 
     var controlBar = document.createElement('div');
@@ -331,7 +371,7 @@
     var analysisHeader = document.createElement('div');
     analysisHeader.id = 'analysis-header';
     analysisHeader.style.cssText = "padding:6px 10px; background:linear-gradient(135deg,#c0392b,#e74c3c); cursor:move; font-weight:bold; color:#fff; display:flex; justify-content:space-between; align-items:center; user-select:none;";
-    analysisHeader.innerHTML = "<span>🎯 分析框 V7.8</span><span style='font-size:9px;opacity:0.7;'>拖动移动 | 边角缩放</span>";
+    analysisHeader.innerHTML = "<span>🎯 分析框 V7.9</span><span style='font-size:9px;opacity:0.7;'>拖动移动 | 边角缩放</span>";
     analysisPanel.appendChild(analysisHeader);
 
     // 模式选择栏
@@ -348,8 +388,8 @@
     modeBar.innerHTML = '' +
         '<button id="btn-realtime" style="padding:3px 8px;border-radius:3px;font-size:10px;cursor:pointer;' + realtimeBtnStyle + '">⚡实时</button>' +
         '<button id="btn-period" style="padding:3px 8px;border-radius:3px;font-size:10px;cursor:pointer;' + periodBtnStyle + '">📊周期</button>' +
-        '<input type="number" id="input-period" class="time-input" value="' + (config.periodTime/1000) + '" min="1" max="300" title="周期时间(秒)">' +
-        '<span style="font-size:9px;color:#666;">秒</span>' +
+        '<input type="number" id="input-period" class="time-input" value="' + (config.periodTime/60000) + '" min="0.1" max="60" step="0.1" title="周期时间(分钟)">' +
+        '<span style="font-size:9px;color:#666;">分</span>' +
         '<span style="font-size:9px;color:#666;margin-left:4px;">刷新:</span>' +
         '<input type="number" id="input-interval" class="time-input" value="' + config.updateInterval + '" min="100" max="5000" step="100" title="刷新间隔(ms)">' +
         '<span style="font-size:9px;color:#666;">ms</span>' +
@@ -374,8 +414,8 @@
 
     // 状态栏 - 共振提示在这里
     var analysisStatusBar = document.createElement('div');
-    analysisStatusBar.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:3px 8px; background:#111; border-bottom:1px solid #444; font-size:10px; min-height:24px;";
-    analysisStatusBar.innerHTML = '<div id="resonance-status" style="display:flex;align-items:center;"></div><span id="update-time" style="color:#666;"></span>';
+    analysisStatusBar.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:3px 8px; background:#111; border-bottom:1px solid #444; font-size:10px; min-height:24px; flex-wrap:wrap; gap:4px;";
+    analysisStatusBar.innerHTML = '<div id="resonance-status" style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;flex:1;"></div><span id="update-time" style="color:#666;"></span>';
     analysisPanel.appendChild(analysisStatusBar);
 
     var analysisContent = document.createElement('div');
@@ -616,19 +656,6 @@
         }
     }
 
-    // 判断交易信号
-    function getTradeSignal(isGoldenCross, filterSignal, momentumSide, momentumChange, momentum) {
-        // 做多条件: 金叉 + 滤网红 + 多方放量
-        if (isGoldenCross && filterSignal === 'red' && momentumSide === '多方' && momentumChange > 0.0001) {
-            return { signal: 'long', text: '📈 建议做多', class: 'trade-long' };
-        }
-        // 做空条件: 死叉 + 滤网蓝 + 空方放量
-        if (!isGoldenCross && filterSignal === 'blue' && momentumSide === '空方' && momentumChange < -0.0001) {
-            return { signal: 'short', text: '📉 建议做空', class: 'trade-short' };
-        }
-        return null;
-    }
-
     // --- 8. 周期分析函数 ---
     function getPeriodChange(key, dataType) {
         var now = Date.now();
@@ -683,7 +710,9 @@
                 isGoldenCross: false,
                 energyWarning: null,
                 filterStatus: null,
-                tradeSignal: null
+                signals: [], // 多个信号存储
+                isBounce: false, // 归零反弹
+                isPullback: false // 归零反抽
             };
 
             if (!screen.data || screen.data.length === 0) {
@@ -727,6 +756,26 @@
                 
                 result.isGoldenCross = isGoldenCross;
 
+                // 检测金叉死叉变化 (用于二次金叉/死叉判断)
+                var prevCross = crossCount[screen.key].lastCross;
+                if (prevCross !== null && prevCross !== isGoldenCross) {
+                    // 发生了交叉变化
+                    if (isGoldenCross) {
+                        crossCount[screen.key].golden++;
+                        // 如果是二次金叉（之前死叉后又金叉）
+                        if (crossCount[screen.key].death > 0) {
+                            result.isBounce = true; // 归零反弹
+                        }
+                    } else {
+                        crossCount[screen.key].death++;
+                        // 如果是二次死叉（之前金叉后又死叉）
+                        if (crossCount[screen.key].golden > 0) {
+                            result.isPullback = true; // 归零反抽
+                        }
+                    }
+                }
+                crossCount[screen.key].lastCross = isGoldenCross;
+
                 historyData[screen.key].fastLine.push(fastLine);
                 historyData[screen.key].momentum.push(momentum);
                 historyData[screen.key].timestamps.push(now);
@@ -765,15 +814,28 @@
                     result.energyWarning = '⚠️ 死叉能量不足！快线' + (fastLineChange > 0.0001 ? '上涨' : '平缓') + '，注意变盘！';
                 }
 
-                // 交易信号
+                // === 收集所有信号（不覆盖）===
+                
+                // 1. 归零反弹信号
+                if (result.isBounce) {
+                    result.signals.push({ type: 'bounce', text: '🔄 归零反弹！建议做多', class: 'trade-bounce' });
+                }
+                
+                // 2. 归零反抽信号
+                if (result.isPullback) {
+                    result.signals.push({ type: 'pullback', text: '🔄 归零反抽！建议做空', class: 'trade-pullback' });
+                }
+                
+                // 3. 常规交易信号
                 if (result.filterStatus) {
-                    result.tradeSignal = getTradeSignal(
-                        isGoldenCross, 
-                        result.filterStatus.signal, 
-                        result.momentumStatus.side, 
-                        momentumChange,
-                        momentum
-                    );
+                    // 做多条件: 金叉 + 滤网红 + 多方放量
+                    if (isGoldenCross && result.filterStatus.signal === 'red' && result.momentumStatus.side === '多方' && momentumChange > 0.0001) {
+                        result.signals.push({ type: 'long', text: '📈 建议做多', class: 'trade-long' });
+                    }
+                    // 做空条件: 死叉 + 滤网蓝 + 空方放量
+                    if (!isGoldenCross && result.filterStatus.signal === 'blue' && result.momentumStatus.side === '空方' && momentumChange < -0.0001) {
+                        result.signals.push({ type: 'short', text: '📉 建议做空', class: 'trade-short' });
+                    }
                 }
             }
 
@@ -790,7 +852,7 @@
 
                 html += "<div class='tv-analysis-box' style='background:#222;padding:8px;border-radius:4px;border-left:4px solid " + borderColor + ";'>";
                 
-                // 第一行
+                // 第一行：名称 + 快线状态 + 金叉死叉 + 滤网
                 html += "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:4px;'>";
                 html += "<span style='color:#ffd700;font-weight:bold;font-size:13px;'>" + screen.name + "</span>";
                 html += "<span class='" + fastStatus.class + "' style='font-size:15px;font-weight:bold;'>" + fastStatus.simple + "</span>";
@@ -798,8 +860,8 @@
                 html += "<span style='font-size:10px;'>滤网:" + filterText + "</span>";
                 html += "</div>";
                 
-                // 第二行
-                html += "<div class='tv-data-grid' style='grid-template-columns:repeat(auto-fit,minmax(90px,1fr));font-size:10px;'>";
+                // 第二行：数据
+                html += "<div class='tv-data-grid' style='grid-template-columns:repeat(auto-fit,minmax(80px,1fr));font-size:10px;'>";
                 html += "<div>中轨: <span style='color:" + railHex + ";font-weight:bold;'>" + railLength + "</span></div>";
                 html += "<div style='color:" + momStatus.color + ";'>" + momStatus.side + ": " + momentum.toFixed(3) + "</div>";
                 html += "<div>快线: <span style='color:#2196f3;'>" + fastLine.toFixed(3) + "</span></div>";
@@ -808,12 +870,16 @@
                 
                 // 能量警告
                 if (result.energyWarning) {
-                    html += "<div class='energy-warning' style='font-size:10px;margin-top:6px;'>" + result.energyWarning + "</div>";
+                    html += "<div class='energy-warning'>" + result.energyWarning + "</div>";
                 }
                 
-                // 交易信号
-                if (result.tradeSignal) {
-                    html += "<div class='trade-signal " + result.tradeSignal.class + "' style='font-size:11px;margin-top:4px;text-align:center;'>" + result.tradeSignal.text + "</div>";
+                // 所有信号（不覆盖）
+                if (result.signals.length > 0) {
+                    html += "<div class='signal-list'>";
+                    result.signals.forEach(function(sig) {
+                        html += "<div class='trade-signal " + sig.class + "' style='font-size:10px;text-align:center;padding:4px;'>" + sig.text + "</div>";
+                    });
+                    html += "</div>";
                 }
                 
                 html += "</div>";
@@ -830,7 +896,7 @@
                 html += "<div style='color:#ffd700;font-weight:bold;margin-bottom:8px;padding-bottom:5px;border-bottom:1px solid #333;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:4px;'>";
                 html += "<span style='font-size:13px;'>" + screen.name + "</span>";
                 if (config.analysisMode === 'period') {
-                    html += "<span style='font-size:9px;color:#888;'>周期:" + (config.periodTime/1000) + "秒</span>";
+                    html += "<span style='font-size:9px;color:#888;'>周期:" + (config.periodTime/60000).toFixed(1) + "分</span>";
                 }
                 html += "<span class='" + fastStatus.class + "' style='font-size:16px;font-weight:bold;'>" + fastStatus.text + "</span>";
                 html += "</div>";
@@ -865,17 +931,21 @@
                     
                     html += "<div class='tv-data-grid' style='grid-template-columns:repeat(auto-fit,minmax(80px,1fr));font-size:10px;background:rgba(0,0,0,0.2);padding:6px;border-radius:3px;'>";
                     html += "<div style='text-align:center;'><div style='color:#888;font-size:9px;'>动能(9)</div><div style='color:" + momStatus.color + ";font-weight:bold;font-size:12px;'>" + momentum.toFixed(3) + "</div><div style='font-size:8px;color:#666;'>(" + (momentumChange >= 0 ? '+' : '') + momentumChange.toFixed(4) + ")</div></div>";
-                    html += "<div style='text-align:center;'><div style='color:#888;font-size:9px;'>快线(10)</div><div style='color:#2196f3;font-weight:bold;font-size:12px;'>" + fastLine.toFixed(3) + "</div><div class='" + fastStatus.class + "' style='font-size:8px;'>(" + (fastLineChange >= 0 ? '+' : '') + fastLineChange.toFixed(4) + ")</div></div>";
+                    html += "<div style='text-align:center;'><div style='color:#888;font-size:9px;'>快线(10)</div><div style='color:#2196f3;font-weight:bold;font-size:12px;'>" + fastLine.toFixed(3) + "</div><div class='" + fastStatus.class + "' style='font-size:8px;'>("+  (fastLineChange >= 0 ? '+' : '') + fastLineChange.toFixed(4) + ")</div></div>";
                     html += "<div style='text-align:center;'><div style='color:#888;font-size:9px;'>慢线(11)</div><div style='color:#ffeb3b;font-weight:bold;font-size:12px;'>" + slowLine.toFixed(3) + "</div></div>";
                     html += "</div>";
 
                     if (result.energyWarning) {
-                        html += "<div class='energy-warning' style='margin-top:8px;'>" + result.energyWarning + "</div>";
+                        html += "<div class='energy-warning'>" + result.energyWarning + "</div>";
                     }
 
-                    // 交易信号
-                    if (result.tradeSignal) {
-                        html += "<div class='trade-signal " + result.tradeSignal.class + "' style='margin-top:8px;text-align:center;font-size:13px;'>" + result.tradeSignal.text + "</div>";
+                    // 所有信号（不覆盖）
+                    if (result.signals.length > 0) {
+                        html += "<div class='signal-list'>";
+                        result.signals.forEach(function(sig) {
+                            html += "<div class='trade-signal " + sig.class + "' style='text-align:center;font-size:12px;'>" + sig.text + "</div>";
+                        });
+                        html += "</div>";
                     }
 
                     html += "</div>";
@@ -887,55 +957,70 @@
         // --- 双屏共振判断 ---
         var leftResult = analysisResults.left;
         var rightResult = analysisResults.right;
-        var resonanceHtml = '';
+        var resonanceItems = []; // 存储所有共振提示
         var shouldTriggerFullscreen = false;
         var fullscreenType = '';
         var fullscreenDetail = '';
         
         if (leftResult && rightResult && leftResult.fastLineStatus && rightResult.fastLineStatus) {
-            // 双屏同时做多信号
-            if (leftResult.tradeSignal && leftResult.tradeSignal.signal === 'long' &&
-                rightResult.tradeSignal && rightResult.tradeSignal.signal === 'long') {
-                resonanceHtml = '<span class="resonance-status resonance-long">🚀 双屏做多共振！</span>';
+            // 1. 双屏归零反弹
+            if (leftResult.isBounce && rightResult.isBounce) {
+                resonanceItems.push('<span class="resonance-status resonance-bounce">🔄 双屏归零反弹！</span>');
                 shouldTriggerFullscreen = true;
-                fullscreenType = 'long';
-                fullscreenDetail = '金叉 + 滤网红 + 多方放量';
+                fullscreenType = 'bounce';
+                fullscreenDetail = '二次金叉，建议做多';
             }
-            // 双屏同时做空信号
-            else if (leftResult.tradeSignal && leftResult.tradeSignal.signal === 'short' &&
-                     rightResult.tradeSignal && rightResult.tradeSignal.signal === 'short') {
-                resonanceHtml = '<span class="resonance-status resonance-short">💥 双屏做空共振！</span>';
+            
+            // 2. 双屏归零反抽
+            if (leftResult.isPullback && rightResult.isPullback) {
+                resonanceItems.push('<span class="resonance-status resonance-pullback">🔄 双屏归零反抽！</span>');
                 shouldTriggerFullscreen = true;
-                fullscreenType = 'short';
-                fullscreenDetail = '死叉 + 滤网蓝 + 空方放量';
+                fullscreenType = 'pullback';
+                fullscreenDetail = '二次死叉，建议做空';
             }
-            // 双屏同时金叉
-            else if (leftResult.isGoldenCross && rightResult.isGoldenCross) {
-                resonanceHtml = '<span class="resonance-status resonance-golden">🌟 双屏金叉</span>';
-                if (leftResult.fastLineStatus.class === 'status-up' && rightResult.fastLineStatus.class === 'status-up') {
-                    resonanceHtml += '<span class="resonance-status resonance-long">🚀 双屏上涨</span>';
+            
+            // 3. 双屏同时做多信号
+            var leftHasLong = leftResult.signals.some(function(s) { return s.type === 'long'; });
+            var rightHasLong = rightResult.signals.some(function(s) { return s.type === 'long'; });
+            if (leftHasLong && rightHasLong) {
+                resonanceItems.push('<span class="resonance-status resonance-long">🚀 双屏做多共振！</span>');
+                if (!shouldTriggerFullscreen) {
                     shouldTriggerFullscreen = true;
-                    fullscreenType = 'golden';
-                    fullscreenDetail = '双屏金叉 + 快线同步上涨';
+                    fullscreenType = 'long';
+                    fullscreenDetail = '金叉 + 滤网红 + 多方放量';
                 }
             }
-            // 双屏同时死叉
-            else if (!leftResult.isGoldenCross && !rightResult.isGoldenCross && historyData.left.fastLine.length > 2) {
-                resonanceHtml = '<span class="resonance-status resonance-death">💀 双屏死叉</span>';
-                if (leftResult.fastLineStatus.class === 'status-down' && rightResult.fastLineStatus.class === 'status-down') {
-                    resonanceHtml += '<span class="resonance-status resonance-short">💥 双屏下跌</span>';
+            
+            // 4. 双屏同时做空信号
+            var leftHasShort = leftResult.signals.some(function(s) { return s.type === 'short'; });
+            var rightHasShort = rightResult.signals.some(function(s) { return s.type === 'short'; });
+            if (leftHasShort && rightHasShort) {
+                resonanceItems.push('<span class="resonance-status resonance-short">💥 双屏做空共振！</span>');
+                if (!shouldTriggerFullscreen) {
                     shouldTriggerFullscreen = true;
-                    fullscreenType = 'death';
-                    fullscreenDetail = '双屏死叉 + 快线同步下跌';
+                    fullscreenType = 'short';
+                    fullscreenDetail = '死叉 + 滤网蓝 + 空方放量';
                 }
             }
-            // 双屏快线同时上涨
-            else if (leftResult.fastLineStatus.class === 'status-up' && rightResult.fastLineStatus.class === 'status-up') {
-                resonanceHtml = '<span class="resonance-status resonance-long">🚀 双屏上涨</span>';
+            
+            // 5. 双屏同时金叉
+            if (leftResult.isGoldenCross && rightResult.isGoldenCross) {
+                resonanceItems.push('<span class="resonance-status resonance-golden">🌟 双屏金叉</span>');
             }
-            // 双屏快线同时下跌
-            else if (leftResult.fastLineStatus.class === 'status-down' && rightResult.fastLineStatus.class === 'status-down') {
-                resonanceHtml = '<span class="resonance-status resonance-short">💥 双屏下跌</span>';
+            
+            // 6. 双屏同时死叉
+            if (!leftResult.isGoldenCross && !rightResult.isGoldenCross && historyData.left.fastLine.length > 2) {
+                resonanceItems.push('<span class="resonance-status resonance-death">💀 双屏死叉</span>');
+            }
+            
+            // 7. 双屏快线同时上涨
+            if (leftResult.fastLineStatus.class === 'status-up' && rightResult.fastLineStatus.class === 'status-up') {
+                resonanceItems.push('<span class="resonance-status resonance-long">🚀 双屏上涨</span>');
+            }
+            
+            // 8. 双屏快线同时下跌
+            if (leftResult.fastLineStatus.class === 'status-down' && rightResult.fastLineStatus.class === 'status-down') {
+                resonanceItems.push('<span class="resonance-status resonance-short">💥 双屏下跌</span>');
             }
             
             // 触发全屏警报
@@ -948,7 +1033,10 @@
             }
         }
 
-        resonanceStatusEl.innerHTML = resonanceHtml || '<span style="color:#888;">监控中...</span>';
+        // 显示所有共振提示（不覆盖）
+        resonanceStatusEl.innerHTML = resonanceItems.length > 0 
+            ? resonanceItems.join('') 
+            : '<span style="color:#888;">监控中...</span>';
         document.getElementById('update-time').textContent = getTimeStr();
         analysisContent.innerHTML = html;
     }
@@ -1189,9 +1277,9 @@
         };
         
         document.getElementById('input-period').onchange = function() {
-            var val = parseInt(this.value);
-            if (val >= 1 && val <= 300) {
-                tempConfig.periodTime = val * 1000;
+            var val = parseFloat(this.value);
+            if (val >= 0.1 && val <= 60) {
+                tempConfig.periodTime = val * 60000; // 转换为毫秒
                 showConfigPending();
             }
         };
@@ -1212,12 +1300,17 @@
             clearInterval(updateTimer);
             updateTimer = setInterval(updatePanel, config.updateInterval);
             
+            // 清空历史数据
             historyData.left.fastLine = [];
             historyData.left.momentum = [];
             historyData.left.timestamps = [];
             historyData.right.fastLine = [];
             historyData.right.momentum = [];
             historyData.right.timestamps = [];
+            
+            // 重置金叉死叉计数
+            crossCount.left = { golden: 0, death: 0, lastCross: null };
+            crossCount.right = { golden: 0, death: 0, lastCross: null };
             
             saveConfig();
             
@@ -1237,7 +1330,7 @@
                 statusEl.style.display = 'none';
             }, 2000);
             
-            console.log('[V7.8] 配置已应用并保存:', config);
+            console.log('[V7.9] 配置已应用并保存:', config);
         };
         
         function showConfigPending() {
@@ -1258,6 +1351,6 @@
     updateTimer = setInterval(updatePanel, config.updateInterval);
     if (window.__TV_HOT_CONTEXT) window.__TV_HOT_CONTEXT.timer = updateTimer;
 
-    console.log(">>> [云端 V7.8] 初始化完成！配置自动加载，位置和设置已恢复");
+    console.log(">>> [云端 V7.9] 初始化完成！配置自动加载，位置和设置已恢复");
 
 })();
