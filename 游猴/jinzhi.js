@@ -274,8 +274,8 @@
     function showFullscreenAlert(type, detail) {
         if (!config.alertEnabled) return;
         
-        // 只显示4种关键信号的遮罩
-        var allowedTypes = ['long', 'short', 'bounce', 'pullback'];
+        // 只显示4种关键信号的遮罩 , 'bounce', 'pullback'
+        var allowedTypes = ['long', 'short'];
         if (!allowedTypes.includes(type)) {
             console.log('[V7.9] 跳过非关键信号遮罩:', type);
             return;
