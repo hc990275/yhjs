@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         TradingView 金指数据监控 V7.9 增强版
+// @name         TradingView 金指数据监控 V7.9 (归零反弹/反抽版)
 // @namespace    http://tampermonkey.net/
-// @version      7.9.1
-// @description  智能遮罩控制、延长归零提示、可配置提醒次数和时间
+// @version      7.9
+// @description  抓取数值颜色、支持面板拖动、四角缩放、分析、资金滤网、交易建议、归零反弹/反抽、本地配置保存
 // @author       You
 // @match        *://*.tradingview.com/*
 // @grant        none
@@ -10,7 +10,7 @@
 
 (function() {
     'use strict';
-    console.log(">>> [云端 V7.9 增强版] 启动归零反弹/反抽版监控...");
+    console.log(">>> [云端 V7.9] 启动归零反弹/反抽版监控...");
 
     // --- 0. 清理旧面板 ---
     var old = document.getElementById('tv-monitor-panel-v7');
@@ -29,20 +29,14 @@
     var defaultConfig = {
         simpleMode: false,
         analysisMode: 'realtime',
-        periodTime: 60000,
+        periodTime: 60000, // 默认1分钟
         updateInterval: 500,
+        // 分析框位置和大小
         analysisPanel: { left: 20, top: 60, width: 400, height: 500 },
+        // 原始数据面板位置和大小
         rawPanel: { left: null, top: 100, right: 20, width: 380, height: 400 },
-        alertEnabled: true,
-        // ===== 新增：遮罩配置 =====
-        alertDuration: {
-            long: 5000,      // 做多遮罩5秒
-            short: 5000,     // 做空遮罩5秒
-            bounce: 5000,    // 归零反弹5秒（延长）
-            pullback: 5000   // 归零反抽5秒（延长）
-        },
-        alertCooldown: 3000,  // 同类型信号间隔3秒
-        maxAlertCount: 1       // 每个信号最多提醒2次
+        // 警报开关
+        alertEnabled: true
     };
 
     // --- 从本地存储加载配置 ---
@@ -92,14 +86,6 @@
         right: { golden: 0, death: 0, lastCross: null }
     };
 
-    // ===== 新增：信号提醒计数器 =====
-    var alertCounter = {
-        long: { count: 0, lastTime: 0 },
-        short: { count: 0, lastTime: 0 },
-        bounce: { count: 0, lastTime: 0 },
-        pullback: { count: 0, lastTime: 0 }
-    };
-
     // --- 警报音频 ---
     var audioCtx = null;
     function initAudio() {
@@ -124,6 +110,7 @@
             gainNode.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
             oscillator.start(audioCtx.currentTime);
             oscillator.stop(audioCtx.currentTime + 0.5);
+            // 第二声
             setTimeout(function() {
                 if (!audioCtx) return;
                 var osc2 = audioCtx.createOscillator();
@@ -236,11 +223,6 @@
             background: #fff;
             color: #000;
         }
-        .fullscreen-counter {
-            margin-top: 10px;
-            font-size: 12px;
-            opacity: 0.7;
-        }
         .time-input {
             width: 50px;
             padding: 2px 4px;
@@ -261,51 +243,17 @@
     fullscreenAlert.innerHTML = `
         <div class="fullscreen-text" id="fullscreen-title">🚀🚀🚀 双屏共振做多！！！</div>
         <div class="fullscreen-sub" id="fullscreen-detail">左右两屏同时满足做多条件</div>
-        <div class="fullscreen-counter" id="fullscreen-counter">提醒 1/3</div>
-        <button class="fullscreen-close" id="fullscreen-close">✕ 关闭</button>
-        <div id="fullscreen-timer" style="margin-top:10px;font-size:12px;opacity:0.5;"></div>
+        <button class="fullscreen-close" id="fullscreen-close">✕ 关闭 (3秒后自动关闭)</button>
     `;
     document.body.appendChild(fullscreenAlert);
 
     var fullscreenTimeout = null;
-    var fullscreenCountdown = null;
-
-    // ===== 修改：智能遮罩显示函数 =====
     function showFullscreenAlert(type, detail) {
         if (!config.alertEnabled) return;
         
-        // 只显示4种关键信号的遮罩 , 'bounce', 'pullback'
-        var allowedTypes = ['long', 'short'];
-        if (!allowedTypes.includes(type)) {
-            console.log('[V7.9] 跳过非关键信号遮罩:', type);
-            return;
-        }
-        
-        var currentTime = Date.now();
-        var counter = alertCounter[type];
-        
-        // 检查是否超过最大提醒次数
-        if (counter.count >= config.maxAlertCount) {
-            console.log('[V7.9] 已达到最大提醒次数(' + config.maxAlertCount + ')，跳过:', type);
-            return;
-        }
-        
-        // 检查冷却时间
-        if (currentTime - counter.lastTime < config.alertCooldown) {
-            var remaining = Math.ceil((config.alertCooldown - (currentTime - counter.lastTime)) / 1000);
-            console.log('[V7.9] 冷却中，还需' + remaining + '秒，跳过:', type);
-            return;
-        }
-        
-        // 更新计数器
-        counter.count++;
-        counter.lastTime = currentTime;
-        
         var title = document.getElementById('fullscreen-title');
         var detailEl = document.getElementById('fullscreen-detail');
-        var counterEl = document.getElementById('fullscreen-counter');
         var alertEl = document.getElementById('tv-fullscreen-alert');
-        var timerEl = document.getElementById('fullscreen-timer');
         
         if (type === 'long') {
             title.textContent = '🚀🚀🚀 双屏共振做多！！！';
@@ -327,41 +275,32 @@
             title.style.color = '#8a2be2';
             alertEl.style.borderColor = '#8a2be2';
             alertEl.style.color = '#8a2be2';
+        } else if (type === 'golden') {
+            title.textContent = '🌟🌟🌟 双屏金叉共振！！！';
+            title.style.color = '#ffd700';
+            alertEl.style.borderColor = '#ffd700';
+            alertEl.style.color = '#ffd700';
+        } else if (type === 'death') {
+            title.textContent = '💀💀💀 双屏死叉共振！！！';
+            title.style.color = '#8a2be2';
+            alertEl.style.borderColor = '#8a2be2';
+            alertEl.style.color = '#8a2be2';
         }
         
         detailEl.textContent = detail || '';
-        counterEl.textContent = '提醒 ' + counter.count + '/' + config.maxAlertCount;
         alertEl.style.display = 'flex';
         alertEl.style.animation = 'flashBorder 0.5s infinite';
         playAlertSound();
         
-        // 获取该类型的显示时长
-        var duration = config.alertDuration[type] || 5000;
-        var secondsLeft = Math.ceil(duration / 1000);
-        
-        // 倒计时显示
-        if (fullscreenCountdown) clearInterval(fullscreenCountdown);
-        timerEl.textContent = secondsLeft + '秒后自动关闭';
-        fullscreenCountdown = setInterval(function() {
-            secondsLeft--;
-            if (secondsLeft > 0) {
-                timerEl.textContent = secondsLeft + '秒后自动关闭';
-            } else {
-                clearInterval(fullscreenCountdown);
-            }
-        }, 1000);
-        
         if (fullscreenTimeout) clearTimeout(fullscreenTimeout);
         fullscreenTimeout = setTimeout(function() {
             alertEl.style.display = 'none';
-            if (fullscreenCountdown) clearInterval(fullscreenCountdown);
-        }, duration);
+        }, 3000);
     }
 
     document.getElementById('fullscreen-close').onclick = function() {
         document.getElementById('tv-fullscreen-alert').style.display = 'none';
         if (fullscreenTimeout) clearTimeout(fullscreenTimeout);
-        if (fullscreenCountdown) clearInterval(fullscreenCountdown);
     };
 
     // --- 2. 主监控面板创建 (默认隐藏) ---
@@ -378,6 +317,7 @@
     }
     panel.style.cssText = rawPanelStyle;
     
+    // 添加缩放手柄
     var resizeHandles = ['nw', 'ne', 'sw', 'se', 'n', 's', 'w', 'e'];
     resizeHandles.forEach(function(dir) {
         var handle = document.createElement('div');
@@ -420,6 +360,7 @@
     analysisPanelStyle += "height:" + config.analysisPanel.height + "px;";
     analysisPanel.style.cssText = analysisPanelStyle;
 
+    // 添加缩放手柄到分析框
     resizeHandles.forEach(function(dir) {
         var handle = document.createElement('div');
         handle.className = 'tv-resize-handle tv-resize-' + dir;
@@ -430,9 +371,10 @@
     var analysisHeader = document.createElement('div');
     analysisHeader.id = 'analysis-header';
     analysisHeader.style.cssText = "padding:6px 10px; background:linear-gradient(135deg,#c0392b,#e74c3c); cursor:move; font-weight:bold; color:#fff; display:flex; justify-content:space-between; align-items:center; user-select:none;";
-    analysisHeader.innerHTML = "<span>🎯 分析框 V7.9 增强版</span><span style='font-size:9px;opacity:0.7;'>拖动移动 | 边角缩放</span>";
+    analysisHeader.innerHTML = "<span>🎯 分析框 V7.9</span><span style='font-size:9px;opacity:0.7;'>拖动移动 | 边角缩放</span>";
     analysisPanel.appendChild(analysisHeader);
 
+    // 模式选择栏
     var modeBar = document.createElement('div');
     modeBar.style.cssText = "display:flex; align-items:center; gap:4px; padding:5px 8px; background:#1a1a1a; border-bottom:1px solid #444; flex-wrap:wrap;";
     
@@ -455,6 +397,7 @@
         '<span id="config-status" style="font-size:9px;color:#888;display:none;margin-left:4px;">已应用</span>';
     analysisPanel.appendChild(modeBar);
 
+    // 控制栏
     var analysisControlBar = document.createElement('div');
     analysisControlBar.id = 'analysis-control-bar';
     analysisControlBar.style.cssText = "display:flex; flex-wrap:wrap; align-items:center; gap:4px; padding:5px 8px; background:#222; border-bottom:1px solid #444;";
@@ -466,10 +409,10 @@
         '<button id="btn-toggle-mode" style="padding:2px 8px;border-radius:3px;font-size:10px;cursor:pointer;border:none;background:#9b59b6;color:#fff;">📊 完整</button>' +
         '<button id="btn-toggle-raw" style="padding:2px 8px;border-radius:3px;font-size:10px;cursor:pointer;border:none;background:#8e44ad;color:#fff;">📋 原始</button>' +
         '<button id="btn-toggle-alert" style="padding:2px 8px;border-radius:3px;font-size:10px;cursor:pointer;border:none;' + alertBtnStyle + 'color:#fff;">' + alertBtnText + '</button>' +
-        '<button id="btn-reset-counter" style="padding:2px 8px;border-radius:3px;font-size:10px;cursor:pointer;border:none;background:#f39c12;color:#fff;">🔄 重置计数</button>' +
         '<button id="btn-save-config" style="padding:2px 8px;border-radius:3px;font-size:10px;cursor:pointer;border:none;background:#3498db;color:#fff;">💾 保存</button>';
     analysisPanel.appendChild(analysisControlBar);
 
+    // 状态栏 - 共振提示在这里
     var analysisStatusBar = document.createElement('div');
     analysisStatusBar.style.cssText = "display:flex; justify-content:space-between; align-items:center; padding:3px 8px; background:#111; border-bottom:1px solid #444; font-size:10px; min-height:24px; flex-wrap:wrap; gap:4px;";
     analysisStatusBar.innerHTML = '<div id="resonance-status" style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;flex:1;"></div><span id="update-time" style="color:#666;"></span>';
@@ -483,6 +426,7 @@
 
     document.body.appendChild(analysisPanel);
 
+    // 注册给加载器清理
     if (window.__TV_HOT_CONTEXT) {
         window.__TV_HOT_CONTEXT.panel = panel;
         window.__TV_HOT_CONTEXT.analysisPanel = analysisPanel;
@@ -509,6 +453,7 @@
                 panelEl.style.top = newTop + "px";
                 panelEl.style.right = "auto";
                 
+                // 保存位置
                 if (configKey) {
                     config[configKey].left = newLeft;
                     config[configKey].top = newTop;
@@ -584,6 +529,7 @@
             panelEl.style.right = 'auto';
             panelEl.style.maxHeight = 'none';
             
+            // 保存尺寸
             if (configKey) {
                 config[configKey].width = newWidth;
                 config[configKey].height = newHeight;
@@ -611,6 +557,10 @@
     var recordStartTime = null;
     var durationTimer = null;
     var updateTimer = null;
+    
+    // --- 共振冷却 ---
+    var lastResonanceTime = 0;
+    var resonanceCooldown = 5000;
 
     // --- 7. 辅助函数 ---
     function parseNumber(str) {
@@ -695,6 +645,7 @@
         return { side: side, status: status, color: sideColor };
     }
 
+    // 获取资金滤网状态
     function getFilterStatus(value) {
         if (value > 0) {
             return { text: '🔴红', color: '#ff5252', signal: 'red' };
@@ -759,9 +710,9 @@
                 isGoldenCross: false,
                 energyWarning: null,
                 filterStatus: null,
-                signals: [],
-                isBounce: false,
-                isPullback: false
+                signals: [], // 多个信号存储
+                isBounce: false, // 归零反弹
+                isPullback: false // 归零反抽
             };
 
             if (!screen.data || screen.data.length === 0) {
@@ -772,7 +723,7 @@
             }
 
             var mainChart = screen.data[0];
-            var filterChart = screen.data[1];
+            var filterChart = screen.data[1]; // 指标2 - 资金滤网
             var macdChart = screen.data[2];
             
             var railLength = 0, railHex = '#fff';
@@ -782,6 +733,7 @@
             var momentumChange = 0;
             var filterValue = 0;
 
+            // 主图中轨
             if (mainChart && mainChart.data && mainChart.data.length >= 4) {
                 var id1 = parseNumber(mainChart.data[0].val);
                 var id4 = parseNumber(mainChart.data[3].val);
@@ -789,11 +741,13 @@
                 railHex = rgbToHex(mainChart.data[0].color);
             }
 
+            // 资金滤网 - 指标2的第10个数据 (索引9)
             if (filterChart && filterChart.data && filterChart.data.length >= 10) {
                 filterValue = parseNumber(filterChart.data[9].val);
                 result.filterStatus = getFilterStatus(filterValue);
             }
 
+            // MACD
             if (macdChart && macdChart.data && macdChart.data.length >= 11) {
                 momentum = parseNumber(macdChart.data[8].val);
                 fastLine = parseNumber(macdChart.data[9].val);
@@ -802,17 +756,21 @@
                 
                 result.isGoldenCross = isGoldenCross;
 
+                // 检测金叉死叉变化 (用于二次金叉/死叉判断)
                 var prevCross = crossCount[screen.key].lastCross;
                 if (prevCross !== null && prevCross !== isGoldenCross) {
+                    // 发生了交叉变化
                     if (isGoldenCross) {
                         crossCount[screen.key].golden++;
+                        // 如果是二次金叉（之前死叉后又金叉）
                         if (crossCount[screen.key].death > 0) {
-                            result.isBounce = true;
+                            result.isBounce = true; // 归零反弹
                         }
                     } else {
                         crossCount[screen.key].death++;
+                        // 如果是二次死叉（之前金叉后又死叉）
                         if (crossCount[screen.key].golden > 0) {
-                            result.isPullback = true;
+                            result.isPullback = true; // 归零反抽
                         }
                     }
                 }
@@ -849,24 +807,32 @@
                 result.fastLineStatus = getFastLineStatus(fastLineChange);
                 result.momentumStatus = getMomentumStatus(momentum, momentumChange);
 
+                // 能量警告
                 if (isGoldenCross && fastLineChange <= 0) {
                     result.energyWarning = '⚠️ 金叉能量不足！快线' + (fastLineChange < -0.0001 ? '下跌' : '平缓') + '，注意变盘！';
                 } else if (!isGoldenCross && fastLineChange >= 0 && historyData[screen.key].fastLine.length > 2) {
                     result.energyWarning = '⚠️ 死叉能量不足！快线' + (fastLineChange > 0.0001 ? '上涨' : '平缓') + '，注意变盘！';
                 }
 
+                // === 收集所有信号（不覆盖）===
+                
+                // 1. 归零反弹信号
                 if (result.isBounce) {
                     result.signals.push({ type: 'bounce', text: '🔄 归零反弹！建议做多', class: 'trade-bounce' });
                 }
                 
+                // 2. 归零反抽信号
                 if (result.isPullback) {
                     result.signals.push({ type: 'pullback', text: '🔄 归零反抽！建议做空', class: 'trade-pullback' });
                 }
                 
+                // 3. 常规交易信号
                 if (result.filterStatus) {
+                    // 做多条件: 金叉 + 滤网红 + 多方放量
                     if (isGoldenCross && result.filterStatus.signal === 'red' && result.momentumStatus.side === '多方' && momentumChange > 0.0001) {
                         result.signals.push({ type: 'long', text: '📈 建议做多', class: 'trade-long' });
                     }
+                    // 做空条件: 死叉 + 滤网蓝 + 空方放量
                     if (!isGoldenCross && result.filterStatus.signal === 'blue' && result.momentumStatus.side === '空方' && momentumChange < -0.0001) {
                         result.signals.push({ type: 'short', text: '📉 建议做空', class: 'trade-short' });
                     }
@@ -875,6 +841,7 @@
 
             analysisResults[screen.key] = result;
 
+            // === 简洁模式 ===
             if (config.simpleMode) {
                 var fastStatus = result.fastLineStatus || { text: '—', class: '', simple: '—' };
                 var momStatus = result.momentumStatus || { side: '—', status: '—', color: '#888' };
@@ -885,6 +852,7 @@
 
                 html += "<div class='tv-analysis-box' style='background:#222;padding:8px;border-radius:4px;border-left:4px solid " + borderColor + ";'>";
                 
+                // 第一行：名称 + 快线状态 + 金叉死叉 + 滤网
                 html += "<div style='display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;flex-wrap:wrap;gap:4px;'>";
                 html += "<span style='color:#ffd700;font-weight:bold;font-size:13px;'>" + screen.name + "</span>";
                 html += "<span class='" + fastStatus.class + "' style='font-size:15px;font-weight:bold;'>" + fastStatus.simple + "</span>";
@@ -892,6 +860,7 @@
                 html += "<span style='font-size:10px;'>滤网:" + filterText + "</span>";
                 html += "</div>";
                 
+                // 第二行：数据
                 html += "<div class='tv-data-grid' style='grid-template-columns:repeat(auto-fit,minmax(80px,1fr));font-size:10px;'>";
                 html += "<div>中轨: <span style='color:" + railHex + ";font-weight:bold;'>" + railLength + "</span></div>";
                 html += "<div style='color:" + momStatus.color + ";'>" + momStatus.side + ": " + momentum.toFixed(3) + "</div>";
@@ -899,10 +868,12 @@
                 html += "<div style='font-size:9px;color:" + momStatus.color + ";'>" + momStatus.side + momStatus.status + "</div>";
                 html += "</div>";
                 
+                // 能量警告
                 if (result.energyWarning) {
                     html += "<div class='energy-warning'>" + result.energyWarning + "</div>";
                 }
                 
+                // 所有信号（不覆盖）
                 if (result.signals.length > 0) {
                     html += "<div class='signal-list'>";
                     result.signals.forEach(function(sig) {
@@ -913,6 +884,7 @@
                 
                 html += "</div>";
             } 
+            // === 完整模式 ===
             else {
                 var fastStatus = result.fastLineStatus || { text: '—', class: '' };
                 var momStatus = result.momentumStatus || { side: '—', status: '—', color: '#888' };
@@ -929,6 +901,7 @@
                 html += "<span class='" + fastStatus.class + "' style='font-size:16px;font-weight:bold;'>" + fastStatus.text + "</span>";
                 html += "</div>";
 
+                // 中轨 + 滤网
                 html += "<div style='display:flex;gap:10px;margin-bottom:8px;flex-wrap:wrap;'>";
                 html += "<div style='padding:6px;background:rgba(0,0,0,0.2);border-radius:4px;flex:1;min-width:100px;'>";
                 html += "<span style='color:#aaa;font-size:10px;'>📈 中轨:</span> ";
@@ -941,6 +914,7 @@
                 html += "</div>";
                 html += "</div>";
 
+                // MACD
                 if (macdChart && macdChart.data && macdChart.data.length >= 11) {
                     var crossBg = isGoldenCross 
                         ? 'background:linear-gradient(90deg,rgba(255,215,0,0.15),transparent);border-left:3px solid #ffd700;'
@@ -965,6 +939,7 @@
                         html += "<div class='energy-warning'>" + result.energyWarning + "</div>";
                     }
 
+                    // 所有信号（不覆盖）
                     if (result.signals.length > 0) {
                         html += "<div class='signal-list'>";
                         result.signals.forEach(function(sig) {
@@ -979,16 +954,16 @@
             }
         });
 
-        // ===== 修改：双屏共振判断 =====
+        // --- 双屏共振判断 ---
         var leftResult = analysisResults.left;
         var rightResult = analysisResults.right;
-        var resonanceItems = [];
+        var resonanceItems = []; // 存储所有共振提示
         var shouldTriggerFullscreen = false;
         var fullscreenType = '';
         var fullscreenDetail = '';
         
         if (leftResult && rightResult && leftResult.fastLineStatus && rightResult.fastLineStatus) {
-            // 1. 双屏归零反弹 - 触发全屏遮罩
+            // 1. 双屏归零反弹
             if (leftResult.isBounce && rightResult.isBounce) {
                 resonanceItems.push('<span class="resonance-status resonance-bounce">🔄 双屏归零反弹！</span>');
                 shouldTriggerFullscreen = true;
@@ -996,7 +971,7 @@
                 fullscreenDetail = '二次金叉，建议做多';
             }
             
-            // 2. 双屏归零反抽 - 触发全屏遮罩
+            // 2. 双屏归零反抽
             if (leftResult.isPullback && rightResult.isPullback) {
                 resonanceItems.push('<span class="resonance-status resonance-pullback">🔄 双屏归零反抽！</span>');
                 shouldTriggerFullscreen = true;
@@ -1004,7 +979,7 @@
                 fullscreenDetail = '二次死叉，建议做空';
             }
             
-            // 3. 双屏同时做多信号 - 触发全屏遮罩
+            // 3. 双屏同时做多信号
             var leftHasLong = leftResult.signals.some(function(s) { return s.type === 'long'; });
             var rightHasLong = rightResult.signals.some(function(s) { return s.type === 'long'; });
             if (leftHasLong && rightHasLong) {
@@ -1016,7 +991,7 @@
                 }
             }
             
-            // 4. 双屏同时做空信号 - 触发全屏遮罩
+            // 4. 双屏同时做空信号
             var leftHasShort = leftResult.signals.some(function(s) { return s.type === 'short'; });
             var rightHasShort = rightResult.signals.some(function(s) { return s.type === 'short'; });
             if (leftHasShort && rightHasShort) {
@@ -1028,32 +1003,37 @@
                 }
             }
             
-            // 5. 双屏同时金叉 - 仅状态栏显示，不触发遮罩
+            // 5. 双屏同时金叉
             if (leftResult.isGoldenCross && rightResult.isGoldenCross) {
                 resonanceItems.push('<span class="resonance-status resonance-golden">🌟 双屏金叉</span>');
             }
             
-            // 6. 双屏同时死叉 - 仅状态栏显示，不触发遮罩
+            // 6. 双屏同时死叉
             if (!leftResult.isGoldenCross && !rightResult.isGoldenCross && historyData.left.fastLine.length > 2) {
                 resonanceItems.push('<span class="resonance-status resonance-death">💀 双屏死叉</span>');
             }
             
-            // 7. 双屏快线同时上涨 - 仅状态栏显示，不触发遮罩
+            // 7. 双屏快线同时上涨
             if (leftResult.fastLineStatus.class === 'status-up' && rightResult.fastLineStatus.class === 'status-up') {
                 resonanceItems.push('<span class="resonance-status resonance-long">🚀 双屏上涨</span>');
             }
             
-            // 8. 双屏快线同时下跌 - 仅状态栏显示，不触发遮罩
+            // 8. 双屏快线同时下跌
             if (leftResult.fastLineStatus.class === 'status-down' && rightResult.fastLineStatus.class === 'status-down') {
                 resonanceItems.push('<span class="resonance-status resonance-short">💥 双屏下跌</span>');
             }
             
-            // 触发全屏警报（只有4种关键信号）
+            // 触发全屏警报
             if (shouldTriggerFullscreen && config.alertEnabled) {
-                showFullscreenAlert(fullscreenType, fullscreenDetail);
+                var currentTime = Date.now();
+                if (currentTime - lastResonanceTime > resonanceCooldown) {
+                    lastResonanceTime = currentTime;
+                    showFullscreenAlert(fullscreenType, fullscreenDetail);
+                }
             }
         }
 
+        // 显示所有共振提示（不覆盖）
         resonanceStatusEl.innerHTML = resonanceItems.length > 0 
             ? resonanceItems.join('') 
             : '<span style="color:#888;">监控中...</span>';
@@ -1124,6 +1104,7 @@
             document.getElementById('record-count').textContent = recordedData.length;
         }
 
+        // 原始数据面板
         var html = "";
         var maxRows = Math.max(chartData[0]?.length || 0, chartData[1]?.length || 0);
 
@@ -1263,23 +1244,6 @@
             saveConfig();
         };
         
-        // ===== 新增：重置计数器按钮 =====
-        document.getElementById('btn-reset-counter').onclick = function() {
-            alertCounter = {
-                long: { count: 0, lastTime: 0 },
-                short: { count: 0, lastTime: 0 },
-                bounce: { count: 0, lastTime: 0 },
-                pullback: { count: 0, lastTime: 0 }
-            };
-            this.textContent = '✓ 已重置';
-            this.style.background = '#27ae60';
-            setTimeout(function() {
-                document.getElementById('btn-reset-counter').textContent = '🔄 重置计数';
-                document.getElementById('btn-reset-counter').style.background = '#f39c12';
-            }, 2000);
-            console.log('[V7.9] 提醒计数器已重置');
-        };
-        
         document.getElementById('btn-save-config').onclick = function() {
             saveConfig();
             this.textContent = '✓ 已保存';
@@ -1315,7 +1279,7 @@
         document.getElementById('input-period').onchange = function() {
             var val = parseFloat(this.value);
             if (val >= 0.1 && val <= 60) {
-                tempConfig.periodTime = val * 60000;
+                tempConfig.periodTime = val * 60000; // 转换为毫秒
                 showConfigPending();
             }
         };
@@ -1336,6 +1300,7 @@
             clearInterval(updateTimer);
             updateTimer = setInterval(updatePanel, config.updateInterval);
             
+            // 清空历史数据
             historyData.left.fastLine = [];
             historyData.left.momentum = [];
             historyData.left.timestamps = [];
@@ -1343,6 +1308,7 @@
             historyData.right.momentum = [];
             historyData.right.timestamps = [];
             
+            // 重置金叉死叉计数
             crossCount.left = { golden: 0, death: 0, lastCross: null };
             crossCount.right = { golden: 0, death: 0, lastCross: null };
             
@@ -1385,6 +1351,6 @@
     updateTimer = setInterval(updatePanel, config.updateInterval);
     if (window.__TV_HOT_CONTEXT) window.__TV_HOT_CONTEXT.timer = updateTimer;
 
-    console.log(">>> [云端 V7.9 增强版] 初始化完成！智能遮罩已启用，归零信号延长至8秒");
+    console.log(">>> [云端 V7.9] 初始化完成！配置自动加载，位置和设置已恢复");
 
 })();
