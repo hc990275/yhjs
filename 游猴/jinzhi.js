@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         TradingView 金指数据监控 V7.0 (带记录功能)
+// @name         TradingView 金指数据监控 V7.0 (带记录版)
 // @namespace    http://tampermonkey.net/
 // @version      7.1
-// @description  监控左右分屏指标数据，支持共振高亮与数据本地导出CSV
+// @description  基于原版增加日志记录功能
 // @author       You
 // @match        https://*.tradingview.com/chart/*
 // @grant        none
@@ -11,30 +11,41 @@
 (function() {
     'use strict';
 
-    // --- 全局配置与状态 ---
-    const CONFIG = {
-        keywords: ['金指', '数据智能'], // 监控关键词
-        scanInterval: 1000,            // 扫描频率(ms)
-    };
+    // --- 新增：记录相关的状态变量 ---
+    let isRecording = false;
+    let recordedData = [];
 
-    let isRecording = false; // 是否正在记录
-    let recordedData = [];   // 存储记录的数据
-    let recordCount = 0;     // 记录条数计数
+    // --- 新增：导出 CSV 函数 ---
+    function downloadCSV() {
+        if (recordedData.length === 0) {
+            alert('暂无数据');
+            return;
+        }
+        let csvContent = "\uFEFF时间,指标名称,左屏数值,左屏颜色,右屏数值,右屏颜色,是否共振\n";
+        recordedData.forEach(row => {
+            csvContent += `${row.time},${row.name},${row.lVal},${row.lColor},${row.rVal},${row.rColor},${row.resonance}\n`;
+        });
+        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+        const link = document.createElement("a");
+        link.href = URL.createObjectURL(blob);
+        link.download = `TV_Log_${new Date().toISOString().slice(0,19).replace(/T|:/g,"-")}.csv`;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
 
-    // --- 热更新清理 (防止开发调试时重复创建) ---
-    if (window.__TV_MONITOR_PANEL) {
+    if (window.__TV_HOT_CONTEXT) {
         try {
-            document.body.removeChild(window.__TV_MONITOR_PANEL);
-            clearInterval(window.__TV_MONITOR_TIMER);
+            document.body.removeChild(window.__TV_HOT_CONTEXT.panel);
+            clearInterval(window.__TV_HOT_CONTEXT.timer);
         } catch(e) {}
     }
 
-    // --- 辅助函数：颜色转换 RGB转Hex ---
     function rgbToHex(rgb) {
         if (!rgb || rgb.indexOf('rgb') === -1) return '#ffffff';
-        const sep = rgb.indexOf(",") > -1 ? "," : " ";
+        var sep = rgb.indexOf(",") > -1 ? "," : " ";
         rgb = rgb.substr(4).split(")")[0].split(sep);
-        let r = (+rgb[0]).toString(16),
+        var r = (+rgb[0]).toString(16),
             g = (+rgb[1]).toString(16),
             b = (+rgb[2]).toString(16);
         if (r.length == 1) r = "0" + r;
@@ -43,244 +54,131 @@
         return "#" + r + g + b;
     }
 
-    // --- 辅助函数：导出CSV ---
-    function downloadCSV() {
-        if (recordedData.length === 0) {
-            alert('没有数据可导出，请先开始记录！');
-            return;
-        }
-
-        // CSV 表头
-        let csvContent = "\uFEFF"; // 添加 BOM 防止 Excel 中文乱码
-        csvContent += "时间,指标名称,左屏数值,左屏方向(颜色),右屏数值,右屏方向(颜色),共振状态\n";
-
-        // 构建数据行
-        recordedData.forEach(row => {
-            csvContent += `${row.time},${row.name},${row.lVal},${row.lColor},${row.rVal},${row.rColor},${row.resonance}\n`;
-        });
-
-        // 创建下载链接
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        const url = URL.createObjectURL(blob);
-        const timestamp = new Date().toISOString().slice(0,19).replace(/T|:/g,"-");
-        
-        link.setAttribute("href", url);
-        link.setAttribute("download", `TV_Data_Log_${timestamp}.csv`);
-        link.style.visibility = 'hidden';
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
-    }
-
-    // --- 核心逻辑：UI 构建 ---
-    const panel = document.createElement('div');
+    var panel = document.createElement('div');
     panel.id = 'tv-monitor-panel-v7';
-    window.__TV_MONITOR_PANEL = panel;
-
-    // 样式定义
     panel.style.cssText = `
-        position: fixed;
-        top: 60px;
-        right: 20px;
-        width: 380px;
-        background: rgba(30, 34, 45, 0.95);
-        color: #e0e3eb;
-        z-index: 9999;
-        border-radius: 8px;
-        box-shadow: 0 4px 12px rgba(0,0,0,0.5);
+        position: fixed; top: 100px; right: 20px; width: 320px;
+        background: #1e222d; color: #d1d4dc; z-index: 9999;
+        border-radius: 4px; box-shadow: 0 2px 5px rgba(0,0,0,0.3);
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif;
-        font-size: 12px;
-        border: 1px solid #434651;
-        user-select: none;
+        font-size: 12px; border: 1px solid #434651;
     `;
 
-    // --- 核心逻辑：数据提取与更新 ---
     function updatePanel() {
-        // 1. 获取图表窗口
-        const widgets = document.querySelectorAll('.chart-widget');
+        var widgets = document.querySelectorAll('.chart-widget');
         if (widgets.length < 2) {
-            panel.innerHTML = `<div style="padding:15px; color:#ff6b6b;">⚠ 需要至少两个分屏图表</div>`;
+            panel.innerHTML = '<div style="padding:10px;">等待分屏加载...</div>';
             return;
         }
 
-        // 2. 提取左右屏数据函数
-        const extractData = (widgetIndex) => {
-            const container = widgets[widgetIndex];
-            const titles = Array.from(container.querySelectorAll('[class*="title-"]'));
-            
-            // 筛选符合关键词的指标
-            const targets = titles.filter(t => CONFIG.keywords.some(k => t.innerText.includes(k)));
-            
-            // 提取数据
-            return targets.map(t => {
-                const parent = t.closest('[class*="legend-"]'); // 向上找容器 (可能需要根据实际DOM调整)
-                if(!parent) return null;
-                
-                // 查找数值元素
-                const valEl = parent.querySelector('[class*="valueValue-"]');
-                if(!valEl) return null;
-
-                const colorStr = window.getComputedStyle(valEl).color;
-                
+        var lW = widgets[0], rW = widgets[1];
+        
+        // 筛选函数保持原样
+        var getItems = (w) => {
+            var titles = Array.from(w.querySelectorAll('[class*="title-"]'));
+            return titles.filter(t => t.innerText.includes('金指') || t.innerText.includes('数据智能')).map(t => {
+                var p = t;
+                while(p && !p.className.includes('legend-')) p = p.parentElement;
+                if(!p) return null;
+                var v = p.querySelector('[class*="valueValue-"]');
                 return {
-                    name: t.innerText.trim(),
-                    value: valEl.innerText.trim(),
-                    color: rgbToHex(colorStr),
-                    top: t.getBoundingClientRect().top // 用于对齐排序
+                    name: t.innerText,
+                    val: v ? v.innerText : '-',
+                    color: v ? window.getComputedStyle(v).color : '',
+                    top: t.getBoundingClientRect().top
                 };
-            }).filter(d => d !== null).sort((a,b) => a.top - b.top);
+            }).filter(i => i).sort((a,b) => a.top - b.top);
         };
 
-        const leftData = extractData(0);
-        const rightData = extractData(1);
-
-        // 3. 数据合并对齐 (简单按索引对齐，假设左右指标顺序一致)
-        const rows = [];
-        const maxLen = Math.max(leftData.length, rightData.length);
+        var lData = getItems(lW);
+        var rData = getItems(rW);
         
-        // 获取当前时间
-        const nowStr = new Date().toLocaleTimeString('zh-CN', {hour12: false});
-        
-        for(let i=0; i<maxLen; i++) {
-            const l = leftData[i] || {name: '-', value: '-', color: '#666'};
-            const r = rightData[i] || {name: '-', value: '-', color: '#666'};
-            
-            // 判断名称是否近似 (可选)
-            const displayName = l.name !== '-' ? l.name : r.name;
-            
-            // 判断共振
-            const isResonance = (l.color === r.color && l.value !== '-' && r.value !== '-');
-            const rowBg = isResonance ? 'rgba(46, 204, 113, 0.15)' : 'transparent';
-            
-            rows.push({
-                displayName,
-                l,
-                r,
-                rowBg,
-                isResonance
-            });
-
-            // --- 记录数据逻辑 ---
-            if (isRecording) {
-                recordedData.push({
-                    time: nowStr,
-                    name: displayName,
-                    lVal: l.value,
-                    lColor: l.color,
-                    rVal: r.value,
-                    rColor: r.color,
-                    resonance: isResonance ? "是" : "否"
-                });
-            }
-        }
-
-        if (isRecording) recordCount += rows.length;
-
-        // 4. 构建 HTML
-        let html = `
-            <div id="drag-handle" style="padding: 10px; background: #2a2e39; border-bottom: 1px solid #434651; cursor: move; display:flex; justify-content:space-between; align-items:center; border-radius: 8px 8px 0 0;">
-                <span style="font-weight:bold; color:#d1d4dc;">📊 金指数据监控</span>
-                <div style="display:flex; gap:5px;">
-                    <button id="btn-record" style="background:${isRecording ? '#ff4757' : '#2ecc71'}; border:none; color:white; padding:4px 8px; border-radius:4px; cursor:pointer;">
-                        ${isRecording ? '⏹ 停止' : '⏺ 录制'}
-                    </button>
-                    <button id="btn-export" style="background:#3498db; border:none; color:white; padding:4px 8px; border-radius:4px; cursor:pointer;">
-                        💾 导出
-                    </button>
+        // --- 修改点1：在标题栏增加了两个小按钮 ---
+        var html = `
+            <div id="drag-handle" style="padding: 8px; background: #2a2e39; border-bottom: 1px solid #434651; cursor: move; display:flex; justify-content:space-between;">
+                <b>TradingView 金指数据监控 V7.0</b>
+                <div>
+                    <span id="rec-status" style="margin-right:5px; color:${isRecording ? '#ff5252':'#666'}">${isRecording?'●':''}</span>
+                    <button id="btn-toggle" style="cursor:pointer; background:none; border:1px solid #666; color:#ccc; font-size:10px;">${isRecording?'停止':'录制'}</button>
+                    <button id="btn-down" style="cursor:pointer; background:none; border:1px solid #666; color:#ccc; font-size:10px;">下载</button>
                 </div>
             </div>
-            
-            <div style="padding: 5px 10px; font-size:10px; color:#888; border-bottom:1px solid #434651;">
-                已记录数据: <span style="color:#e0e3eb">${recordCount}</span> 行 
-                ${isRecording ? '<span style="color:#e74c3c; margin-left:5px;">● 录制中...</span>' : ''}
-            </div>
-
-            <table style="width:100%; border-collapse: collapse; text-align: left;">
-                <thead>
-                    <tr style="color: #787b86; font-size: 10px; border-bottom: 1px solid #434651;">
-                        <th style="padding: 8px;">指标名称</th>
-                        <th style="padding: 8px;">左屏 (40分)</th>
-                        <th style="padding: 8px;">右屏 (10分)</th>
-                    </tr>
-                </thead>
-                <tbody>
+            <table style="width:100%; border-collapse: collapse;">
+                <tr style="color: #787b86;">
+                    <td style="padding:5px;">指标</td>
+                    <td style="padding:5px;">左屏(40分)</td>
+                    <td style="padding:5px;">右屏(10分)</td>
+                </tr>
         `;
 
-        rows.forEach(row => {
+        // 记录时间戳
+        let nowTime = new Date().toLocaleTimeString();
+
+        var max = Math.max(lData.length, rData.length);
+        for(var i=0; i<max; i++) {
+            var l = lData[i] || {name:'-', val:'-', color:''};
+            var r = rData[i] || {name:'-', val:'-', color:''};
+            
+            var lHex = rgbToHex(l.color);
+            var rHex = rgbToHex(r.color);
+            var resonance = (lHex === rHex && lHex !== '#ffffff');
+            
+            var bg = resonance ? 'rgba(46, 204, 113, 0.1)' : '';
+
+            // --- 新增：如果正在录制，将数据推入数组 ---
+            if (isRecording) {
+                recordedData.push({
+                    time: nowTime,
+                    name: l.name !== '-' ? l.name : r.name,
+                    lVal: l.val,
+                    lColor: lHex,
+                    rVal: r.val,
+                    rColor: rHex,
+                    resonance: resonance ? "是" : "否"
+                });
+            }
+
             html += `
-                <tr style="background:${row.rowBg}; border-bottom: 1px solid #363a45;">
-                    <td style="padding: 6px 8px; max-width:100px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;">${row.displayName}</td>
-                    
-                    <td style="padding: 6px 8px;">
-                        <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${row.l.color}; margin-right:5px;"></span>
-                        <span style="color:${row.l.color}">${row.l.value}</span>
-                    </td>
-                    
-                    <td style="padding: 6px 8px;">
-                        <span style="display:inline-block; width:8px; height:8px; border-radius:50%; background:${row.r.color}; margin-right:5px;"></span>
-                        <span style="color:${row.r.color}">${row.r.value}</span>
-                    </td>
+                <tr style="background:${bg}">
+                    <td style="padding:4px 5px;">${l.name !== '-' ? l.name : r.name}</td>
+                    <td style="padding:4px 5px;"><span style="color:${lHex}">●</span> ${l.val}</td>
+                    <td style="padding:4px 5px;"><span style="color:${rHex}">●</span> ${r.val}</td>
                 </tr>
             `;
-        });
-
-        html += `</tbody></table>`;
-        
-        // 渲染内容
+        }
+        html += '</table>';
         panel.innerHTML = html;
 
-        // 重新绑定事件 (因为innerHTML重置了DOM)
-        bindEvents();
-    }
+        // --- 新增：绑定按钮事件 (每次刷新DOM都需要重新绑定) ---
+        document.getElementById('btn-toggle').onclick = function(e) {
+            e.stopPropagation(); // 防止触发拖动
+            isRecording = !isRecording;
+        };
+        document.getElementById('btn-down').onclick = function(e) {
+            e.stopPropagation();
+            downloadCSV();
+        };
 
-    // --- 事件绑定 ---
-    function bindEvents() {
-        // 拖动逻辑
-        const handle = document.getElementById('drag-handle');
-        if(handle) {
-            handle.onmousedown = function(e) {
-                let disX = e.clientX - panel.offsetLeft;
-                let disY = e.clientY - panel.offsetTop;
-                document.onmousemove = function(e) {
-                    panel.style.left = (e.clientX - disX) + 'px';
-                    panel.style.top = (e.clientY - disY) + 'px';
-                    panel.style.opacity = '0.8';
-                };
-                document.onmouseup = function() {
-                    document.onmousemove = null;
-                    document.onmouseup = null;
-                    panel.style.opacity = '1';
-                };
-            };
-        }
-
-        // 按钮逻辑
-        const btnRecord = document.getElementById('btn-record');
-        const btnExport = document.getElementById('btn-export');
-
-        if(btnRecord) {
-            btnRecord.onclick = () => {
-                isRecording = !isRecording;
-                // 立即触发一次更新以刷新UI状态
-                // updatePanel 在 setInterval 中会自动调用，这里不用强制调用以免闪烁
-            };
-        }
-
-        if(btnExport) {
-            btnExport.onclick = () => {
-                downloadCSV();
-            };
+        // 拖动逻辑保持不变
+        var handle = document.getElementById('drag-handle');
+        handle.onmousedown = function(e) {
+            var disX = e.clientX - panel.offsetLeft;
+            var disY = e.clientY - panel.offsetTop;
+            document.onmousemove = function(e) {
+                panel.style.left = (e.clientX - disX) + 'px';
+                panel.style.top = (e.clientY - disY) + 'px';
+                panel.style.opacity = '0.5';
+            }
+            document.onmouseup = function() {
+                document.onmousemove = null;
+                document.onmouseup = null;
+                panel.style.opacity = '1';
+            }
         }
     }
 
-    // --- 初始化与启动 ---
     document.body.appendChild(panel);
-    
-    // 定时扫描
-    window.__TV_MONITOR_TIMER = setInterval(updatePanel, CONFIG.scanInterval);
-
-    // 初次运行
+    var timer = setInterval(updatePanel, 1000);
+    window.__TV_HOT_CONTEXT = { panel: panel, timer: timer };
     updatePanel();
-
 })();
