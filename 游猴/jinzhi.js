@@ -1,184 +1,191 @@
-// ==UserScript==
-// @name         TradingView 金指数据监控 V7.0 (带记录版)
-// @namespace    http://tampermonkey.net/
-// @version      7.1
-// @description  基于原版增加日志记录功能
-// @author       You
-// @match        https://*.tradingview.com/chart/*
-// @grant        none
-// ==/UserScript==
+/* 
+   云端脚本：TradingView 金指数据监控 V7.0 (颜色识别+拖动+对比版)
+   功能：抓取数值颜色、支持面板拖动、左右分屏并排对比
+*/
 
 (function() {
-    'use strict';
+    console.log(">>> [云端 V7] 启动颜色对比监控...");
 
-    // --- 新增：记录相关的状态变量 ---
-    let isRecording = false;
-    let recordedData = [];
+    // --- 1. 面板创建与样式 (支持拖动) ---
+    // 如果旧面板存在，先移除
+    var old = document.getElementById('tv-monitor-panel-v7');
+    if(old) old.remove();
 
-    // --- 新增：导出 CSV 函数 ---
-    function downloadCSV() {
-        if (recordedData.length === 0) {
-            alert('暂无数据');
-            return;
+    var panel = document.createElement('div');
+    panel.id = 'tv-monitor-panel-v7';
+    panel.style.cssText = "position:fixed; top:100px; right:100px; width:400px; background:rgba(20, 20, 20, 0.95); color:#ecf0f1; font-family:'Consolas', monospace; font-size:12px; z-index:999999; border-radius:8px; border: 1px solid #444; box-shadow: 0 8px 20px rgba(0,0,0,0.6); display:flex; flex-direction:column; overflow:hidden;";
+    
+    // 标题栏 (用于拖动)
+    var header = document.createElement('div');
+    header.style.cssText = "padding:8px; background:#2d3436; cursor:move; font-weight:bold; color:#00b894; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #444;";
+    header.innerHTML = "<span>⚖️ 金指系统多空共振 V7</span><span style='font-size:10px;color:#aaa'>按住拖动</span>";
+    panel.appendChild(header);
+
+    // 内容区
+    var content = document.createElement('div');
+    content.style.cssText = "padding:10px; max-height:500px; overflow-y:auto;";
+    panel.appendChild(content);
+
+    document.body.appendChild(panel);
+
+    // 注册给加载器清理
+    if (window.__TV_HOT_CONTEXT) window.__TV_HOT_CONTEXT.panel = panel;
+
+    // --- 2. 拖动逻辑 ---
+    var isDragging = false;
+    var offsetX, offsetY;
+    header.onmousedown = function(e) {
+        isDragging = true;
+        offsetX = e.clientX - panel.offsetLeft;
+        offsetY = e.clientY - panel.offsetTop;
+        panel.style.opacity = "0.7";
+    };
+    document.onmousemove = function(e) {
+        if (isDragging) {
+            panel.style.left = (e.clientX - offsetX) + "px";
+            panel.style.top = (e.clientY - offsetY) + "px";
+            panel.style.right = "auto"; // 取消right定位，防止冲突
         }
-        let csvContent = "\uFEFF时间,指标名称,左屏数值,左屏颜色,右屏数值,右屏颜色,是否共振\n";
-        recordedData.forEach(row => {
-            csvContent += `${row.time},${row.name},${row.lVal},${row.lColor},${row.rVal},${row.rColor},${row.resonance}\n`;
-        });
-        const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-        const link = document.createElement("a");
-        link.href = URL.createObjectURL(blob);
-        link.download = `TV_Log_${new Date().toISOString().slice(0,19).replace(/T|:/g,"-")}.csv`;
-        document.body.appendChild(link);
-        link.click();
-        document.body.removeChild(link);
+    };
+    document.onmouseup = function() {
+        isDragging = false;
+        panel.style.opacity = "1";
+    };
+
+    // --- 3. 辅助函数：提取颜色 ---
+    function getColorName(rgbStr) {
+        if(!rgbStr) return "N/A";
+        // 简单判断几个常见色
+        if(rgbStr.includes("255, 82, 82")) return "🔴红"; // TV默认红
+        if(rgbStr.includes("0, 255")) return "🟢绿"; 
+        if(rgbStr.includes("33, 150, 243")) return "🔵蓝";
+        if(rgbStr.includes("255, 255, 255")) return "⚪白";
+        if(rgbStr.includes("255, 235, 59")) return "🟡黄";
+        // 如果是其他颜色，返回RGB简写
+        return "🎨色"; 
     }
 
-    if (window.__TV_HOT_CONTEXT) {
-        try {
-            document.body.removeChild(window.__TV_HOT_CONTEXT.panel);
-            clearInterval(window.__TV_HOT_CONTEXT.timer);
-        } catch(e) {}
-    }
-
+    // 转换RGB为Hex用于显示小圆点
     function rgbToHex(rgb) {
-        if (!rgb || rgb.indexOf('rgb') === -1) return '#ffffff';
+        if(!rgb) return '#fff';
         var sep = rgb.indexOf(",") > -1 ? "," : " ";
         rgb = rgb.substr(4).split(")")[0].split(sep);
-        var r = (+rgb[0]).toString(16),
-            g = (+rgb[1]).toString(16),
-            b = (+rgb[2]).toString(16);
+        var r = (+rgb[0]).toString(16), g = (+rgb[1]).toString(16), b = (+rgb[2]).toString(16);
         if (r.length == 1) r = "0" + r;
         if (g.length == 1) g = "0" + g;
         if (b.length == 1) b = "0" + b;
         return "#" + r + g + b;
     }
 
-    var panel = document.createElement('div');
-    panel.id = 'tv-monitor-panel-v7';
-    panel.style.cssText = `
-        position: fixed; top: 100px; right: 20px; width: 320px;
-        background: #1e222d; color: #d1d4dc; z-index: 9999;
-        border-radius: 4px; box-shadow: 0 2px 5px rgba(0,0,0,0.3);
-        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Ubuntu, sans-serif;
-        font-size: 12px; border: 1px solid #434651;
-    `;
-
+    // --- 4. 核心扫描与对比逻辑 ---
     function updatePanel() {
         var widgets = document.querySelectorAll('.chart-widget');
         if (widgets.length < 2) {
-            panel.innerHTML = '<div style="padding:10px;">等待分屏加载...</div>';
+            content.innerHTML = "<div style='color:orange'>⚠️ 需要至少 2 个分屏才能对比</div>";
             return;
         }
 
-        var lW = widgets[0], rW = widgets[1];
-        
-        // 筛选函数保持原样
-        var getItems = (w) => {
-            var titles = Array.from(w.querySelectorAll('[class*="title-"]'));
-            return titles.filter(t => t.innerText.includes('金指') || t.innerText.includes('数据智能')).map(t => {
-                var p = t;
-                while(p && !p.className.includes('legend-')) p = p.parentElement;
-                if(!p) return null;
-                var v = p.querySelector('[class*="valueValue-"]');
-                return {
-                    name: t.innerText,
-                    val: v ? v.innerText : '-',
-                    color: v ? window.getComputedStyle(v).color : '',
-                    top: t.getBoundingClientRect().top
-                };
-            }).filter(i => i).sort((a,b) => a.top - b.top);
-        };
+        // 收集数据容器
+        // 结构: chartData[0] = [ {title, values:[ {text, color} ]}, ... ]
+        var chartData = []; 
 
-        var lData = getItems(lW);
-        var rData = getItems(rW);
-        
-        // --- 修改点1：在标题栏增加了两个小按钮 ---
-        var html = `
-            <div id="drag-handle" style="padding: 8px; background: #2a2e39; border-bottom: 1px solid #434651; cursor: move; display:flex; justify-content:space-between;">
-                <b>TradingView 金指数据监控 V7.0</b>
-                <div>
-                    <span id="rec-status" style="margin-right:5px; color:${isRecording ? '#ff5252':'#666'}">${isRecording?'●':''}</span>
-                    <button id="btn-toggle" style="cursor:pointer; background:none; border:1px solid #666; color:#ccc; font-size:10px;">${isRecording?'停止':'录制'}</button>
-                    <button id="btn-down" style="cursor:pointer; background:none; border:1px solid #666; color:#ccc; font-size:10px;">下载</button>
-                </div>
-            </div>
-            <table style="width:100%; border-collapse: collapse;">
-                <tr style="color: #787b86;">
-                    <td style="padding:5px;">指标</td>
-                    <td style="padding:5px;">左屏(40分)</td>
-                    <td style="padding:5px;">右屏(10分)</td>
-                </tr>
-        `;
-
-        // 记录时间戳
-        let nowTime = new Date().toLocaleTimeString();
-
-        var max = Math.max(lData.length, rData.length);
-        for(var i=0; i<max; i++) {
-            var l = lData[i] || {name:'-', val:'-', color:''};
-            var r = rData[i] || {name:'-', val:'-', color:''};
+        widgets.forEach(function(widget, wIndex) {
+            if(wIndex > 1) return; // 只取前两个分屏
             
-            var lHex = rgbToHex(l.color);
-            var rHex = rgbToHex(r.color);
-            var resonance = (lHex === rHex && lHex !== '#ffffff');
+            var widgetInfo = [];
+            // 按垂直位置排序，确保 主图、副图1、副图2 顺序一致
+            var titleElements = Array.from(widget.querySelectorAll('div[class*="title-"]'));
             
-            var bg = resonance ? 'rgba(46, 204, 113, 0.1)' : '';
+            // 过滤并排序
+            var validTitles = titleElements.filter(function(t){
+                var txt = t.innerText;
+                return (txt.includes("金指") || txt.includes("数据智能")) && txt.length < 50;
+            }).sort(function(a, b){
+                return a.getBoundingClientRect().top - b.getBoundingClientRect().top;
+            });
 
-            // --- 新增：如果正在录制，将数据推入数组 ---
-            if (isRecording) {
-                recordedData.push({
-                    time: nowTime,
-                    name: l.name !== '-' ? l.name : r.name,
-                    lVal: l.val,
-                    lColor: lHex,
-                    rVal: r.val,
-                    rColor: rHex,
-                    resonance: resonance ? "是" : "否"
-                });
-            }
+            validTitles.forEach(function(t) {
+                // 向上找父级，再向下找数值
+                var p = t; 
+                var foundValues = [];
+                for(var i=0; i<4; i++) {
+                    if(!p.parentElement) break;
+                    p = p.parentElement;
+                    var vs = p.querySelectorAll('div[class*="valueValue-"]');
+                    if(vs.length > 0) {
+                        vs.forEach(function(v){ 
+                            if(v.innerText && /\d/.test(v.innerText)) {
+                                // ★ 获取计算后的颜色 ★
+                                var computedStyle = window.getComputedStyle(v);
+                                foundValues.push({
+                                    val: v.innerText,
+                                    color: computedStyle.color
+                                });
+                            }
+                        });
+                        if(foundValues.length > 0) break;
+                    }
+                }
+                if(foundValues.length > 0) {
+                    widgetInfo.push({ name: t.innerText.substring(0,6), data: foundValues });
+                }
+            });
+            chartData.push(widgetInfo);
+        });
 
-            html += `
-                <tr style="background:${bg}">
-                    <td style="padding:4px 5px;">${l.name !== '-' ? l.name : r.name}</td>
-                    <td style="padding:4px 5px;"><span style="color:${lHex}">●</span> ${l.val}</td>
-                    <td style="padding:4px 5px;"><span style="color:${rHex}">●</span> ${r.val}</td>
-                </tr>
-            `;
-        }
-        html += '</table>';
-        panel.innerHTML = html;
+        // --- 5. 生成对比表格 ---
+        var html = "";
+        
+        // 假设左右两边的指标顺序是一样的（主图vs主图，副图vs副图）
+        // 这里的 maxLen 是为了防止某一屏指标没加载出来
+        var maxRows = Math.max(chartData[0]?.length || 0, chartData[1]?.length || 0);
 
-        // --- 新增：绑定按钮事件 (每次刷新DOM都需要重新绑定) ---
-        document.getElementById('btn-toggle').onclick = function(e) {
-            e.stopPropagation(); // 防止触发拖动
-            isRecording = !isRecording;
-        };
-        document.getElementById('btn-down').onclick = function(e) {
-            e.stopPropagation();
-            downloadCSV();
-        };
+        for(var i=0; i<maxRows; i++) {
+            var leftItem = chartData[0] ? chartData[0][i] : null;
+            var rightItem = chartData[1] ? chartData[1][i] : null;
+            
+            var rowName = leftItem ? leftItem.name : (rightItem ? rightItem.name : "未知区域");
+            
+            // 区域标题
+            html += "<div style='background:#333; padding:4px; margin-top:8px; font-weight:bold; color:#ffeaa7; border-radius:4px;'>📊 " + rowName + " (指标 " + (i+1) + ")</div>";
+            
+            // 表头
+            html += "<div style='display:grid; grid-template-columns: 30px 1fr 1fr; gap:2px; font-size:10px; color:#aaa; margin-bottom:2px;'>";
+            html += "<div>ID</div><div>左屏(40分)</div><div>右屏(10分)</div></div>";
 
-        // 拖动逻辑保持不变
-        var handle = document.getElementById('drag-handle');
-        handle.onmousedown = function(e) {
-            var disX = e.clientX - panel.offsetLeft;
-            var disY = e.clientY - panel.offsetTop;
-            document.onmousemove = function(e) {
-                panel.style.left = (e.clientX - disX) + 'px';
-                panel.style.top = (e.clientY - disY) + 'px';
-                panel.style.opacity = '0.5';
-            }
-            document.onmouseup = function() {
-                document.onmousemove = null;
-                document.onmouseup = null;
-                panel.style.opacity = '1';
+            // 数据行对比
+            var maxVals = Math.max(leftItem?.data.length || 0, rightItem?.data.length || 0);
+            
+            for(var j=0; j<maxVals; j++) {
+                var lData = leftItem && leftItem.data[j] ? leftItem.data[j] : {val:'-', color:''};
+                var rData = rightItem && rightItem.data[j] ? rightItem.data[j] : {val:'-', color:''};
+
+                // 颜色指示器
+                var lDot = `<span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:${rgbToHex(lData.color)};margin-right:4px;'></span>`;
+                var rDot = `<span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:${rgbToHex(rData.color)};margin-right:4px;'></span>`;
+
+                // 简单的状态判断（比如颜色是否一致）
+                var isColorSame = (lData.color === rData.color) && lData.color !== '';
+                var bgStyle = isColorSame ? "background:rgba(46, 204, 113, 0.1);" : ""; // 颜色一样给个微绿背景
+
+                html += `<div style='display:grid; grid-template-columns: 30px 1fr 1fr; gap:2px; align-items:center; border-bottom:1px solid #444; padding:2px 0; ${bgStyle}'>`;
+                html += `<div style='color:#74b9ff; font-weight:bold;'>${j+1}</div>`; // ID
+                html += `<div style='color:${rgbToHex(lData.color)}'>${lDot}${lData.val}</div>`; // 左数据
+                html += `<div style='color:${rgbToHex(rData.color)}'>${rDot}${rData.val}</div>`; // 右数据
+                html += `</div>`;
             }
         }
+
+        var now = new Date();
+        var timeStr = now.getHours() + ":" + now.getMinutes() + ":" + now.getSeconds();
+        html += `<div style='text-align:right; font-size:10px; color:#666; margin-top:5px;'>最后刷新: ${timeStr}</div>`;
+        
+        content.innerHTML = html;
     }
 
-    document.body.appendChild(panel);
-    var timer = setInterval(updatePanel, 1000);
-    window.__TV_HOT_CONTEXT = { panel: panel, timer: timer };
+    // --- 6. 启动 ---
     updatePanel();
+    var timer = setInterval(updatePanel, 1000);
+    if (window.__TV_HOT_CONTEXT) window.__TV_HOT_CONTEXT.timer = timer;
+
 })();
