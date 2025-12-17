@@ -610,7 +610,7 @@
 
     // --- 10. 启动定时刷新 ---
     updatePanel();
-    var timer = setInterval(updatePanel, 1000);
+    var timer = setInterval(updatePanel, 100);
     if (window.__TV_HOT_CONTEXT) window.__TV_HOT_CONTEXT.timer = timer;
 
 })();
