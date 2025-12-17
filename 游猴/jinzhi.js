@@ -149,11 +149,12 @@
         '<button id="btn-realtime" style="padding:3px 8px;border-radius:3px;font-size:10px;cursor:pointer;border:2px solid #27ae60;background:#27ae60;color:#fff;">⚡实时</button>' +
         '<button id="btn-period" style="padding:3px 8px;border-radius:3px;font-size:10px;cursor:pointer;border:2px solid #555;background:#333;color:#aaa;">📊周期</button>' +
         '<select id="select-period" style="padding:2px 4px;border-radius:3px;border:1px solid #555;background:#333;color:#fff;font-size:10px;">' +
-        '<option value="3000">3秒</option>' +
-        '<option value="5000" selected>5秒</option>' +
-        '<option value="10000">10秒</option>' +
-        '<option value="30000">30秒</option>' +
         '<option value="60000">1分钟</option>' +
+        '<option value="120000">2分钟</option>' +
+        '<option value="180000" selected>3分钟</option>' +
+        '<option value="240000">4分钟</option>' +
+        '<option value="300000">5分钟</option>' +
+        '<option value="600000">10分钟</option>' +
         '</select>';
     analysisPanel.appendChild(modeBar);
 
