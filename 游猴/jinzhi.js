@@ -133,17 +133,17 @@
         '<select id="select-period" style="padding:2px 4px;border-radius:3px;border:1px solid #555;background:#333;color:#fff;font-size:10px;">' +
         '<option value="60000">1分钟</option>' +
         '<option value="120000">2分钟</option>' +
-        '<option value="180000" selected>3分钟</option>' +
+        '<option value="180000">3分钟</option>' +
         '<option value="240000">4分钟</option>' +
-        '<option value="300000">5分钟</option>' +
+        '<option value="300000" selected>5分钟</option>' +
         '<option value="600000">10分钟</option>' +
         '</select>' +
         '<span style="margin-left:auto;font-size:9px;color:#666;">刷新:</span>' +
         '<select id="select-interval" style="padding:2px;border-radius:3px;border:1px solid #555;background:#333;color:#fff;font-size:9px;">' +
         '<option value="200">200毫秒</option>' +
-        '<option value="500" selected>500毫秒</option>' +
+        '<option value="500">500毫秒</option>' +
         '<option value="1000">1秒</option>' +
-        '<option value="5000">5秒</option>' +
+        '<option value="5000" selected>5秒</option>' +
         '<option value="10000">10秒</option>' +
         '<option value="30000">30秒</option>' +
         '<option value="60000">1分钟</option>' +
