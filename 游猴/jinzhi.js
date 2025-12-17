@@ -42,7 +42,7 @@
             pullback: 5000   // 归零反抽5秒（延长）
         },
         alertCooldown: 3000,  // 同类型信号间隔3秒
-        maxAlertCount: 2       // 每个信号最多提醒2次
+        maxAlertCount: 1       // 每个信号最多提醒2次
     };
 
     // --- 从本地存储加载配置 ---
