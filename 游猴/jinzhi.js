@@ -1,216 +1,191 @@
 /* 
-   云端脚本：TradingView 金指数据监控 V22.0 (双轨侦测+强制显示版)
-   目的：同时显示下标 8-10 和 18-20，彻底找出数据在哪，绝不留白。
+   云端脚本：TradingView 金指数据监控 V7.0 (颜色识别+拖动+对比版)
+   功能：抓取数值颜色、支持面板拖动、左右分屏并排对比
 */
 
 (function() {
-    console.log(">>> [云端 V22] 启动双轨侦测...");
+    console.log(">>> [云端 V7] 启动颜色对比监控...");
 
-    // --- 1. 全局状态 (历史记录) ---
-    if (!window.__TV_STATE) {
-        window.__TV_STATE = {
-            history: { 
-                w0: { histo: null, fast: null }, 
-                w1: { histo: null, fast: null } 
-            },
-            isCollapsed: false
-        };
-    }
-
-    // --- 2. 面板构建 ---
+    // --- 1. 面板创建与样式 (支持拖动) ---
+    // 如果旧面板存在，先移除
     var old = document.getElementById('tv-monitor-panel-v7');
     if(old) old.remove();
 
     var panel = document.createElement('div');
     panel.id = 'tv-monitor-panel-v7';
-    panel.style.cssText = "position:fixed; top:100px; right:100px; width:500px; background:rgba(15, 15, 15, 0.98); color:#ecf0f1; font-family:'Microsoft YaHei', sans-serif; font-size:12px; z-index:999999; border-radius:8px; border: 1px solid #e17055; box-shadow: 0 8px 30px rgba(0,0,0,0.8); display:flex; flex-direction:column; overflow:hidden;";
+    panel.style.cssText = "position:fixed; top:100px; right:100px; width:400px; background:rgba(20, 20, 20, 0.95); color:#ecf0f1; font-family:'Consolas', monospace; font-size:12px; z-index:999999; border-radius:8px; border: 1px solid #444; box-shadow: 0 8px 20px rgba(0,0,0,0.6); display:flex; flex-direction:column; overflow:hidden;";
     
+    // 标题栏 (用于拖动)
     var header = document.createElement('div');
-    header.style.cssText = "padding:8px 12px; background:#2d3436; cursor:move; font-weight:bold; color:#ff7675; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #444; user-select:none;";
-    header.innerHTML = `
-        <span>🚑 V22 双轨侦测 (找回数据)</span>
-        <span id="btn-collapse" style="cursor:pointer; font-size:14px;">➖</span>
-    `;
+    header.style.cssText = "padding:8px; background:#2d3436; cursor:move; font-weight:bold; color:#00b894; display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid #444;";
+    header.innerHTML = "<span>⚖️ 金指系统多空共振 V7</span><span style='font-size:10px;color:#aaa'>按住拖动</span>";
     panel.appendChild(header);
 
+    // 内容区
     var content = document.createElement('div');
-    content.style.cssText = "padding:0; max-height:600px; overflow-y:auto;";
+    content.style.cssText = "padding:10px; max-height:500px; overflow-y:auto;";
     panel.appendChild(content);
+
     document.body.appendChild(panel);
+
+    // 注册给加载器清理
     if (window.__TV_HOT_CONTEXT) window.__TV_HOT_CONTEXT.panel = panel;
 
-    // --- 3. 拖动 ---
-    var isDragging = false, startX, startY;
+    // --- 2. 拖动逻辑 ---
+    var isDragging = false;
+    var offsetX, offsetY;
     header.onmousedown = function(e) {
-        if(e.target.id === 'btn-collapse') return;
-        isDragging = true; startX = e.clientX - panel.offsetLeft; startY = e.clientY - panel.offsetTop;
-        panel.style.right = 'auto'; panel.style.opacity = "0.8";
+        isDragging = true;
+        offsetX = e.clientX - panel.offsetLeft;
+        offsetY = e.clientY - panel.offsetTop;
+        panel.style.opacity = "0.7";
     };
-    document.onmousemove = function(e) { if(isDragging) { panel.style.left = (e.clientX - startX) + "px"; panel.style.top = (e.clientY - startY) + "px"; } };
-    document.onmouseup = function() { isDragging = false; panel.style.opacity = "1"; };
-    header.querySelector('#btn-collapse').onclick = function() {
-        window.__TV_STATE.isCollapsed = !window.__TV_STATE.isCollapsed;
-        this.innerText = window.__TV_STATE.isCollapsed ? '➕' : '➖';
-        content.style.display = window.__TV_STATE.isCollapsed ? 'none' : 'block';
-    };
-
-    // --- 4. 辅助函数 ---
-    function parseNum(str) {
-        if(!str) return 0;
-        return parseFloat(str.replace(/,/g, '').replace(/−/g, '-')) || 0;
-    }
-    function rgbToHex(el) {
-        try {
-            var rgb = window.getComputedStyle(el).color;
-            if(rgb.indexOf('rgb') === -1) return "#fff";
-            var p = rgb.substr(4).split(")")[0].split(",");
-            var r = (+p[0]).toString(16), g = (+p[1]).toString(16), b = (+p[2]).toString(16);
-            return "#" + (r.length==1?"0"+r:r) + (g.length==1?"0"+g:g) + (b.length==1?"0"+b:b);
-        } catch(e) { return "#fff"; }
-    }
-    function analyzeColor(el) {
-        // V7 颜色逻辑
-        try {
-            var c = window.getComputedStyle(el).color.replace(/\s/g, '');
-            if(c.includes("254,67,101") || c.includes("255,0,0")) return {t:"🔴多", c:"#ff4757"};
-            if(c.includes("0,102,255") || c.includes("0,4,255") || c.includes("0,255,0")) return {t:"🔵空", c:"#00a8ff"};
-            if(c.includes("255,255,0") || c.includes("255,213,0")) return {t:"🟡平", c:"#fbc531"};
-            return {t:"⚪", c:"#aaa"};
-        } catch(e) { return {t:"?", c:"#555"}; }
-    }
-    function getIndicatorValues(titleEl) {
-        // 暴力向上查找
-        var p = titleEl; var results = [];
-        for(var i=0; i<6; i++) {
-            if(!p.parentElement) break;
-            p = p.parentElement;
-            var vs = p.querySelectorAll('div[class*="valueValue-"]');
-            if(vs.length > 3) { 
-                vs.forEach(v => {
-                    if((v.innerText && /\d/.test(v.innerText)) || v.innerText.includes('−')) {
-                        results.push({ val: parseNum(v.innerText), txt: v.innerText, el: v });
-                    }
-                });
-                if(results.length > 0) break;
-            }
+    document.onmousemove = function(e) {
+        if (isDragging) {
+            panel.style.left = (e.clientX - offsetX) + "px";
+            panel.style.top = (e.clientY - offsetY) + "px";
+            panel.style.right = "auto"; // 取消right定位，防止冲突
         }
-        return results;
+    };
+    document.onmouseup = function() {
+        isDragging = false;
+        panel.style.opacity = "1";
+    };
+
+    // --- 3. 辅助函数：提取颜色 ---
+    function getColorName(rgbStr) {
+        if(!rgbStr) return "N/A";
+        // 简单判断几个常见色
+        if(rgbStr.includes("255, 82, 82")) return "🔴红"; // TV默认红
+        if(rgbStr.includes("0, 255")) return "🟢绿"; 
+        if(rgbStr.includes("33, 150, 243")) return "🔵蓝";
+        if(rgbStr.includes("255, 255, 255")) return "⚪白";
+        if(rgbStr.includes("255, 235, 59")) return "🟡黄";
+        // 如果是其他颜色，返回RGB简写
+        return "🎨色"; 
     }
 
-    // --- 5. 核心逻辑 ---
+    // 转换RGB为Hex用于显示小圆点
+    function rgbToHex(rgb) {
+        if(!rgb) return '#fff';
+        var sep = rgb.indexOf(",") > -1 ? "," : " ";
+        rgb = rgb.substr(4).split(")")[0].split(sep);
+        var r = (+rgb[0]).toString(16), g = (+rgb[1]).toString(16), b = (+rgb[2]).toString(16);
+        if (r.length == 1) r = "0" + r;
+        if (g.length == 1) g = "0" + g;
+        if (b.length == 1) b = "0" + b;
+        return "#" + r + g + b;
+    }
+
+    // --- 4. 核心扫描与对比逻辑 ---
     function updatePanel() {
-        if(window.__TV_STATE.isCollapsed) return;
         var widgets = document.querySelectorAll('.chart-widget');
-        if (widgets.length < 2) { content.innerHTML = "<div style='padding:10px'>⚠️ 等待分屏...</div>"; return; }
+        if (widgets.length < 2) {
+            content.innerHTML = "<div style='color:orange'>⚠️ 需要至少 2 个分屏才能对比</div>";
+            return;
+        }
 
-        var screens = [{}, {}];
+        // 收集数据容器
+        // 结构: chartData[0] = [ {title, values:[ {text, color} ]}, ... ]
+        var chartData = []; 
 
-        widgets.forEach((widget, wIdx) => {
-            if(wIdx > 1) return;
-            var data = { midInfo: "无主图", setA: "无数据", setB: "无数据", total: 0 };
-            var titles = Array.from(widget.querySelectorAll('div[class*="title-"]')).filter(t => t.innerText.trim().length > 0);
+        widgets.forEach(function(widget, wIndex) {
+            if(wIndex > 1) return; // 只取前两个分屏
+            
+            var widgetInfo = [];
+            // 按垂直位置排序，确保 主图、副图1、副图2 顺序一致
+            var titleElements = Array.from(widget.querySelectorAll('div[class*="title-"]'));
+            
+            // 过滤并排序
+            var validTitles = titleElements.filter(function(t){
+                var txt = t.innerText;
+                return (txt.includes("金指") || txt.includes("数据智能")) && txt.length < 50;
+            }).sort(function(a, b){
+                return a.getBoundingClientRect().top - b.getBoundingClientRect().top;
+            });
 
-            // 1. 主图 (Index 0)
-            if(titles.length > 0) {
-                var vals = getIndicatorValues(titles[0]);
-                if(vals[0] && vals[3]) {
-                    var s = analyzeColor(vals[0].el);
-                    var len = (vals[3].val - vals[0].val).toFixed(2);
-                    data.midInfo = `<span style="color:${s.c}">${s.t} ${len}</span>`;
+            validTitles.forEach(function(t) {
+                // 向上找父级，再向下找数值
+                var p = t; 
+                var foundValues = [];
+                for(var i=0; i<4; i++) {
+                    if(!p.parentElement) break;
+                    p = p.parentElement;
+                    var vs = p.querySelectorAll('div[class*="valueValue-"]');
+                    if(vs.length > 0) {
+                        vs.forEach(function(v){ 
+                            if(v.innerText && /\d/.test(v.innerText)) {
+                                // ★ 获取计算后的颜色 ★
+                                var computedStyle = window.getComputedStyle(v);
+                                foundValues.push({
+                                    val: v.innerText,
+                                    color: computedStyle.color
+                                });
+                            }
+                        });
+                        if(foundValues.length > 0) break;
+                    }
                 }
-            }
-
-            // 2. MACD (Index 2)
-            if(titles.length > 2) {
-                var vals = getIndicatorValues(titles[2]);
-                data.total = vals.length; // 显示总共有多少个数据
-
-                // --- 方案 A: 你的 V16 截图显示的位置 (8, 9, 10) ---
-                if(vals[8] && vals[9] && vals[10]) {
-                    data.setA = formatMacd(wIdx, "A", vals[8], vals[9], vals[10]);
-                } else {
-                    data.setA = "<span style='color:#555'>下标 [8-10] 为空</span>";
+                if(foundValues.length > 0) {
+                    widgetInfo.push({ name: t.innerText.substring(0,6), data: foundValues });
                 }
-
-                // --- 方案 B: 你口述的位置 (18, 19, 20) ---
-                // 注意：代码里数组从0开始，所以你说的19是index 18
-                if(vals[18] && vals[19] && vals[20]) {
-                    data.setB = formatMacd(wIdx, "B", vals[18], vals[19], vals[20]);
-                } else {
-                    data.setB = "<span style='color:#555'>下标 [18-20] 为空</span>";
-                }
-            } else {
-                data.total = "未找到指标";
-            }
-            screens[wIdx] = data;
+            });
+            chartData.push(widgetInfo);
         });
 
-        // 渲染
-        var l = screens[0], r = screens[1];
-        var html = `
-        <table style="width:100%; border-collapse:collapse; text-align:center;">
-            <tr style="background:#333; color:#aaa; font-size:10px;">
-                <td>项目</td>
-                <td style="border-left:1px solid #444; width:45%;">左屏 (总数:${l.total})</td>
-                <td style="border-left:1px solid #444; width:45%;">右屏 (总数:${r.total})</td>
-            </tr>
-            <tr style="border-bottom:1px solid #555;">
-                <td style="color:#ffeaa7;">中轨</td>
-                <td style="border-left:1px solid #333;">${l.midInfo}</td>
-                <td style="border-left:1px solid #333;">${r.midInfo}</td>
-            </tr>
-            <tr>
-                <td style="color:#74b9ff; font-size:10px;">方案A<br>[8,9,10]</td>
-                <td style="border-left:1px solid #333; padding:5px; vertical-align:top; background:#222;">${l.setA}</td>
-                <td style="border-left:1px solid #333; padding:5px; vertical-align:top; background:#222;">${r.setA}</td>
-            </tr>
-            <tr>
-                <td style="color:#ff7675; font-size:10px;">方案B<br>[18,19,20]</td>
-                <td style="border-left:1px solid #333; padding:5px; vertical-align:top;">${l.setB}</td>
-                <td style="border-left:1px solid #333; padding:5px; vertical-align:top;">${r.setB}</td>
-            </tr>
-        </table>
-        `;
+        // --- 5. 生成对比表格 ---
+        var html = "";
+        
+        // 假设左右两边的指标顺序是一样的（主图vs主图，副图vs副图）
+        // 这里的 maxLen 是为了防止某一屏指标没加载出来
+        var maxRows = Math.max(chartData[0]?.length || 0, chartData[1]?.length || 0);
+
+        for(var i=0; i<maxRows; i++) {
+            var leftItem = chartData[0] ? chartData[0][i] : null;
+            var rightItem = chartData[1] ? chartData[1][i] : null;
+            
+            var rowName = leftItem ? leftItem.name : (rightItem ? rightItem.name : "未知区域");
+            
+            // 区域标题
+            html += "<div style='background:#333; padding:4px; margin-top:8px; font-weight:bold; color:#ffeaa7; border-radius:4px;'>📊 " + rowName + " (指标 " + (i+1) + ")</div>";
+            
+            // 表头
+            html += "<div style='display:grid; grid-template-columns: 30px 1fr 1fr; gap:2px; font-size:10px; color:#aaa; margin-bottom:2px;'>";
+            html += "<div>ID</div><div>左屏(40分)</div><div>右屏(10分)</div></div>";
+
+            // 数据行对比
+            var maxVals = Math.max(leftItem?.data.length || 0, rightItem?.data.length || 0);
+            
+            for(var j=0; j<maxVals; j++) {
+                var lData = leftItem && leftItem.data[j] ? leftItem.data[j] : {val:'-', color:''};
+                var rData = rightItem && rightItem.data[j] ? rightItem.data[j] : {val:'-', color:''};
+
+                // 颜色指示器
+                var lDot = `<span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:${rgbToHex(lData.color)};margin-right:4px;'></span>`;
+                var rDot = `<span style='display:inline-block;width:8px;height:8px;border-radius:50%;background:${rgbToHex(rData.color)};margin-right:4px;'></span>`;
+
+                // 简单的状态判断（比如颜色是否一致）
+                var isColorSame = (lData.color === rData.color) && lData.color !== '';
+                var bgStyle = isColorSame ? "background:rgba(46, 204, 113, 0.1);" : ""; // 颜色一样给个微绿背景
+
+                html += `<div style='display:grid; grid-template-columns: 30px 1fr 1fr; gap:2px; align-items:center; border-bottom:1px solid #444; padding:2px 0; ${bgStyle}'>`;
+                html += `<div style='color:#74b9ff; font-weight:bold;'>${j+1}</div>`; // ID
+                html += `<div style='color:${rgbToHex(lData.color)}'>${lDot}${lData.val}</div>`; // 左数据
+                html += `<div style='color:${rgbToHex(rData.color)}'>${rDot}${rData.val}</div>`; // 右数据
+                html += `</div>`;
+            }
+        }
+
+        var now = new Date();
+        var timeStr = now.getHours() + ":" + now.getMinutes() + ":" + now.getSeconds();
+        html += `<div style='text-align:right; font-size:10px; color:#666; margin-top:5px;'>最后刷新: ${timeStr}</div>`;
+        
         content.innerHTML = html;
     }
 
-    // 格式化 MACD 逻辑
-    function formatMacd(wIdx, type, vHisto, vFast, vSlow) {
-        var hist = window.__TV_STATE.history["w"+wIdx];
-        
-        // 1. 动能 (当前 > 上次)
-        var histoStr = "平";
-        // 区分 A/B 组的历史，避免混淆 (临时简化，共用一个逻辑会导致A/B跳变，但这里仅作展示用)
-        // 实际使用时只会选一组。这里仅做逻辑演示。
-        
-        // 2. 快线平缓 (Abs(Diff) <= 1)
-        var speedStr = "首测";
-        if(hist.fast !== null) {
-            var delta = Math.abs(vFast.val - hist.fast);
-            if(delta <= 1.0) speedStr = "<span style='color:#f1c40f'>➖平缓</span>";
-            else if(vFast.val > hist.fast) speedStr = "<span style='color:#ff4757'>🚀涨</span>";
-            else speedStr = "<span style='color:#2ed573'>📉跌</span>";
-        }
-        // 实时更新历史 (副作用：两组方案会互相覆盖历史，但为了让你看到数值，先这样)
-        hist.fast = vFast.val; 
+    // --- 6. 启动 ---
+    updatePanel();
+    var timer = setInterval(updatePanel, 1000);
+    if (window.__TV_HOT_CONTEXT) window.__TV_HOT_CONTEXT.timer = timer;
 
-        // 3. 金叉
-        var crossStr = "";
-        if(vFast.val > vSlow.val) crossStr = "<span style='color:#ff6b81'>金叉</span>";
-        else if(vFast.val < vSlow.val) crossStr = "<span style='color:#1dd1a1'>死叉</span>";
-        else crossStr = "粘合";
-
-        var c1 = rgbToHex(vHisto.el);
-        var c2 = rgbToHex(vFast.el);
-        
-        return `
-            <div style="text-align:left; font-size:11px;">
-                <div>动能: <span style="color:${c1}">${vHisto.val}</span></div>
-                <div>快线: <span style="color:${c2}">${vFast.val}</span> ${speedStr}</div>
-                <div>状态: ${crossStr}</div>
-            </div>
-        `;
-    }
-
-    setInterval(updatePanel, 1000);
 })();
