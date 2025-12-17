@@ -28,6 +28,13 @@
         updateInterval: 500
     };
 
+    // --- 临时配置（未确认前的设置）---
+    var tempConfig = {
+        analysisMode: 'realtime',
+        periodTime: 5000,
+        updateInterval: 500
+    };
+
     // --- 历史数据存储 ---
     var historyData = {
         left: { 
@@ -165,7 +172,7 @@
 
     // 模式选择栏
     var modeBar = document.createElement('div');
-    modeBar.style.cssText = "display:flex; align-items:center; gap:4px; padding:5px 8px; background:#1a1a1a; border-bottom:1px solid #444;";
+    modeBar.style.cssText = "display:flex; align-items:center; gap:4px; padding:5px 8px; background:#1a1a1a; border-bottom:1px solid #444; flex-wrap:wrap;";
     modeBar.innerHTML = '' +
         '<button id="btn-realtime" style="padding:3px 8px;border-radius:3px;font-size:10px;cursor:pointer;border:2px solid #27ae60;background:#27ae60;color:#fff;">⚡实时</button>' +
         '<button id="btn-period" style="padding:3px 8px;border-radius:3px;font-size:10px;cursor:pointer;border:2px solid #555;background:#333;color:#aaa;">📊周期</button>' +
@@ -177,7 +184,7 @@
         '<option value="300000" selected>5分钟</option>' +
         '<option value="600000">10分钟</option>' +
         '</select>' +
-        '<span style="margin-left:auto;font-size:9px;color:#666;">刷新:</span>' +
+        '<span style="font-size:9px;color:#666;">刷新:</span>' +
         '<select id="select-interval" style="padding:2px;border-radius:3px;border:1px solid #555;background:#333;color:#fff;font-size:9px;">' +
         '<option value="200">200毫秒</option>' +
         '<option value="500">500毫秒</option>' +
@@ -186,7 +193,9 @@
         '<option value="10000">10秒</option>' +
         '<option value="30000">30秒</option>' +
         '<option value="60000">1分钟</option>' +
-        '</select>';
+        '</select>' +
+        '<button id="btn-apply-config" style="margin-left:auto;padding:3px 10px;border-radius:3px;font-size:10px;cursor:pointer;border:none;background:#e67e22;color:#fff;font-weight:bold;">✓ 确认</button>' +
+        '<span id="config-status" style="font-size:9px;color:#888;display:none;margin-left:4px;">已应用</span>';
     analysisPanel.appendChild(modeBar);
 
     // 控制栏
@@ -885,39 +894,92 @@
             }
         };
         
-        // 实时模式按钮
+        // 实时模式按钮（修改临时配置）
         document.getElementById('btn-realtime').onclick = function() {
-            config.analysisMode = 'realtime';
+            tempConfig.analysisMode = 'realtime';
             this.style.background = '#27ae60';
             this.style.borderColor = '#27ae60';
             this.style.color = '#fff';
             document.getElementById('btn-period').style.background = '#333';
             document.getElementById('btn-period').style.borderColor = '#555';
             document.getElementById('btn-period').style.color = '#aaa';
+            showConfigPending();
         };
         
-        // 周期模式按钮
+        // 周期模式按钮（修改临时配置）
         document.getElementById('btn-period').onclick = function() {
-            config.analysisMode = 'period';
+            tempConfig.analysisMode = 'period';
             this.style.background = '#e67e22';
             this.style.borderColor = '#e67e22';
             this.style.color = '#fff';
             document.getElementById('btn-realtime').style.background = '#333';
             document.getElementById('btn-realtime').style.borderColor = '#555';
             document.getElementById('btn-realtime').style.color = '#aaa';
+            showConfigPending();
         };
         
-        // 周期时间选择
+        // 周期时间选择（修改临时配置）
         document.getElementById('select-period').onchange = function() {
-            config.periodTime = parseInt(this.value);
+            tempConfig.periodTime = parseInt(this.value);
+            showConfigPending();
         };
         
-        // 刷新间隔选择
+        // 刷新间隔选择（修改临时配置）
         document.getElementById('select-interval').onchange = function() {
-            config.updateInterval = parseInt(this.value);
+            tempConfig.updateInterval = parseInt(this.value);
+            showConfigPending();
+        };
+        
+        // 确认按钮 - 应用所有设置
+        document.getElementById('btn-apply-config').onclick = function() {
+            // 应用临时配置到正式配置
+            config.analysisMode = tempConfig.analysisMode;
+            config.periodTime = tempConfig.periodTime;
+            config.updateInterval = tempConfig.updateInterval;
+            
+            // 重启定时器
             clearInterval(updateTimer);
             updateTimer = setInterval(updatePanel, config.updateInterval);
+            
+            // 清除历史数据以便重新计算
+            historyData.left.fastLine = [];
+            historyData.left.momentum = [];
+            historyData.left.timestamps = [];
+            historyData.right.fastLine = [];
+            historyData.right.momentum = [];
+            historyData.right.timestamps = [];
+            
+            // 显示确认状态
+            var statusEl = document.getElementById('config-status');
+            statusEl.textContent = '✓ 已应用';
+            statusEl.style.color = '#27ae60';
+            statusEl.style.display = 'inline';
+            
+            // 按钮闪烁效果
+            var btnEl = document.getElementById('btn-apply-config');
+            btnEl.style.background = '#27ae60';
+            btnEl.textContent = '✓ 已确认';
+            
+            setTimeout(function() {
+                btnEl.style.background = '#e67e22';
+                btnEl.textContent = '✓ 确认';
+                statusEl.style.display = 'none';
+            }, 2000);
+            
+            console.log('[V7.7] 配置已应用:', config);
         };
+        
+        // 显示待确认状态
+        function showConfigPending() {
+            var statusEl = document.getElementById('config-status');
+            statusEl.textContent = '⏳ 待确认';
+            statusEl.style.color = '#ff9800';
+            statusEl.style.display = 'inline';
+            
+            var btnEl = document.getElementById('btn-apply-config');
+            btnEl.style.background = '#ff5722';
+            btnEl.style.animation = 'pulse 1s infinite';
+        }
         
     }, 100);
 
@@ -926,6 +988,6 @@
     updateTimer = setInterval(updatePanel, config.updateInterval);
     if (window.__TV_HOT_CONTEXT) window.__TV_HOT_CONTEXT.timer = updateTimer;
 
-    console.log(">>> [云端 V7.5] 初始化完成！");
+    console.log(">>> [云端 V7.7] 初始化完成！配置需点击确认按钮生效");
 
 })();
