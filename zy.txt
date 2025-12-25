@@ -1,4 +1,3 @@
-socks://127.0.0.1:30000#TG@wlbbaa
 tuic://40d71605-7c9b-41e6-b503-36c031f754bb:admin@51.75.118.17:20262?sni=www.bing.com&alpn=h3&congestion_control=bbr&allowInsecure=1#tuic%e6%b3%95%e5%9b%bd%e5%8d%a1%e5%a1%94123321
 vless://40d71605-7c9b-41e6-b503-36c031f754bb@51.75.118.17:20262?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.nazhumi.com&fp=firefox&pbk=UIE9quVg41FggvlO_Jauhn_w5XP0NnZfVRf31-Cqph4&type=tcp#vless%e6%b3%95%e5%9b%bd%e5%8d%a1%e5%a1%94123321
 tuic://f830b36e-6b16-403e-bb1e-e6c8417608b9:admin@51.68.34.78:20259?sni=www.bing.com&alpn=h3&congestion_control=bbr&allowInsecure=1#tuic%e6%b3%95%e5%9b%bd%e5%8d%a1%e5%a1%9401
