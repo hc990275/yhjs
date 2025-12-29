@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v11.1 本地库+超级模糊搜)
+// @name          代驾调度系统助手 (v11.2 修复版)
 // @namespace     http://tampermonkey.net/
-// @version       11.1
+// @version       11.2
 // @description   智能库管理：纯本地地址库(无需联网)、超级电话模糊搜索(防醉酒漏输/多输/错输)、全站深色模式、自动反转保护、双窗口分离。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
@@ -44,7 +44,7 @@
             BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=nfpvws&t=1765094235754"
         },
         STORAGE: {
-            MAX_ITEMS: 800000 // 本地库容量限制
+            MAX_ITEMS: 8000 // 本地库容量限制
         }
     };
 
@@ -321,32 +321,52 @@
         e.target.value = ''; // 重置input以便下次重复导入
     };
 
+    // 修复输入框定位逻辑
     const fillInput = (type, value) => {
         let input = null;
         if (type === 'address') {
+             // 增强选择器：增加对“起点”、“出发”的匹配
              input = document.querySelector('input[id="tipinput"]') || 
+                     document.querySelector('input[placeholder*="起点"]') || 
+                     document.querySelector('input[placeholder*="出发"]') || 
+                     document.querySelector('input[placeholder*="地址"]') || 
                      document.querySelector('input[placeholder*="搜索"]') ||
                      document.querySelector('input[placeholder*="请输入关键字"]');
+             
+             // 备用逻辑：如果上面没找到，找第一个不是电话/日期的可见输入框
              if (!input) {
-                 const inputs = document.querySelectorAll('input');
+                 const inputs = document.querySelectorAll('input[type="text"]');
                  for (let i = 0; i < inputs.length; i++) {
-                     if (!inputs[i].closest('.el-form-item')) { input = inputs[i]; break; }
+                     const el = inputs[i];
+                     if (el.offsetParent === null) continue; // 忽略隐藏元素
+                     const ph = (el.placeholder || '').toLowerCase();
+                     if (!ph.includes('电话') && !ph.includes('手机') && !ph.includes('时间') && !ph.includes('日期')) {
+                         input = el;
+                         break;
+                     }
                  }
              }
         } else if (type === 'phone') {
              input = document.querySelector('input[placeholder*="用户电话"]') || 
-                     document.querySelector('input[placeholder*="电话"]');
+                     document.querySelector('input[placeholder*="电话"]') ||
+                     document.querySelector('input[type="tel"]');
         }
 
         if (input) {
+            // Vue/React 兼容性处理
             input.value = value;
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
+            
+            // 视觉反馈
+            input.focus(); 
             input.style.transition = 'all 0.3s';
-            input.style.boxShadow = '0 0 0 2px rgba(103, 194, 58, 0.3)';
+            input.style.boxShadow = '0 0 0 2px rgba(103, 194, 58, 0.5)';
             setTimeout(() => input.style.boxShadow = '', 800);
         } else {
-            alert(`找不到${type==='address'?'地址':'电话'}框`);
+            // 调试信息
+            console.error(`[助手] 无法定位${type}输入框。尝试选择器失败。`);
+            alert(`找不到${type==='address'?'地址':'电话'}输入框，请点击目标框后再次尝试。`);
         }
     };
 
