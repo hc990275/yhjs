@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v11.2 修复版)
+// @name          代驾调度系统助手 (v11.3 经典回归版)
 // @namespace     http://tampermonkey.net/
-// @version       11.2
-// @description   智能库管理：纯本地地址库(无需联网)、超级电话模糊搜索(防醉酒漏输/多输/错输)、全站深色模式、自动反转保护、双窗口分离。
+// @version       11.3
+// @description   【回归v10.1核心交互】智能库管理：纯本地地址库(无需联网)、超级电话模糊搜索(防醉酒漏输/多输/错输)、全站深色模式、自动反转保护、双窗口分离。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
@@ -321,52 +321,50 @@
         e.target.value = ''; // 重置input以便下次重复导入
     };
 
-    // 修复输入框定位逻辑
+    // 修复输入框定位逻辑：完全回滚到 v10.1 版本的逻辑
+    // 这种逻辑虽然看起来"暴力"，但在该系统中被证明是最有效的
     const fillInput = (type, value) => {
+        if (type === 'phone') {
+            // v11保留了电话模糊搜索，这里不需要严格校验11位，
+            // 因为用户可能是想填入一个模糊搜索到的片段
+        }
+        
         let input = null;
         if (type === 'address') {
-             // 增强选择器：增加对“起点”、“出发”的匹配
+             // 1. 优先尝试找特定ID或Placeholder
              input = document.querySelector('input[id="tipinput"]') || 
-                     document.querySelector('input[placeholder*="起点"]') || 
-                     document.querySelector('input[placeholder*="出发"]') || 
-                     document.querySelector('input[placeholder*="地址"]') || 
                      document.querySelector('input[placeholder*="搜索"]') ||
                      document.querySelector('input[placeholder*="请输入关键字"]');
              
-             // 备用逻辑：如果上面没找到，找第一个不是电话/日期的可见输入框
+             // 2. [关键回滚] 如果找不到，遍历所有 input，找第一个【不在 el-form-item】里的输入框
+             // 这个逻辑是 v10.1 能成功的核心，专门针对地图/起点输入框
              if (!input) {
-                 const inputs = document.querySelectorAll('input[type="text"]');
+                 const inputs = document.querySelectorAll('input');
                  for (let i = 0; i < inputs.length; i++) {
-                     const el = inputs[i];
-                     if (el.offsetParent === null) continue; // 忽略隐藏元素
-                     const ph = (el.placeholder || '').toLowerCase();
-                     if (!ph.includes('电话') && !ph.includes('手机') && !ph.includes('时间') && !ph.includes('日期')) {
-                         input = el;
-                         break;
+                     // 排除掉 ElementUI 表单项里的输入框，通常剩下的那个就是地图搜索框
+                     if (!inputs[i].closest('.el-form-item')) { 
+                         input = inputs[i]; 
+                         break; 
                      }
                  }
              }
         } else if (type === 'phone') {
              input = document.querySelector('input[placeholder*="用户电话"]') || 
-                     document.querySelector('input[placeholder*="电话"]') ||
-                     document.querySelector('input[type="tel"]');
+                     document.querySelector('input[placeholder*="电话"]');
         }
 
         if (input) {
-            // Vue/React 兼容性处理
             input.value = value;
+            // 触发事件以通知 Vue/React 框架数据已变更
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
             
             // 视觉反馈
-            input.focus(); 
             input.style.transition = 'all 0.3s';
-            input.style.boxShadow = '0 0 0 2px rgba(103, 194, 58, 0.5)';
+            input.style.boxShadow = '0 0 0 2px rgba(103, 194, 58, 0.3)';
             setTimeout(() => input.style.boxShadow = '', 800);
         } else {
-            // 调试信息
-            console.error(`[助手] 无法定位${type}输入框。尝试选择器失败。`);
-            alert(`找不到${type==='address'?'地址':'电话'}输入框，请点击目标框后再次尝试。`);
+            alert(`找不到${type==='address'?'地址':'电话'}框`);
         }
     };
 
@@ -394,7 +392,7 @@
         }
     };
 
-    // --------------- 4. 搜索算法 (核心升级) ---------------
+    // --------------- 4. 搜索算法 (保留v11的升级) ---------------
 
     // 超级模糊匹配逻辑
     const isMatch = (dbItem, inputKey, type) => {
