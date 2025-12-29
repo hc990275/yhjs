@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v11.7 搜索优化版)
+// @name          代驾调度系统助手 (v11.8 强力清洗版)
 // @namespace     http://tampermonkey.net/
-// @version       11.7
-// @description   【功能新增】增加一键清除搜索按钮，优化搜索交互体验；保留v11.6所有核心功能（精准定位、自动填入、本地库）。
+// @version       11.8
+// @description   【清洗升级】每次刷新自动删除超过7个汉字的地址、自动剔除隔离库地址；保留精准定位、自动填入、一键清除搜索等全部功能。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
@@ -110,7 +110,8 @@
             state.refreshInterval = saved;
         } else if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000; 
-            log('进入派单界面...', 'info');
+            log('进入派单界面，开始同步数据...', 'info');
+            // 每次进入/刷新派单页，都会触发黑名单拉取和随后的清洗
             fetchOnlineBlacklist(true);
             setTimeout(applyDistanceByTime, 1500); 
         }
@@ -170,19 +171,37 @@
         else GM_setValue('dbPhones', JSON.stringify(list));
     };
 
-    // 地址库清洗（基于黑名单）
+    // 【核心升级】地址库清洗（包含隔离库剔除 + 超长地址剔除）
     const cleanDBWithBlacklist = () => {
         if (!state.db.addrs || state.db.addrs.length === 0) return;
-        const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
-        if (blockers.length === 0) return;
         
+        const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
         const originalCount = state.db.addrs.length;
-        state.db.addrs = state.db.addrs.filter(addr => !blockers.some(keyword => addr.includes(keyword)));
+        
+        // 执行过滤
+        state.db.addrs = state.db.addrs.filter(addr => {
+            // 规则1：包含隔离库关键词 -> 删
+            if (blockers.length > 0 && blockers.some(keyword => addr.includes(keyword))) {
+                return false;
+            }
+            
+            // 规则2：汉字数量超过 7 个 -> 删
+            // 使用正则匹配所有汉字
+            const hanziMatches = addr.match(/[\u4e00-\u9fa5]/g);
+            const hanziCount = hanziMatches ? hanziMatches.length : 0;
+            if (hanziCount > 6) {
+                return false;
+            }
+
+            return true;
+        });
         
         if (originalCount !== state.db.addrs.length) {
             GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
             updateListsUI();
-            log(`已清洗地址库: 移除 ${originalCount - state.db.addrs.length} 条`, 'warning');
+            log(`库清洗完成: 移除 ${originalCount - state.db.addrs.length} 条 (命中隔离库或汉字>7)`, 'warning');
+        } else {
+            log('库清洗完成: 无需移除', 'info');
         }
     };
 
@@ -198,6 +217,7 @@
                         const cleanList = text.replace(/[\r\n\s]+/g, ',').replace(/，/g, ',');
                         state.blacklist = cleanList;
                         GM_setValue('blacklist', cleanList);
+                        // 获取完最新黑名单后，立刻执行清洗
                         cleanDBWithBlacklist();
                         if(!silent) log('隔离库同步并清洗完成', 'success');
                     }
@@ -249,7 +269,12 @@
     // 处理剪贴板文本
     const parseTextToDB = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
-        const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
+        
+        // 剪贴板入库时，不直接过滤，因为我们会在后续统一清洗
+        // 或者为了效率，也可以在这里先做简单预处理，
+        // 但统一交给 cleanDBWithBlacklist 处理逻辑更集中。
+        // 这里仅做格式提取。
+        
         let hasUpdate = false;
 
         // 提取电话
@@ -276,12 +301,20 @@
             if (!cleanSeg || cleanSeg.length < 2) return;
             const firstChar = cleanSeg.charAt(0);
             if (/[0-9]/.test(firstChar) || /[a-zA-Z]/.test(firstChar) || symbolRegex.test(firstChar)) return; 
-            if (blockers.some(keyword => cleanSeg.includes(keyword))) return;
-
+            
+            // 注意：这里我们先把地址存进去，哪怕它有违规词或太长。
+            // 存完后，调用 cleanDBWithBlacklist() 会自动把它删掉。
+            // 这样能保证逻辑的一致性。
+            
             addToDB('address', cleanSeg);
             hasUpdate = true;
             log('提取地址: ' + cleanSeg.substring(0, 6) + '...', 'info');
         });
+        
+        // 如果有新数据入库，立刻执行一次清洗，确保脏数据不会停留
+        if (hasUpdate) {
+            cleanDBWithBlacklist();
+        }
 
         return hasUpdate;
     };
@@ -290,7 +323,7 @@
     const processClipboard = async (autoFill = false) => {
         try {
             const text = await navigator.clipboard.readText();
-            // 解析文本并入库
+            // 解析文本并入库（内部会触发清洗）
             const hasUpdate = parseTextToDB(text);
             
             // 只要解析动作发生，就更新UI
@@ -310,7 +343,7 @@
         if (!file) return;
         
         // 确认对话框
-        if(!confirm(`确认导入文件 "${file.name}" 到本地库吗？\n这将自动过滤黑名单并去重。`)) {
+        if(!confirm(`确认导入文件 "${file.name}" 到本地库吗？\n将会自动清洗（汉字>7或含违禁词）。`)) {
             e.target.value = '';
             return;
         }
@@ -321,16 +354,17 @@
             const lines = content.split(/[\r\n]+/);
             let updateCount = 0;
             lines.forEach(line => {
+                // parseTextToDB 内部会调用清洗逻辑
                 if (parseTextToDB(line)) updateCount++;
             });
             updateListsUI();
-            alert(`✅ 导入成功！\n已解析并更新 ${updateCount} 条新数据到本地库。`);
+            alert(`✅ 导入处理完成！\n（已自动过滤掉超长和违规地址）`);
         };
         reader.readAsText(file);
         e.target.value = ''; // 重置input以便下次重复导入
     };
 
-    // 【重要】fillInput 逻辑修复
+    // 【核心修复】输入框定位逻辑 (v11.6 精准版)
     const fillInput = (type, value) => {
         let input = null;
         
@@ -344,12 +378,10 @@
                  for (let i = 0; i < inputs.length; i++) {
                      const el = inputs[i];
                      
-                     // 【核心修复】：绝对不能选中助手自己的窗口元素！
-                     // 检查元素是否在 .gj-window 内部
+                     // 排除助手自己的窗口元素！
                      if (el.closest('.gj-window')) continue;
 
-                     // 按照 v10.1 的逻辑：排除 .el-form-item 内的输入框
-                     // 这样剩下的通常就是地图上浮动的搜索框
+                     // 排除表单内元素
                      if (!el.closest('.el-form-item') && el.type === 'text') { 
                          input = el; 
                          break; 
@@ -357,7 +389,7 @@
                  }
              }
              
-             // 策略3：如果还是找不到，尝试通过 placeholder 关键词找，但依然要排除助手
+             // 策略3：placeholder 关键词查找
              if (!input) {
                  const keywords = ['起点', '出发', '搜索', '关键字'];
                  const allInputs = document.querySelectorAll('input');
@@ -374,7 +406,6 @@
              }
 
         } else if (type === 'phone') {
-             // 电话框定位逻辑
              const inputs = document.querySelectorAll('input');
              for (let i = 0; i < inputs.length; i++) {
                  const el = inputs[i];
@@ -390,22 +421,16 @@
 
         if (input) {
             input.value = value;
-            // 触发事件以通知 Vue/React 框架数据已变更
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
-            
-            // v11 增加的聚焦逻辑保留，这通常不会有坏处
             input.click();
             input.focus();
             
-            // 视觉反馈
             input.style.transition = 'all 0.3s';
             input.style.boxShadow = '0 0 0 2px rgba(103, 194, 58, 0.3)';
             setTimeout(() => input.style.boxShadow = '', 800);
         } else {
             console.log(`[助手] 找不到${type}输入框`);
-            // 如果没找到，给个提示方便调试，但不要频繁alert干扰操作
-            // alert(`未找到${type}输入框，请确认页面已加载完毕`); 
         }
     };
 
@@ -433,7 +458,7 @@
         }
     };
 
-    // --------------- 4. 搜索算法 (保留v11的升级) ---------------
+    // --------------- 4. 搜索算法 ---------------
 
     // 超级模糊匹配逻辑
     const isMatch = (dbItem, inputKey, type) => {
@@ -442,17 +467,12 @@
         if (!cleanKey) return true;
 
         if (type === 'phone') {
-            // 场景A: 标准包含 (输入: 1370 -> 匹配: 1370536...)
+            // 场景A: 标准包含
             if (dbItem.includes(cleanKey)) return true;
-
-            // 场景B: 输入过长/反向包含 (输入: 1370536636466 -> 匹配: 13705366364)
-            // 解决：多输了数字，或者直接复制了一整句短信
+            // 场景B: 反向包含
             if (cleanKey.includes(dbItem)) return true;
-
-            // 场景C: 漏输/跳着输 (输入: 137536 -> 匹配: 1370536...)
-            // 逻辑：输入的字符在DB项中按顺序出现
+            // 场景C: 漏输/跳着输
             if (/^\d+$/.test(cleanKey) && cleanKey.length >= 4) {
-                // 构建正则: 1.*3.*7.*5.*3.*6
                 const pattern = cleanKey.split('').join('.*');
                 try {
                     const re = new RegExp(pattern);
@@ -462,7 +482,7 @@
             return false;
         }
         
-        // 地址库：支持空格分隔多关键字搜索 (例如输入 "万达 广场" -> 匹配 "万达xx广场")
+        // 地址库：空格分隔多关键字
         const keywords = cleanKey.split(/\s+/);
         return keywords.every(k => dbItem.includes(k));
     };
@@ -558,7 +578,6 @@
 
         const activeTabClass = (tab) => state.viewTab === tab ? 'active-tab' : '';
 
-        // 更新HTML结构，增加清除按钮
         widget.innerHTML = `
             <div class="gj-header gj-drag-header">
                 <div class="gj-tabs">
@@ -592,7 +611,6 @@
         setupDrag(widget, 'posAddr');
         setupResizeDrag(widget);
 
-        // 事件绑定：点击右上角刷新按钮 -> 传 true 开启自动填入
         widget.querySelector('#btn-refresh-addr').addEventListener('click', () => processClipboard(true));
         
         widget.querySelector('#gj-file-import').addEventListener('change', handleFileImport);
@@ -609,20 +627,18 @@
         const searchInput = widget.querySelector('#gj-search-input');
         const clearBtn = widget.querySelector('#gj-btn-clear');
 
-        // 输入事件：更新搜索状态并显示清除按钮
         searchInput.addEventListener('input', (e) => {
             state.searchText = e.target.value;
             clearBtn.style.display = state.searchText ? 'block' : 'none';
             updateListsUI();
         });
 
-        // 清除按钮点击事件
         clearBtn.addEventListener('click', () => {
             state.searchText = '';
             searchInput.value = '';
             clearBtn.style.display = 'none';
             updateListsUI();
-            searchInput.focus(); // 自动聚焦回输入框
+            searchInput.focus();
         });
 
         const slider = widget.querySelector('#gj-col-slider');
