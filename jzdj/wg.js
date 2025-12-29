@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v11.3 经典回归版)
+// @name          代驾调度系统助手 (v11.4 自动填入增强版)
 // @namespace     http://tampermonkey.net/
-// @version       11.3
-// @description   【回归v10.1核心交互】智能库管理：纯本地地址库(无需联网)、超级电话模糊搜索(防醉酒漏输/多输/错输)、全站深色模式、自动反转保护、双窗口分离。
+// @version       11.4
+// @description   【交互优化】点击右上角圈圈可直接填入剪贴板地址；优化起点输入框识别逻辑；包含纯本地库、模糊搜索、深色模式等全套功能。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
@@ -286,11 +286,20 @@
         return hasUpdate;
     };
 
-    const processClipboard = async () => {
+    // 核心修改：支持 autoFill 参数
+    const processClipboard = async (autoFill = false) => {
         try {
             const text = await navigator.clipboard.readText();
-            if (parseTextToDB(text)) {
-                updateListsUI();
+            // 解析文本并入库
+            const hasUpdate = parseTextToDB(text);
+            
+            // 只要解析动作发生，就更新UI
+            if (hasUpdate) updateListsUI();
+            
+            // 如果要求自动填入，且库里有地址，就把最新的那条填进去
+            if (autoFill && state.db.addrs && state.db.addrs.length > 0) {
+                // state.db.addrs[0] 是最新的一条（因为 unshift）
+                fillInput('address', state.db.addrs[0]);
             }
         } catch (e) {}
     };
@@ -321,14 +330,8 @@
         e.target.value = ''; // 重置input以便下次重复导入
     };
 
-    // 修复输入框定位逻辑：完全回滚到 v10.1 版本的逻辑
-    // 这种逻辑虽然看起来"暴力"，但在该系统中被证明是最有效的
+    // 修复输入框定位逻辑：基于 v10.1 优化可见性判定
     const fillInput = (type, value) => {
-        if (type === 'phone') {
-            // v11保留了电话模糊搜索，这里不需要严格校验11位，
-            // 因为用户可能是想填入一个模糊搜索到的片段
-        }
-        
         let input = null;
         if (type === 'address') {
              // 1. 优先尝试找特定ID或Placeholder
@@ -336,14 +339,15 @@
                      document.querySelector('input[placeholder*="搜索"]') ||
                      document.querySelector('input[placeholder*="请输入关键字"]');
              
-             // 2. [关键回滚] 如果找不到，遍历所有 input，找第一个【不在 el-form-item】里的输入框
+             // 2. 如果找不到，遍历所有 input，找第一个【不在 el-form-item】且【可见】的输入框
              // 这个逻辑是 v10.1 能成功的核心，专门针对地图/起点输入框
              if (!input) {
                  const inputs = document.querySelectorAll('input');
                  for (let i = 0; i < inputs.length; i++) {
-                     // 排除掉 ElementUI 表单项里的输入框，通常剩下的那个就是地图搜索框
-                     if (!inputs[i].closest('.el-form-item')) { 
-                         input = inputs[i]; 
+                     const el = inputs[i];
+                     // 排除表单项 && 必须是可见的（offsetParent不为null）
+                     if (!el.closest('.el-form-item') && el.offsetParent !== null) { 
+                         input = el; 
                          break; 
                      }
                  }
@@ -358,13 +362,17 @@
             // 触发事件以通知 Vue/React 框架数据已变更
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
+            // 尝试模拟点击，有些地图组件需要 focus/click 才能触发搜索
+            input.click();
+            input.focus();
             
             // 视觉反馈
             input.style.transition = 'all 0.3s';
             input.style.boxShadow = '0 0 0 2px rgba(103, 194, 58, 0.3)';
             setTimeout(() => input.style.boxShadow = '', 800);
         } else {
-            alert(`找不到${type==='address'?'地址':'电话'}框`);
+            // 静默失败，或者可以改为 console.log 避免打扰
+            console.log(`[助手] 找不到${type}输入框`);
         }
     };
 
@@ -527,7 +535,7 @@
                     <label class="btn-icon-circle" title="导入本地文件(txt/csv)">
                         📂<input type="file" id="gj-file-import" style="display:none" accept=".txt,.csv">
                     </label>
-                    <span class="btn-icon-circle" id="btn-refresh-addr" title="刷新/读取剪贴板">↻</span>
+                    <span class="btn-icon-circle" id="btn-refresh-addr" title="刷新并自动填入最新地址">↻</span>
                 </div>
             </div>
             
@@ -549,8 +557,9 @@
         setupDrag(widget, 'posAddr');
         setupResizeDrag(widget);
 
-        // 事件绑定
-        widget.querySelector('#btn-refresh-addr').addEventListener('click', processClipboard);
+        // 事件绑定：点击右上角刷新按钮 -> 传 true 开启自动填入
+        widget.querySelector('#btn-refresh-addr').addEventListener('click', () => processClipboard(true));
+        
         widget.querySelector('#gj-file-import').addEventListener('change', handleFileImport);
         
         widget.querySelectorAll('.gj-tab').forEach(tab => {
