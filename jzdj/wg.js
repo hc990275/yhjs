@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v11.6 精准定位版)
+// @name          代驾调度系统助手 (v11.7 搜索优化版)
 // @namespace     http://tampermonkey.net/
-// @version       11.6
-// @description   【修复】解决v11版本因新增自身搜索框导致无法定位地图起点的问题；严格排除助手自身组件，精准识别左上角起点框。
+// @version       11.7
+// @description   【功能新增】增加一键清除搜索按钮，优化搜索交互体验；保留v11.6所有核心功能（精准定位、自动填入、本地库）。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
@@ -558,6 +558,7 @@
 
         const activeTabClass = (tab) => state.viewTab === tab ? 'active-tab' : '';
 
+        // 更新HTML结构，增加清除按钮
         widget.innerHTML = `
             <div class="gj-header gj-drag-header">
                 <div class="gj-tabs">
@@ -574,6 +575,7 @@
             
             <div class="gj-toolbar">
                 <input type="text" id="gj-search-input" placeholder="输入搜索..." value="${state.searchText}">
+                <span id="gj-btn-clear" class="btn-clear" title="清空搜索" style="display:${state.searchText ? 'block' : 'none'}">✕</span>
             </div>
 
             <div class="gj-list-body" id="list-addr-body" style="height:${state.layout.height}px;"></div>
@@ -605,11 +607,22 @@
         });
 
         const searchInput = widget.querySelector('#gj-search-input');
-        // 自动聚焦
-        // setTimeout(() => searchInput.focus(), 100);
+        const clearBtn = widget.querySelector('#gj-btn-clear');
+
+        // 输入事件：更新搜索状态并显示清除按钮
         searchInput.addEventListener('input', (e) => {
             state.searchText = e.target.value;
+            clearBtn.style.display = state.searchText ? 'block' : 'none';
             updateListsUI();
+        });
+
+        // 清除按钮点击事件
+        clearBtn.addEventListener('click', () => {
+            state.searchText = '';
+            searchInput.value = '';
+            clearBtn.style.display = 'none';
+            updateListsUI();
+            searchInput.focus(); // 自动聚焦回输入框
         });
 
         const slider = widget.querySelector('#gj-col-slider');
@@ -1018,14 +1031,32 @@
             .gj-tab:hover { opacity:0.9; }
             .gj-tab.active-tab { opacity:1; font-weight:bold; border-bottom-color:#fff; }
 
-            .gj-toolbar { padding: 8px; background: var(--gj-bg-sec); border-bottom: 1px solid var(--gj-border); }
+            .gj-toolbar { 
+                padding: 8px; 
+                background: var(--gj-bg-sec); 
+                border-bottom: 1px solid var(--gj-border); 
+                display: flex;
+                align-items: center;
+                gap: 5px;
+            }
             #gj-search-input {
-                width: 100%; border: 1px solid var(--gj-border); border-radius: 4px;
+                flex: 1; /* 占据剩余宽度 */
+                border: 1px solid var(--gj-border); border-radius: 4px;
                 padding: 5px 8px; font-size: 14px; outline: none;
                 background: var(--gj-bg-input); color: var(--gj-text-main);
                 font-family: monospace; letter-spacing: 1px;
             }
             #gj-search-input:focus { border-color: #409EFF; }
+            
+            .btn-clear {
+                cursor: pointer;
+                color: var(--gj-text-mute);
+                font-size: 18px;
+                line-height: 1;
+                padding: 0 4px;
+                transition: color 0.2s;
+            }
+            .btn-clear:hover { color: #F56C6C; }
 
             .gj-list-body { 
                 overflow-y: auto; 
