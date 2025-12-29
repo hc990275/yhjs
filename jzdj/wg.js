@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v11.5 逻辑还原版)
+// @name          代驾调度系统助手 (v11.6 精准定位版)
 // @namespace     http://tampermonkey.net/
-// @version       11.5
-// @description   【重要修复】完全还原v10.1的输入框定位逻辑，解决无法自动填入起点的问题；包含点击右上角自动填入、纯本地库、模糊搜索等全套功能。
+// @version       11.6
+// @description   【修复】解决v11版本因新增自身搜索框导致无法定位地图起点的问题；严格排除助手自身组件，精准识别左上角起点框。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
@@ -330,35 +330,62 @@
         e.target.value = ''; // 重置input以便下次重复导入
     };
 
-    // 【核心修复】完全还原 v10.1 的输入逻辑
-    // 去掉了 v11 中关于“可见性”和“offsetParent”的判断，防止误判
+    // 【重要】fillInput 逻辑修复
     const fillInput = (type, value) => {
         let input = null;
+        
         if (type === 'address') {
-             // 1. 尝试常用选择器 (保留了v11对起点、出发的关键词支持，增加命中率)
-             input = document.querySelector('input[id="tipinput"]') || 
-                     document.querySelector('input[placeholder*="起点"]') || 
-                     document.querySelector('input[placeholder*="出发"]') || 
-                     document.querySelector('input[placeholder*="地址"]') || 
-                     document.querySelector('input[placeholder*="搜索"]') ||
-                     document.querySelector('input[placeholder*="请输入关键字"]');
-             
-             // 2. [严格回归 v10.1] 如果没找到，遍历所有 input，找第一个【不在 el-form-item】里的输入框
-             // 去掉 offsetParent !== null 的判断，因为这可能是导致无法识别的原因
+             // 策略1：优先查找明确的ID (高德地图常用)
+             input = document.getElementById('tipinput');
+
+             // 策略2：查找页面上所有 input
              if (!input) {
                  const inputs = document.querySelectorAll('input');
                  for (let i = 0; i < inputs.length; i++) {
-                     // 只要不在表单里，就认为是目标（v10.1核心逻辑）
-                     if (!inputs[i].closest('.el-form-item')) { 
-                         input = inputs[i]; 
+                     const el = inputs[i];
+                     
+                     // 【核心修复】：绝对不能选中助手自己的窗口元素！
+                     // 检查元素是否在 .gj-window 内部
+                     if (el.closest('.gj-window')) continue;
+
+                     // 按照 v10.1 的逻辑：排除 .el-form-item 内的输入框
+                     // 这样剩下的通常就是地图上浮动的搜索框
+                     if (!el.closest('.el-form-item') && el.type === 'text') { 
+                         input = el; 
                          break; 
                      }
                  }
              }
+             
+             // 策略3：如果还是找不到，尝试通过 placeholder 关键词找，但依然要排除助手
+             if (!input) {
+                 const keywords = ['起点', '出发', '搜索', '关键字'];
+                 const allInputs = document.querySelectorAll('input');
+                 for (let i = 0; i < allInputs.length; i++) {
+                     const el = allInputs[i];
+                     if (el.closest('.gj-window')) continue; // 排除助手
+                     
+                     const ph = (el.placeholder || '').toLowerCase();
+                     if (keywords.some(k => ph.includes(k))) {
+                         input = el;
+                         break;
+                     }
+                 }
+             }
+
         } else if (type === 'phone') {
-             input = document.querySelector('input[placeholder*="用户电话"]') || 
-                     document.querySelector('input[placeholder*="电话"]') ||
-                     document.querySelector('input[type="tel"]');
+             // 电话框定位逻辑
+             const inputs = document.querySelectorAll('input');
+             for (let i = 0; i < inputs.length; i++) {
+                 const el = inputs[i];
+                 if (el.closest('.gj-window')) continue; // 排除助手
+                 
+                 const ph = (el.placeholder || '').toLowerCase();
+                 if (ph.includes('用户电话') || ph.includes('电话') || el.type === 'tel') {
+                     input = el;
+                     break;
+                 }
+             }
         }
 
         if (input) {
@@ -377,6 +404,8 @@
             setTimeout(() => input.style.boxShadow = '', 800);
         } else {
             console.log(`[助手] 找不到${type}输入框`);
+            // 如果没找到，给个提示方便调试，但不要频繁alert干扰操作
+            // alert(`未找到${type}输入框，请确认页面已加载完毕`); 
         }
     };
 
