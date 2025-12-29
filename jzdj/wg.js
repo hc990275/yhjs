@@ -44,7 +44,7 @@
             BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=nfpvws&t=1765094235754"
         },
         STORAGE: {
-            MAX_ITEMS: 8000 // 本地库容量限制
+            MAX_ITEMS: 800000 // 本地库容量限制
         }
     };
 
