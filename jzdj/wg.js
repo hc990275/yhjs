@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v11.4 自动填入增强版)
+// @name          代驾调度系统助手 (v11.5 逻辑还原版)
 // @namespace     http://tampermonkey.net/
-// @version       11.4
-// @description   【交互优化】点击右上角圈圈可直接填入剪贴板地址；优化起点输入框识别逻辑；包含纯本地库、模糊搜索、深色模式等全套功能。
+// @version       11.5
+// @description   【重要修复】完全还原v10.1的输入框定位逻辑，解决无法自动填入起点的问题；包含点击右上角自动填入、纯本地库、模糊搜索等全套功能。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
@@ -330,31 +330,35 @@
         e.target.value = ''; // 重置input以便下次重复导入
     };
 
-    // 修复输入框定位逻辑：基于 v10.1 优化可见性判定
+    // 【核心修复】完全还原 v10.1 的输入逻辑
+    // 去掉了 v11 中关于“可见性”和“offsetParent”的判断，防止误判
     const fillInput = (type, value) => {
         let input = null;
         if (type === 'address') {
-             // 1. 优先尝试找特定ID或Placeholder
+             // 1. 尝试常用选择器 (保留了v11对起点、出发的关键词支持，增加命中率)
              input = document.querySelector('input[id="tipinput"]') || 
+                     document.querySelector('input[placeholder*="起点"]') || 
+                     document.querySelector('input[placeholder*="出发"]') || 
+                     document.querySelector('input[placeholder*="地址"]') || 
                      document.querySelector('input[placeholder*="搜索"]') ||
                      document.querySelector('input[placeholder*="请输入关键字"]');
              
-             // 2. 如果找不到，遍历所有 input，找第一个【不在 el-form-item】且【可见】的输入框
-             // 这个逻辑是 v10.1 能成功的核心，专门针对地图/起点输入框
+             // 2. [严格回归 v10.1] 如果没找到，遍历所有 input，找第一个【不在 el-form-item】里的输入框
+             // 去掉 offsetParent !== null 的判断，因为这可能是导致无法识别的原因
              if (!input) {
                  const inputs = document.querySelectorAll('input');
                  for (let i = 0; i < inputs.length; i++) {
-                     const el = inputs[i];
-                     // 排除表单项 && 必须是可见的（offsetParent不为null）
-                     if (!el.closest('.el-form-item') && el.offsetParent !== null) { 
-                         input = el; 
+                     // 只要不在表单里，就认为是目标（v10.1核心逻辑）
+                     if (!inputs[i].closest('.el-form-item')) { 
+                         input = inputs[i]; 
                          break; 
                      }
                  }
              }
         } else if (type === 'phone') {
              input = document.querySelector('input[placeholder*="用户电话"]') || 
-                     document.querySelector('input[placeholder*="电话"]');
+                     document.querySelector('input[placeholder*="电话"]') ||
+                     document.querySelector('input[type="tel"]');
         }
 
         if (input) {
@@ -362,7 +366,8 @@
             // 触发事件以通知 Vue/React 框架数据已变更
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
-            // 尝试模拟点击，有些地图组件需要 focus/click 才能触发搜索
+            
+            // v11 增加的聚焦逻辑保留，这通常不会有坏处
             input.click();
             input.focus();
             
@@ -371,7 +376,6 @@
             input.style.boxShadow = '0 0 0 2px rgba(103, 194, 58, 0.3)';
             setTimeout(() => input.style.boxShadow = '', 800);
         } else {
-            // 静默失败，或者可以改为 console.log 避免打扰
             console.log(`[助手] 找不到${type}输入框`);
         }
     };
