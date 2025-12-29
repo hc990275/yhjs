@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v10.1 全局暗黑版)
+// @name          代驾调度系统助手 (v11.1 本地库+超级模糊搜)
 // @namespace     http://tampermonkey.net/
-// @version       10.1
-// @description   点击图标可切换全站深色/浅色模式；智能反转保护图片；地址库自由调节字数；双窗口分离；全自动化功能保留。
+// @version       11.1
+// @description   智能库管理：纯本地地址库(无需联网)、超级电话模糊搜索(防醉酒漏输/多输/错输)、全站深色模式、自动反转保护、双窗口分离。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
@@ -40,9 +40,12 @@
             RAPID_INTERVAL: 500
         },
         CLOUD: {
+            // 隔离库（黑名单）
             BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=nfpvws&t=1765094235754"
         },
-        CLIPBOARD: { MAX_HISTORY: 20 }
+        STORAGE: {
+            MAX_ITEMS: 800000 // 本地库容量限制
+        }
     };
 
     // --------------- 2. 全局状态 ---------------
@@ -61,13 +64,37 @@
         posMain: safeParse('posMain', '{"top":"80px","left":"20px"}'),
         posAddr: safeParse('posAddr', '{"top":"80px","left":"300px"}'),
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
-        layout: safeParse('uiLayout', '{"width": 260, "height": 300}'),
-        colWidth: parseInt(GM_getValue('addrColWidth', 70)),
-        history: safeParse('clipHistory', '{"phones":[], "addrs":[]}'),
+        layout: safeParse('uiLayout', '{"width": 280, "height": 350}'),
+        colWidth: parseInt(GM_getValue('addrColWidth', 80)),
+        
+        // 数据库 (纯本地存储)
+        db: {
+            addrs: safeParse('dbAddrs', '[]'),
+            phones: safeParse('dbPhones', '[]')
+        },
         blacklist: GM_getValue('blacklist', '师傅,马上,联系,收到,好的,电话,不用,微信'),
+        
+        // 搜索与视图状态
+        viewTab: GM_getValue('viewTab', 'address'), // 'address' or 'phone'
+        searchText: '',
+
         currentVersion: GM_info.script.version,
         timeConfig: safeParse('timeConfig', '{"start":"20:00", "end":"22:00"}'),
         theme: GM_getValue('theme', 'light') 
+    };
+
+    // 兼容旧版本数据迁移
+    const migrateOldData = () => {
+        const oldHistory = safeParse('clipHistory', null);
+        if (oldHistory) {
+            if (oldHistory.addrs && oldHistory.addrs.length > 0) {
+                oldHistory.addrs.forEach(a => addToDB('address', a));
+            }
+            if (oldHistory.phones && oldHistory.phones.length > 0) {
+                oldHistory.phones.forEach(p => addToDB('phone', p));
+            }
+            GM_setValue('clipHistory', ''); 
+        }
     };
 
     // --------------- 3. 核心逻辑 ---------------
@@ -83,7 +110,7 @@
             state.refreshInterval = saved;
         } else if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000; 
-            log('进入派单界面，同步并清洗隔离库...', 'info');
+            log('进入派单界面...', 'info');
             fetchOnlineBlacklist(true);
             setTimeout(applyDistanceByTime, 1500); 
         }
@@ -123,17 +150,39 @@
         setSliderValue(targetKm);
     };
 
-    const cleanHistoryWithBlacklist = () => {
-        if (!state.history.addrs || state.history.addrs.length === 0) return;
+    // 数据库操作：添加数据（自动去重、置顶）
+    const addToDB = (type, value) => {
+        if (!value) return;
+        const list = type === 'address' ? state.db.addrs : state.db.phones;
+        const index = list.indexOf(value);
+        if (index > -1) {
+            list.splice(index, 1); // 移除旧的
+        }
+        list.unshift(value); // 加到最前
+        
+        // 限制最大数量
+        if (list.length > CONFIG.STORAGE.MAX_ITEMS) {
+            list.length = CONFIG.STORAGE.MAX_ITEMS;
+        }
+
+        // 保存到本地
+        if (type === 'address') GM_setValue('dbAddrs', JSON.stringify(list));
+        else GM_setValue('dbPhones', JSON.stringify(list));
+    };
+
+    // 地址库清洗（基于黑名单）
+    const cleanDBWithBlacklist = () => {
+        if (!state.db.addrs || state.db.addrs.length === 0) return;
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
         if (blockers.length === 0) return;
-        const originalCount = state.history.addrs.length;
-        state.history.addrs = state.history.addrs.filter(addr => !blockers.some(keyword => addr.includes(keyword)));
-        const newCount = state.history.addrs.length;
-        if (originalCount !== newCount) {
-            GM_setValue('clipHistory', JSON.stringify(state.history));
+        
+        const originalCount = state.db.addrs.length;
+        state.db.addrs = state.db.addrs.filter(addr => !blockers.some(keyword => addr.includes(keyword)));
+        
+        if (originalCount !== state.db.addrs.length) {
+            GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
             updateListsUI();
-            log(`已清洗地址库: 移除 ${originalCount - newCount} 条`, 'warning');
+            log(`已清洗地址库: 移除 ${originalCount - state.db.addrs.length} 条`, 'warning');
         }
     };
 
@@ -149,7 +198,7 @@
                         const cleanList = text.replace(/[\r\n\s]+/g, ',').replace(/，/g, ',');
                         state.blacklist = cleanList;
                         GM_setValue('blacklist', cleanList);
-                        cleanHistoryWithBlacklist();
+                        cleanDBWithBlacklist();
                         if(!silent) log('隔离库同步并清洗完成', 'success');
                     }
                 }
@@ -197,11 +246,13 @@
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
 
-    const parseTextToHistory = (fullText) => {
+    // 处理剪贴板文本
+    const parseTextToDB = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
         let hasUpdate = false;
 
+        // 提取电话
         const phoneRegex = /(?:^|[^\d])(1\d{10})(?:$|[^\d])/g;
         let phoneMatch;
         let tempTextForPhone = fullText;
@@ -209,15 +260,13 @@
         while ((phoneMatch = phoneRegex.exec(tempTextForPhone)) !== null) {
             const num = phoneMatch[1];
             if (/^1\d{10}$/.test(num)) {
-                if (!state.history.phones) state.history.phones = [];
-                const existIdx = state.history.phones.indexOf(num);
-                if (existIdx > -1) state.history.phones.splice(existIdx, 1);
-                state.history.phones.unshift(num);
+                addToDB('phone', num);
                 hasUpdate = true;
                 log('提取电话: ' + num, 'success');
             }
         }
 
+        // 提取地址
         let addrText = fullText.replace(phoneRegex, ' ').trim();
         const segments = addrText.split(/[\r\n,;，；]+/); 
         const symbolRegex = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`·！@#￥%……&*（）—+={}|【】；：‘’“”、，。《》？]/;
@@ -229,16 +278,10 @@
             if (/[0-9]/.test(firstChar) || /[a-zA-Z]/.test(firstChar) || symbolRegex.test(firstChar)) return; 
             if (blockers.some(keyword => cleanSeg.includes(keyword))) return;
 
-            if (!state.history.addrs) state.history.addrs = [];
-            const existIdx = state.history.addrs.indexOf(cleanSeg);
-            if (existIdx > -1) state.history.addrs.splice(existIdx, 1);
-            state.history.addrs.unshift(cleanSeg);
+            addToDB('address', cleanSeg);
             hasUpdate = true;
             log('提取地址: ' + cleanSeg.substring(0, 6) + '...', 'info');
         });
-
-        if (state.history.phones && state.history.phones.length > CONFIG.CLIPBOARD.MAX_HISTORY) state.history.phones.length = CONFIG.CLIPBOARD.MAX_HISTORY;
-        if (state.history.addrs && state.history.addrs.length > CONFIG.CLIPBOARD.MAX_HISTORY) state.history.addrs.length = CONFIG.CLIPBOARD.MAX_HISTORY;
 
         return hasUpdate;
     };
@@ -246,20 +289,39 @@
     const processClipboard = async () => {
         try {
             const text = await navigator.clipboard.readText();
-            if (parseTextToHistory(text)) {
-                GM_setValue('clipHistory', JSON.stringify(state.history));
+            if (parseTextToDB(text)) {
                 updateListsUI();
             }
         } catch (e) {}
     };
 
-    const fillInput = (type, value) => {
-        if (type === 'phone') {
-            if (!/^1\d{10}$/.test(value)) {
-                alert('电话不对：必须是11位数字且以1开头');
-                return;
-            }
+    // 本地文件导入逻辑（关键修改：纯本地）
+    const handleFileImport = (e) => {
+        const file = e.target.files[0];
+        if (!file) return;
+        
+        // 确认对话框
+        if(!confirm(`确认导入文件 "${file.name}" 到本地库吗？\n这将自动过滤黑名单并去重。`)) {
+            e.target.value = '';
+            return;
         }
+
+        const reader = new FileReader();
+        reader.onload = (event) => {
+            const content = event.target.result;
+            const lines = content.split(/[\r\n]+/);
+            let updateCount = 0;
+            lines.forEach(line => {
+                if (parseTextToDB(line)) updateCount++;
+            });
+            updateListsUI();
+            alert(`✅ 导入成功！\n已解析并更新 ${updateCount} 条新数据到本地库。`);
+        };
+        reader.readAsText(file);
+        e.target.value = ''; // 重置input以便下次重复导入
+    };
+
+    const fillInput = (type, value) => {
         let input = null;
         if (type === 'address') {
              input = document.querySelector('input[id="tipinput"]') || 
@@ -312,24 +374,57 @@
         }
     };
 
-    // --------------- 4. UI 界面 ---------------
+    // --------------- 4. 搜索算法 (核心升级) ---------------
+
+    // 超级模糊匹配逻辑
+    const isMatch = (dbItem, inputKey, type) => {
+        if (!inputKey) return true;
+        const cleanKey = inputKey.trim();
+        if (!cleanKey) return true;
+
+        if (type === 'phone') {
+            // 场景A: 标准包含 (输入: 1370 -> 匹配: 1370536...)
+            if (dbItem.includes(cleanKey)) return true;
+
+            // 场景B: 输入过长/反向包含 (输入: 1370536636466 -> 匹配: 13705366364)
+            // 解决：多输了数字，或者直接复制了一整句短信
+            if (cleanKey.includes(dbItem)) return true;
+
+            // 场景C: 漏输/跳着输 (输入: 137536 -> 匹配: 1370536...)
+            // 逻辑：输入的字符在DB项中按顺序出现
+            if (/^\d+$/.test(cleanKey) && cleanKey.length >= 4) {
+                // 构建正则: 1.*3.*7.*5.*3.*6
+                const pattern = cleanKey.split('').join('.*');
+                try {
+                    const re = new RegExp(pattern);
+                    return re.test(dbItem);
+                } catch(e) {}
+            }
+            return false;
+        }
+        
+        // 地址库：支持空格分隔多关键字搜索 (例如输入 "万达 广场" -> 匹配 "万达xx广场")
+        const keywords = cleanKey.split(/\s+/);
+        return keywords.every(k => dbItem.includes(k));
+    };
+
+    // --------------- 5. UI 界面 ---------------
 
     const applyLayout = () => {
         const addrWidget = document.getElementById('gj-widget-addr');
         const listBody = document.getElementById('list-addr-body');
         if (addrWidget && listBody) {
             addrWidget.style.width = state.layout.width + 'px';
-            listBody.style.height = state.layout.height + 'px';
+            listBody.style.height = state.layout.height + 'px'; 
             listBody.style.setProperty('--gj-col-width', state.colWidth + 'px');
         }
     };
 
-    // [核心] 切换主题（同时切换全局网页颜色）
     const toggleTheme = () => {
         state.theme = state.theme === 'light' ? 'dark' : 'light';
         GM_setValue('theme', state.theme);
         updateUI();
-        applyGlobalTheme(); // 应用全局反转
+        applyGlobalTheme(); 
     };
 
     const applyGlobalTheme = () => {
@@ -402,11 +497,26 @@
         widget.style.transformOrigin = 'top left';
         widget.style.width = state.layout.width + 'px';
 
+        const activeTabClass = (tab) => state.viewTab === tab ? 'active-tab' : '';
+
         widget.innerHTML = `
             <div class="gj-header gj-drag-header">
-                <span>📍 地址库 (按住拖动)</span>
-                <span class="btn-icon-circle" id="btn-refresh-addr" title="刷新/读取剪贴板">↻</span>
+                <div class="gj-tabs">
+                    <span class="gj-tab ${activeTabClass('address')}" data-tab="address">📍 地址库</span>
+                    <span class="gj-tab ${activeTabClass('phone')}" data-tab="phone">📞 电话库</span>
+                </div>
+                <div style="display:flex; gap:5px;">
+                    <label class="btn-icon-circle" title="导入本地文件(txt/csv)">
+                        📂<input type="file" id="gj-file-import" style="display:none" accept=".txt,.csv">
+                    </label>
+                    <span class="btn-icon-circle" id="btn-refresh-addr" title="刷新/读取剪贴板">↻</span>
+                </div>
             </div>
+            
+            <div class="gj-toolbar">
+                <input type="text" id="gj-search-input" placeholder="输入搜索..." value="${state.searchText}">
+            </div>
+
             <div class="gj-list-body" id="list-addr-body" style="height:${state.layout.height}px;"></div>
             
             <div style="padding:5px 8px; font-size:11px; display:flex; align-items:center; gap:5px; border-top:1px dashed var(--gj-border);">
@@ -421,8 +531,27 @@
         setupDrag(widget, 'posAddr');
         setupResizeDrag(widget);
 
+        // 事件绑定
         widget.querySelector('#btn-refresh-addr').addEventListener('click', processClipboard);
+        widget.querySelector('#gj-file-import').addEventListener('change', handleFileImport);
         
+        widget.querySelectorAll('.gj-tab').forEach(tab => {
+            tab.addEventListener('click', (e) => {
+                state.viewTab = e.target.dataset.tab;
+                GM_setValue('viewTab', state.viewTab);
+                updateUI(); 
+                updateListsUI();
+            });
+        });
+
+        const searchInput = widget.querySelector('#gj-search-input');
+        // 自动聚焦
+        // setTimeout(() => searchInput.focus(), 100);
+        searchInput.addEventListener('input', (e) => {
+            state.searchText = e.target.value;
+            updateListsUI();
+        });
+
         const slider = widget.querySelector('#gj-col-slider');
         slider.addEventListener('input', (e) => {
             state.colWidth = parseInt(e.target.value);
@@ -440,10 +569,17 @@
         if (!mainWidget) mainWidget = createMainWidget();
         
         let addrWidget = document.getElementById('gj-widget-addr');
-        if (isDispatchPage() && !addrWidget) {
-            addrWidget = createAddrWidget();
-            updateListsUI();
-            applyLayout(); 
+        if (isDispatchPage()) {
+            if (!addrWidget) {
+                addrWidget = createAddrWidget();
+                updateListsUI();
+                applyLayout(); 
+            } else {
+                addrWidget.querySelectorAll('.gj-tab').forEach(el => {
+                    if(el.dataset.tab === state.viewTab) el.classList.add('active-tab');
+                    else el.classList.remove('active-tab');
+                });
+            }
         } else if (!isDispatchPage() && addrWidget) {
             addrWidget.remove();
         }
@@ -509,7 +645,7 @@
                 <div class="gj-grid-btns">${buttonsHtml}</div>
                 
                 <div class="gj-bottom-controls">
-                    <button id="btn-sync-cloud" class="gj-btn-text">☁️ 同步配置</button>
+                    <button id="btn-sync-cloud" class="gj-btn-text">☁️ 同步隔离库</button>
                     <span style="font-size:10px;color:var(--gj-text-mute);">缩放: ${(state.uiScale*100).toFixed(0)}%</span>
                 </div>
             `;
@@ -524,16 +660,27 @@
         const addrBody = document.getElementById('list-addr-body');
         if (!addrBody) return;
 
-        const renderItem = (item, type) => {
-            return `<div class="gj-list-item" title="${item}" data-val="${item}" data-type="${type}">
-                ${type==='address' ? '' : '📞'}
+        const isPhone = state.viewTab === 'phone';
+        const sourceList = isPhone ? state.db.phones : state.db.addrs;
+        
+        // 核心：应用搜索过滤
+        const filteredList = (sourceList || []).filter(item => isMatch(item, state.searchText, isPhone ? 'phone' : 'address'));
+
+        const renderItem = (item) => {
+            return `<div class="gj-list-item" title="${item}" data-val="${item}" data-type="${isPhone ? 'phone' : 'address'}">
+                ${isPhone ? '📞' : ''}
                 <span class="gj-item-text">${item}</span>
             </div>`;
         };
 
-        const list = state.history.addrs || [];
-        addrBody.innerHTML = list.map(i => renderItem(i, 'address')).join('') || '<div class="gj-empty">空</div>';
-        addrBody.querySelectorAll('.gj-list-item').forEach(el => el.addEventListener('click', () => fillInput('address', el.dataset.val)));
+        if (filteredList.length === 0) {
+            addrBody.innerHTML = `<div class="gj-empty">${state.searchText ? '无匹配结果' : '库为空<br>请导入文件或复制文本'}</div>`;
+        } else {
+            addrBody.innerHTML = filteredList.map(i => renderItem(i)).join('');
+            addrBody.querySelectorAll('.gj-list-item').forEach(el => 
+                el.addEventListener('click', () => fillInput(el.dataset.type, el.dataset.val))
+            );
+        }
     };
 
     const bindEvents = () => {
@@ -542,10 +689,10 @@
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
             );
             document.getElementById('btn-auto-addr')?.addEventListener('click', () => {
-                if(state.history.addrs && state.history.addrs[0]) fillInput('address', state.history.addrs[0]);
+                if(state.db.addrs && state.db.addrs[0]) fillInput('address', state.db.addrs[0]);
             });
             document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
-                if(state.history.phones && state.history.phones[0]) fillInput('phone', state.history.phones[0]);
+                if(state.db.phones && state.db.phones[0]) fillInput('phone', state.db.phones[0]);
             });
             document.getElementById('btn-sync-cloud')?.addEventListener('click', () => {
                 fetchOnlineBlacklist(false);
@@ -594,7 +741,7 @@
         const header = el.querySelector('.gj-header'); 
         let isDragging = false, startX, startY, rect;
         header.addEventListener('mousedown', e => {
-            if(e.target.closest('.gj-toggle') || e.target.closest('#gj-theme-toggle')) return;
+            if(e.target.closest('.gj-toggle') || e.target.closest('#gj-theme-toggle') || e.target.closest('.gj-tab') || e.target.closest('input') || e.target.closest('label')) return;
             isDragging = true; startX = e.clientX; startY = e.clientY;
             rect = el.getBoundingClientRect();
             header.style.cursor = 'grabbing';
@@ -670,8 +817,8 @@
             let newW = startW + dx;
             let newH = startH + dy;
             
-            if(newW < 150) newW = 150;
-            if(newH < 100) newH = 100;
+            if(newW < 200) newW = 200;
+            if(newH < 150) newH = 150;
             
             state.layout.width = newW;
             state.layout.height = newH;
@@ -744,11 +891,11 @@
             #gj-widget-addr { /* width dynamic */ }
 
             .gj-header {
-                padding: 12px 16px; 
+                padding: 10px 12px; 
                 background: var(--gj-header-bg);
                 color: #fff;
                 display: flex; justify-content: space-between; align-items: center;
-                cursor: grab; font-weight: 600; font-size: 15px;
+                cursor: grab; font-weight: 600; font-size: 14px;
                 box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             }
             .gj-toggle, #gj-theme-toggle { cursor: pointer; opacity:0.8; transition:opacity 0.2s; font-size:14px; }
@@ -799,17 +946,31 @@
             .gj-bottom-controls { display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding-top:10px; border-top:1px dashed var(--gj-border); }
             
             .btn-icon-circle { 
-                width:18px; height:18px; border-radius:50%; background:var(--gj-bg-input); 
+                width:22px; height:22px; border-radius:50%; background:rgba(255,255,255,0.2); 
                 display:flex; align-items:center; justify-content:center; 
-                cursor:pointer; color:var(--gj-text-mute); font-size:12px;
+                cursor:pointer; color:#fff; font-size:12px; transition:0.2s;
             }
-            .btn-icon-circle:hover { background:#409EFF; color:white; }
+            .btn-icon-circle:hover { background:rgba(255,255,255,0.4); transform:scale(1.1); }
+
+            /* List & Tabs Styles */
+            .gj-tabs { display:flex; gap:10px; align-items:center; }
+            .gj-tab { cursor:pointer; padding:2px 0; opacity:0.6; border-bottom:2px solid transparent; transition:0.2s; }
+            .gj-tab:hover { opacity:0.9; }
+            .gj-tab.active-tab { opacity:1; font-weight:bold; border-bottom-color:#fff; }
+
+            .gj-toolbar { padding: 8px; background: var(--gj-bg-sec); border-bottom: 1px solid var(--gj-border); }
+            #gj-search-input {
+                width: 100%; border: 1px solid var(--gj-border); border-radius: 4px;
+                padding: 5px 8px; font-size: 14px; outline: none;
+                background: var(--gj-bg-input); color: var(--gj-text-main);
+                font-family: monospace; letter-spacing: 1px;
+            }
+            #gj-search-input:focus { border-color: #409EFF; }
 
             .gj-list-body { 
                 overflow-y: auto; 
                 display: grid;
-                /* 【核心】使用 CSS 变量控制最小列宽，从而控制一行显示几个 */
-                grid-template-columns: repeat(auto-fill, minmax(var(--gj-col-width, 70px), 1fr));
+                grid-template-columns: repeat(auto-fill, minmax(var(--gj-col-width, 80px), 1fr));
                 gap: 1px; background: var(--gj-bg-sec); padding: 1px;
                 transition: height 0.05s;
             }
@@ -819,7 +980,7 @@
             .gj-list-item {
                 background: var(--gj-bg-main); padding: 6px 4px; 
                 cursor: pointer; 
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: 500;
                 color: var(--gj-text-main);
                 display: flex; align-items: center; justify-content: center;
@@ -827,7 +988,7 @@
             }
             .gj-list-item:hover { background: var(--gj-hover); color: var(--gj-hover-text); }
             .gj-item-text { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-            .gj-empty { grid-column: 1 / -1; text-align: center; color: var(--gj-text-mute); padding: 20px; font-size: 11px; background: var(--gj-bg-main);}
+            .gj-empty { grid-column: 1 / -1; text-align: center; color: var(--gj-text-mute); padding: 30px 10px; font-size: 12px; background: var(--gj-bg-main);}
             
             .gj-resize-handle {
                 position: absolute;
@@ -849,11 +1010,12 @@
     };
 
     const init = () => {
+        migrateOldData(); 
         addStyles();
         checkPage();
         window.addEventListener('hashchange', checkPage);
         if(isDispatchPage()) setTimeout(applyDistanceByTime, 2000);
-        applyGlobalTheme(); // 初始化应用主题
+        applyGlobalTheme(); 
 
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) {
