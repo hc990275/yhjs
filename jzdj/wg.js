@@ -162,7 +162,7 @@
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
     
     // ==============================================
-    //           [新增] 自动抓取与上传逻辑
+    //           [核心] 自动抓取与上传逻辑
     // ==============================================
 
     const autoScrapeOrders = () => {
@@ -258,12 +258,12 @@
             data: JSON.stringify({ type: type, data: data }),
             headers: { "Content-Type": "application/json" },
             onload: function(response) {
-                // 静默上传，不需要打扰用户，除非出错
-                // if(response.status !== 200) console.log('上传失败', response.responseText);
+                // 静默上传，不需要打扰用户
             }
         });
     };
 
+    // UI 显示状态吐司
     const showToast = (msg) => {
         let toast = document.getElementById('gj-toast');
         if(!toast) {
@@ -323,17 +323,14 @@
     const cleanDBWithBlacklist = () => {
         if (!state.db.addrs || state.db.addrs.length === 0) return;
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
-        const originalCount = state.db.addrs.length;
         state.db.addrs = state.db.addrs.filter(addr => {
             if (blockers.length > 0 && blockers.some(keyword => addr.includes(keyword))) return false;
             const hanziMatches = addr.match(/[\u4e00-\u9fa5]/g);
             if ((hanziMatches ? hanziMatches.length : 0) > 6) return false;
             return true;
         });
-        if (originalCount !== state.db.addrs.length) {
-            GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
-            updateListsUI();
-        }
+        GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
+        updateListsUI();
     };
 
     const fetchOnlineBlacklist = (silent = false) => {
@@ -428,10 +425,12 @@
                                 GM_setValue('blacklist', state.blacklist);
                                 blCount = lines.length;
                             } else if (type === 'ADDRS') {
+                                // 覆盖模式
                                 state.db.addrs = lines; 
                                 GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
                                 importedAddrs = lines.length;
                             } else if (type === 'PHONES') {
+                                // 覆盖模式
                                 state.db.phones = lines;
                                 GM_setValue('dbPhones', JSON.stringify(state.db.phones));
                                 importedPhones = lines.length;
@@ -449,7 +448,7 @@
                     updateListsUI();
                     
                     if (!isAuto) {
-                        alert(`☁️ 覆盖成功！本地数据已与云端同步。\n\n- 隔离库: ${blCount} 条\n- 地址库: ${importedAddrs} 条\n- 电话库: ${importedPhones} 条`);
+                        alert(`☁️ 覆盖成功！\n\n- 隔离库: ${blCount} 条\n- 地址库: ${importedAddrs} 条\n- 电话库: ${importedPhones} 条`);
                     } else {
                         log(`[自动同步] 完成: 覆盖地址${importedAddrs}条 / 电话${importedPhones}条`, 'success');
                     }
@@ -625,42 +624,26 @@
              if (!input) {
                  const inputs = document.querySelectorAll('input');
                  for (let i = 0; i < inputs.length; i++) {
-                     const el = inputs[i];
-                     if (el.closest('.gj-window')) continue;
-                     if (!el.closest('.el-form-item') && el.type === 'text') { 
-                         input = el; break; 
-                     }
+                     if (!inputs[i].closest('.gj-window') && !inputs[i].closest('.el-form-item') && inputs[i].type === 'text') { input = inputs[i]; break; }
                  }
              }
              if (!input) {
-                 const keywords = ['起点', '出发', '搜索', '关键字'];
-                 const allInputs = document.querySelectorAll('input');
-                 for (let i = 0; i < allInputs.length; i++) {
-                     const el = allInputs[i];
-                     if (el.closest('.gj-window')) continue; 
-                     const ph = (el.placeholder || '').toLowerCase();
-                     if (keywords.some(k => ph.includes(k))) {
-                         input = el; break;
-                     }
+                 const inputs = document.querySelectorAll('input');
+                 for (let i = 0; i < inputs.length; i++) {
+                     if (!inputs[i].closest('.gj-window') && ['起点','出发','搜索'].some(k=>inputs[i].placeholder.includes(k))) { input = inputs[i]; break; }
                  }
              }
         } else if (type === 'phone') {
              const inputs = document.querySelectorAll('input');
              for (let i = 0; i < inputs.length; i++) {
-                 const el = inputs[i];
-                 if (el.closest('.gj-window')) continue; 
-                 const ph = (el.placeholder || '').toLowerCase();
-                 if (ph.includes('用户电话') || ph.includes('电话') || el.type === 'tel') {
-                     input = el; break;
-                 }
+                 if (!inputs[i].closest('.gj-window') && (inputs[i].placeholder.includes('电话') || inputs[i].type === 'tel')) { input = inputs[i]; break; }
              }
         }
         if (input) {
             input.value = value;
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
-            input.click();
-            input.focus();
+            input.click(); input.focus();
             input.style.transition = 'all 0.3s';
             input.style.boxShadow = '0 0 0 2px rgba(103, 194, 58, 0.3)';
             setTimeout(() => input.style.boxShadow = '', 800);
@@ -680,13 +663,10 @@
             if (percentage > 1) percentage = 1; if (percentage < 0) percentage = 0;
             const clientX = rect.left + (rect.width * percentage);
             const clientY = rect.top + (rect.height / 2);
-            const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-            const eventOpts = { bubbles: true, cancelable: true, view: win, clientX: clientX, clientY: clientY };
             try {
-                runway.dispatchEvent(new MouseEvent('mousemove', eventOpts));
-                runway.dispatchEvent(new MouseEvent('mousedown', eventOpts));
-                runway.dispatchEvent(new MouseEvent('mouseup', eventOpts));
-                runway.dispatchEvent(new MouseEvent('click', eventOpts));
+                runway.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX, clientY }));
+                runway.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX, clientY }));
+                runway.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX, clientY }));
             } catch (e) { }
         }
     };
@@ -699,13 +679,11 @@
             if (dbItem.includes(cleanKey)) return true;
             if (cleanKey.includes(dbItem)) return true;
             if (/^\d+$/.test(cleanKey) && cleanKey.length >= 4) {
-                const pattern = cleanKey.split('').join('.*');
-                try { const re = new RegExp(pattern); return re.test(dbItem); } catch(e) {}
+                try { return new RegExp(cleanKey.split('').join('.*')).test(dbItem); } catch(e) {}
             }
             return false;
         }
-        const keywords = cleanKey.split(/\s+/);
-        return keywords.every(k => dbItem.includes(k));
+        return cleanKey.split(/\s+/).every(k => dbItem.includes(k));
     };
 
     const applyLayout = () => {
