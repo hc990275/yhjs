@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v12.9 持续监控版)
+// @name          代驾调度系统助手 (v12.10 终极完整版)
 // @namespace     http://tampermonkey.net/
-// @version       12.9
+// @version       12.10
 // @description   【全自动闭环】持续监控订单列表；自动识别并抓取[电话]和[地址]上传云端；修复抓取中断问题；增加状态显示。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
@@ -67,9 +67,8 @@
         timerId: null,
         rapidTimer: null,
         
-        // 抓取专用定时器
         scrapeTimer: null, 
-        scrapedCount: 0, // 本次运行抓取计数
+        scrapedCount: 0,
         
         posMain: safeParse('posMain', '{"top":"80px","left":"20px"}'),
         posAddr: safeParse('posAddr', '{"top":"80px","left":"300px"}'),
@@ -104,36 +103,28 @@
     const checkPage = () => {
         state.currentHash = window.location.hash;
         
-        // 停止之前的抓取循环（防止重复）
         if (state.scrapeTimer) {
             clearInterval(state.scrapeTimer);
             state.scrapeTimer = null;
         }
 
-        // === 订单管理页逻辑 ===
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
-            
-            // 【关键修改】开启持续监控循环，每3秒扫一次表格
             if (!state.manualPause) {
                 state.scrapeTimer = setInterval(autoScrapeOrders, 3000);
                 showToast('👁️ 自动抓取已启动');
             }
         } 
-        
-        // === 司机调度页逻辑 ===
         else if (isDriverPage()) {
             let saved = GM_getValue('driverInterval');
             if (!saved) saved = CONFIG.DRIVER.DEFAULT_INTERVAL;
             state.refreshInterval = saved;
         } 
-        
-        // === 派单页逻辑 ===
         else if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
             log('进入派单界面，开始自动同步...', 'info');
-            fetchOnlineBlacklist(true); // 同步黑名单
-            pullFromCloud(true); // 同步地址库
+            fetchOnlineBlacklist(true);
+            pullFromCloud(true);
             setTimeout(applyDistanceByTime, 1500);
         }
 
@@ -156,7 +147,7 @@
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
     
     // ==============================================
-    //           [增强] 自动抓取与上传逻辑
+    //           自动抓取与上传逻辑
     // ==============================================
 
     const autoScrapeOrders = () => {
@@ -165,14 +156,12 @@
         const rows = document.querySelectorAll('.el-table__body-wrapper tbody tr');
         if (!rows || rows.length === 0) return;
 
-        // 动态定位列索引
         const headers = document.querySelectorAll('.el-table__header-wrapper th');
         let phoneIdx = -1;
         let addrIdx = -1;
 
         headers.forEach((th, index) => {
             const text = th.innerText.trim();
-            // 模糊匹配表头，提高容错率
             if (text.includes('电话') || text.includes('手机')) phoneIdx = index;
             if (text.includes('起点') || text.includes('位置') || text.includes('地址')) addrIdx = index;
         });
@@ -183,13 +172,10 @@
             const cells = row.querySelectorAll('td');
             if (cells.length === 0) return;
 
-            // --- 提取电话 ---
             let phone = '';
-            // 策略A: 如果找到了电话列，直接取
             if (phoneIdx > -1 && cells[phoneIdx]) {
                 phone = cells[phoneIdx].innerText.replace(/[^\d]/g, '');
             } 
-            // 策略B: 没找到列？扫描整行找11位数字 (暴力匹配)
             if (!phone || phone.length !== 11) {
                 const rowText = row.innerText;
                 const match = rowText.match(/1[3-9]\d{9}/);
@@ -205,20 +191,15 @@
                 }
             }
 
-            // --- 提取地址 ---
             let addr = '';
             if (addrIdx > -1 && cells[addrIdx]) {
                 addr = cells[addrIdx].innerText.trim();
-                // 简单的地址清洗与校验
                 if (addr && addr.length > 1) {
                     const isBlocked = state.blacklist.split(/[,，]/).some(k => k && addr.includes(k));
                     const hanziCount = (addr.match(/[\u4e00-\u9fa5]/g) || []).length;
                     
-                    // 过滤黑名单、过滤超长、过滤纯数字
                     if (!isBlocked && hanziCount <= 7 && !/^\d+$/.test(addr)) {
-                        // 智能去重：检查是否包含或被包含
                         const exists = state.db.addrs.some(exist => exist.includes(addr) || addr.includes(exist));
-                        
                         if (!exists) {
                             addToDB('address', addr);
                             uploadOneToCloud('addr', addr);
@@ -233,11 +214,10 @@
         if (newItemsCount > 0) {
             state.scrapedCount += newItemsCount;
             updateListsUI();
-            updateScrapeStatus(); // 更新UI显示
+            updateScrapeStatus();
         }
     };
 
-    // 单条数据上传到云端
     const uploadOneToCloud = (type, data) => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
@@ -254,11 +234,6 @@
         });
     };
 
-    // ==============================================
-    //               UI 更新与辅助
-    // ==============================================
-
-    // 在页面左下角显示抓取状态
     const showToast = (msg) => {
         let toast = document.getElementById('gj-toast');
         if(!toast) {
@@ -278,9 +253,6 @@
             statusEl.innerHTML = `订单刷新 <span style="font-size:10px;color:#67c23a;margin-left:5px">抓取:${state.scrapedCount}</span>`;
         }
     };
-
-    // ... (保留之前的 applyDistanceByTime, addToDB, cleanDBWithBlacklist 等基础函数) ...
-    // 为节省篇幅，以下基础函数逻辑与之前版本完全一致，必须保留！
 
     const applyDistanceByTime = () => {
         if (!isDispatchPage()) return;
@@ -318,6 +290,7 @@
             return true;
         });
         GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
+        updateListsUI();
     };
 
     const fetchOnlineBlacklist = (silent = false) => {
@@ -378,6 +351,10 @@
                             else if (type === 'ADDRS') { state.db.addrs = lines; GM_setValue('dbAddrs', JSON.stringify(state.db.addrs)); }
                             else if (type === 'PHONES') { state.db.phones = lines; GM_setValue('dbPhones', JSON.stringify(state.db.phones)); }
                         }
+                    } else {
+                        const lines = text.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
+                        state.db.addrs = lines;
+                        GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
                     }
                     cleanDBWithBlacklist();
                     updateListsUI();
@@ -471,7 +448,8 @@
     const processClipboard = async (autoFill = false) => {
         try {
             const text = await navigator.clipboard.readText();
-            if (parseTextToDB(text)) updateListsUI();
+            const hasUpdate = parseTextToDB(text);
+            if (hasUpdate) updateListsUI();
             if (autoFill && state.db.addrs.length > 0) fillInput('address', state.db.addrs[0]);
         } catch (e) {}
     };
@@ -662,40 +640,6 @@
         slider.addEventListener('input', (e) => { state.colWidth = parseInt(e.target.value); document.getElementById('list-addr-body').style.setProperty('--gj-col-width', state.colWidth + 'px'); });
         slider.addEventListener('change', (e) => GM_setValue('addrColWidth', state.colWidth));
         return widget;
-    };
-
-    const updateUI = () => {
-        let mainWidget = document.getElementById('gj-widget-main');
-        if (!mainWidget) mainWidget = createMainWidget();
-        let addrWidget = document.getElementById('gj-widget-addr');
-        if (isDispatchPage()) {
-            if (!addrWidget) { addrWidget = createAddrWidget(); updateListsUI(); applyLayout(); }
-            else addrWidget.querySelectorAll('.gj-tab').forEach(el => { if(el.dataset.tab === state.viewTab) el.classList.add('active-tab'); else el.classList.remove('active-tab'); });
-        } else if (!isDispatchPage() && addrWidget) addrWidget.remove();
-        const cls = state.theme === 'dark' ? 'gj-dark gj-window' : 'gj-light gj-window';
-        if(mainWidget) mainWidget.className = cls; if(addrWidget) addrWidget.className = cls;
-        const themeIcon = document.getElementById('gj-theme-toggle'); if(themeIcon) themeIcon.textContent = state.theme === 'light' ? '🌙' : '🌞';
-        const titleSpan = document.getElementById('gj-title-text'); if (titleSpan) { if (isOrderPage()) titleSpan.textContent = CONFIG.ORDER.TITLE; else if (isDriverPage()) titleSpan.textContent = CONFIG.DRIVER.TITLE; else if (isDispatchPage()) titleSpan.textContent = CONFIG.DISPATCH.TITLE; else titleSpan.textContent = "助手待机"; }
-        const mainContent = document.getElementById('gj-main-content'); const scaleHandle = document.getElementById('gj-scale-handle');
-        if (mainContent) mainContent.style.display = state.isCollapsed ? 'none' : 'block'; if (scaleHandle) scaleHandle.style.display = state.isCollapsed ? 'none' : 'block';
-        if (mainContent) renderMainContent(mainContent);
-        updateStatusText();
-        updateScrapeStatus();
-    };
-
-    const renderMainContent = (container) => {
-        let html = '';
-        if (isOrderPage() || isDriverPage()) {
-            const btnClass = state.manualPause ? 'btn-resume' : 'btn-pause';
-            const btnText = state.manualPause ? '▶ 恢复运行' : '⏸ 暂停刷新';
-            const statusColor = state.manualPause ? 'var(--gj-text-sec)' : '#409EFF';
-            html = `<div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;"><span class="gj-timer-text" style="color:${statusColor}">${state.manualPause ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span></div><button id="gj-btn-toggle" class="gj-btn ${btnClass}">${btnText}</button><div class="gj-control-row"><span style="color:var(--gj-text-sec);font-size:12px;">刷新间隔</span><div style="display:flex;align-items:center;"><input type="number" id="gj-input-interval" value="${state.refreshInterval}" class="gj-input-mini"><button id="gj-btn-set" class="gj-btn-icon">🆗</button></div></div>`;
-        } else if (isDispatchPage()) {
-            const buttonsHtml = CONFIG.DISPATCH.PRESETS.map(num => `<button class="btn-preset" data-val="${num}">${num}</button>`).join('');
-            html = `<div class="gj-group"><button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button><button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button></div><div class="gj-divider"><span class="gj-label-sm">AI 距离 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</span></div><div class="gj-grid-btns">${buttonsHtml}</div><div class="gj-bottom-controls"><button id="btn-sync-cloud" class="gj-btn-text">☁️ 同步隔离库</button><span style="font-size:10px;color:var(--gj-text-mute);">缩放: ${(state.uiScale*100).toFixed(0)}%</span></div>`;
-        } else html = `<div style="padding:20px;color:var(--gj-text-mute);text-align:center;font-size:13px;">💤 非工作区域</div>`;
-        container.innerHTML = html;
-        bindEvents();
     };
 
     const setupDrag = (el, posKey) => {
