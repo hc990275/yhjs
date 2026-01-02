@@ -1,10 +1,13 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v12.3 完整全量版)
+// @name          代驾调度系统助手 (v12.3 修复连接版)
 // @namespace     http://tampermonkey.net/
 // @version       12.3
-// @description   【云同步】基于v11.8完整内核；支持 [黑名单]、[地址]、[电话] 三库独立同步到 Cloudflare Worker；保留全部拖拽、缩放、主题功能。
+// @description   【云同步】已添加网络白名单。支持 [黑名单]、[地址]、[电话] 三库独立同步到 Cloudflare Worker。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
+// @connect       txt.abcai.online
+// @connect       github.abcai.online
+// @connect       *
 // @grant         GM_setValue
 // @grant         GM_getValue
 // @grant         GM_addStyle
