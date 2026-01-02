@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v13.3 精准定位抓取版)
+// @name          代驾调度系统助手 (v13.4 电话双重保险版)
 // @namespace     http://tampermonkey.net/
-// @version       13.3
-// @description   【精准抓取】彻底解决乱抓取问题；自动识别"乘客电话"和"起点名称"所在列，只抓取这两项；保留自动上传与去重功能。
+// @version       13.4
+// @description   【抓取增强】地址采用精准定位防止乱抓；电话采用“列定位+全行扫描”双重保险，确保能抓到；保留云端同步功能。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -69,14 +69,12 @@
         timerId: null,
         scrapeObserver: null,
         
-        // 窗口位置与布局
         posMain: safeParse('posMain', '{"top":"80px","left":"20px"}'),
         posAddr: safeParse('posAddr', '{"top":"80px","left":"300px"}'),
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
         layout: safeParse('uiLayout', '{"width": 280, "height": 350}'),
         colWidth: parseInt(GM_getValue('addrColWidth', 80)),
         
-        // 数据库
         db: {
             addrs: safeParse('dbAddrs', '[]'),
             phones: safeParse('dbPhones', '[]')
@@ -90,16 +88,11 @@
         theme: GM_getValue('theme', 'light') 
     };
 
-    // 兼容旧版本数据迁移
     const migrateOldData = () => {
         const oldHistory = safeParse('clipHistory', null);
         if (oldHistory) {
-            if (oldHistory.addrs && oldHistory.addrs.length > 0) {
-                oldHistory.addrs.forEach(a => addToDB('address', a));
-            }
-            if (oldHistory.phones && oldHistory.phones.length > 0) {
-                oldHistory.phones.forEach(p => addToDB('phone', p));
-            }
+            if (oldHistory.addrs) oldHistory.addrs.forEach(a => addToDB('address', a));
+            if (oldHistory.phones) oldHistory.phones.forEach(p => addToDB('phone', p));
             GM_setValue('clipHistory', ''); 
         }
     };
@@ -109,7 +102,6 @@
     const checkPage = () => {
         state.currentHash = window.location.hash;
         
-        // 订单页逻辑
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
             setupTableObserver();
@@ -117,17 +109,15 @@
             disconnectTableObserver();
         }
 
-        // 司机页逻辑
         if (isDriverPage()) {
             let saved = GM_getValue('driverInterval');
             if (!saved) saved = CONFIG.DRIVER.DEFAULT_INTERVAL;
             state.refreshInterval = saved;
         } 
         
-        // 派单页逻辑
         if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
-            log('进入派单界面，开始自动同步...', 'info');
+            log('进入派单界面，自动同步...', 'info');
             fetchOnlineBlacklist(true);
             pullFromCloud(true);
             setTimeout(applyDistanceByTime, 1500);
@@ -152,21 +142,17 @@
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
     
     // ==============================================
-    //        核心修正：列定位抓取逻辑
+    //        核心修正：电话双重抓取 / 地址精准抓取
     // ==============================================
     
-    // 建立DOM监听
     const setupTableObserver = () => {
         if (state.scrapeObserver) return;
-        log('启动智能监听...', 'info');
-        
         const targetNode = document.body;
         const config = { childList: true, subtree: true };
         let timeout = null;
         
         state.scrapeObserver = new MutationObserver((mutationsList) => {
             if (!state.isScrapingEnabled) return;
-
             let hasTableChange = false;
             for(let mutation of mutationsList) {
                 if (mutation.target.classList && 
@@ -176,13 +162,9 @@
                     break;
                 }
             }
-
             if (timeout) clearTimeout(timeout);
-            timeout = setTimeout(() => {
-                scanOrderPage();
-            }, 500); // 延迟执行，确保表格渲染完毕
+            timeout = setTimeout(() => { scanOrderPage(); }, 800); 
         });
-
         state.scrapeObserver.observe(targetNode, config);
     };
 
@@ -193,33 +175,26 @@
         }
     };
 
-    // 【重要】精准扫描函数
     const scanOrderPage = () => {
         if (!isOrderPage() || !state.isScrapingEnabled) return;
 
-        // 1. 寻找表头，确定列索引
-        // Element UI 的表头通常在 .el-table__header-wrapper 中
+        // 1. 寻找表头
         const headerThs = document.querySelectorAll('.el-table__header-wrapper th');
         if (!headerThs || headerThs.length === 0) return;
 
         let phoneIndex = -1;
         let addrIndex = -1;
 
-        // 遍历表头，找到对应的列号
+        // 模糊匹配表头
         headerThs.forEach((th, index) => {
             const text = th.innerText.trim();
-            if (text.includes('乘客电话')) {
+            // 只要包含这些字眼，就认为是对应列
+            if (text.includes('电话') || text.includes('手机') || text.includes('用户')) {
                 phoneIndex = index;
-            } else if (text.includes('起点名称')) {
+            } else if (text.includes('起点') || text.includes('地址')) {
                 addrIndex = index;
             }
         });
-
-        // 如果找不到这两列，说明表格可能还没加载好，或者列名变了，直接退出不乱抓
-        if (phoneIndex === -1 && addrIndex === -1) {
-            // log('未找到指定列，跳过抓取', 'warning');
-            return;
-        }
 
         // 2. 遍历内容行
         const rows = document.querySelectorAll('.el-table__body-wrapper .el-table__row');
@@ -227,40 +202,62 @@
         rows.forEach(row => {
             const cells = row.querySelectorAll('td');
             
-            // --- 抓取电话 ---
+            // --- 抓取电话 (双重保险) ---
+            let phoneFound = false;
+            
+            // 策略A：尝试从对应列抓取
             if (phoneIndex !== -1 && cells[phoneIndex]) {
-                const phoneText = cells[phoneIndex].innerText.trim();
-                // 再次验证是否为11位数字，防止表头对齐错误
-                if (/^1\d{10}$/.test(phoneText)) {
-                    if (!state.db.phones.includes(phoneText)) {
-                        addToDB('phone', phoneText);
-                        uploadSingleItem('phone', phoneText);
-                        log(`🆕 抓取新号码: ${phoneText}`, 'success');
-                    }
+                const rawText = cells[phoneIndex].innerText.trim();
+                // 提取数字
+                const match = rawText.match(/^1\d{10}$/);
+                if (match) {
+                    processPhone(match[0]);
+                    phoneFound = true;
                 }
             }
 
-            // --- 抓取地址 ---
+            // 策略B：如果策略A没抓到，扫描该行所有格子 (因为电话格式很固定，不容易误判)
+            if (!phoneFound) {
+                cells.forEach(cell => {
+                    const txt = cell.innerText.trim();
+                    // 必须纯11位数字，且以1开头，防止抓到时间戳或金额
+                    if (/^1\d{10}$/.test(txt)) {
+                         processPhone(txt);
+                    }
+                });
+            }
+
+            // --- 抓取地址 (严格列匹配) ---
+            // 地址绝对不能全行扫描，否则会抓到“时间模式”等文字
             if (addrIndex !== -1 && cells[addrIndex]) {
                 const addrText = cells[addrIndex].innerText.trim();
-                
-                // 地址过滤规则：非空，且不包含被排除的词
                 if (addrText && addrText.length > 1) {
-                    // 黑名单过滤 (以防万一地址栏里写了奇怪的东西)
                     const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                     if (!blockers.some(b => addrText.includes(b))) {
-                        // 确保不是日期
+                        // 排除日期格式
                         if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) {
-                             if (!state.db.addrs.includes(addrText)) {
-                                addToDB('address', addrText);
-                                uploadSingleItem('addr', addrText);
-                                log(`🆕 抓取新地址: ${addrText}`, 'success');
-                            }
+                             processAddr(addrText);
                         }
                     }
                 }
             }
         });
+    };
+    
+    const processPhone = (num) => {
+        if (!state.db.phones.includes(num)) {
+            addToDB('phone', num);
+            uploadSingleItem('phone', num);
+            log(`🆕 抓取电话: ${num}`, 'success');
+        }
+    };
+    
+    const processAddr = (addr) => {
+        if (!state.db.addrs.includes(addr)) {
+            addToDB('address', addr);
+            uploadSingleItem('addr', addr);
+            log(`🆕 抓取地址: ${addr}`, 'success');
+        }
     };
 
     // 单条数据上传
@@ -1019,7 +1016,6 @@
                     state.isScrapingEnabled = !state.isScrapingEnabled;
                     GM_setValue('scrapeEnabled', state.isScrapingEnabled);
                     updateUI();
-                    // 开启时立即尝试扫描一次
                     if (state.isScrapingEnabled) {
                         scanOrderPage();
                     }
