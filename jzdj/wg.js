@@ -43,12 +43,15 @@
             RAPID_INTERVAL: 500
         },
         CLOUD: {
+            // 默认 GitHub 黑名单 (未配置云端时的备用)
             FALLBACK_BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=yf2kve&t=1767326208607",
+            
+            // === 云同步配置 (自动读取设置) ===
             SYNC_URL: GM_getValue('cloud_sync_url', 'https://txt.abcai.online'), 
             SYNC_TOKEN: GM_getValue('cloud_sync_token', '990299') 
         },
         STORAGE: {
-            MAX_ITEMS: 800000 
+            MAX_ITEMS: 800000 // 本地库容量限制
         }
     };
 
@@ -67,28 +70,34 @@
         timerId: null,
         rapidTimer: null,
         
+        // 抓取专用
         scrapeTimer: null, 
         scrapedCount: 0,
         
+        // 窗口位置与布局
         posMain: safeParse('posMain', '{"top":"80px","left":"20px"}'),
         posAddr: safeParse('posAddr', '{"top":"80px","left":"300px"}'),
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
         layout: safeParse('uiLayout', '{"width": 280, "height": 350}'),
         colWidth: parseInt(GM_getValue('addrColWidth', 80)),
         
+        // 数据库 (纯本地存储)
         db: {
             addrs: safeParse('dbAddrs', '[]'),
             phones: safeParse('dbPhones', '[]')
         },
         blacklist: GM_getValue('blacklist', '位置，电话，司机，请您，收到，偏远地区，已派单，代驾，师傅，安全，感谢，马上，联系，好的'),
         
+        // 搜索与视图状态
         viewTab: GM_getValue('viewTab', 'address'),
         searchText: '',
+
         currentVersion: GM_info.script.version,
         timeConfig: safeParse('timeConfig', '{"start":"20:00", "end":"22:00"}'),
         theme: GM_getValue('theme', 'light') 
     };
 
+    // 兼容旧版本数据迁移
     const migrateOldData = () => {
         const oldHistory = safeParse('clipHistory', null);
         if (oldHistory) {
@@ -103,28 +112,33 @@
     const checkPage = () => {
         state.currentHash = window.location.hash;
         
+        // 停止之前的抓取循环
         if (state.scrapeTimer) {
             clearInterval(state.scrapeTimer);
             state.scrapeTimer = null;
         }
 
+        // 订单管理页
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
+            // 开启持续监控循环，每3秒扫一次表格
             if (!state.manualPause) {
                 state.scrapeTimer = setInterval(autoScrapeOrders, 3000);
                 showToast('👁️ 自动抓取已启动');
             }
         } 
+        // 司机调度页
         else if (isDriverPage()) {
             let saved = GM_getValue('driverInterval');
             if (!saved) saved = CONFIG.DRIVER.DEFAULT_INTERVAL;
             state.refreshInterval = saved;
         } 
+        // 派单页
         else if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
             log('进入派单界面，开始自动同步...', 'info');
-            fetchOnlineBlacklist(true);
-            pullFromCloud(true);
+            fetchOnlineBlacklist(true); // 同步黑名单
+            pullFromCloud(true); // 同步地址库
             setTimeout(applyDistanceByTime, 1500);
         }
 
@@ -147,7 +161,7 @@
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
     
     // ==============================================
-    //           自动抓取与上传逻辑
+    //           [新增] 自动抓取与上传逻辑
     // ==============================================
 
     const autoScrapeOrders = () => {
@@ -156,6 +170,7 @@
         const rows = document.querySelectorAll('.el-table__body-wrapper tbody tr');
         if (!rows || rows.length === 0) return;
 
+        // 动态定位列索引
         const headers = document.querySelectorAll('.el-table__header-wrapper th');
         let phoneIdx = -1;
         let addrIdx = -1;
@@ -172,10 +187,12 @@
             const cells = row.querySelectorAll('td');
             if (cells.length === 0) return;
 
+            // --- 提取电话 ---
             let phone = '';
             if (phoneIdx > -1 && cells[phoneIdx]) {
                 phone = cells[phoneIdx].innerText.replace(/[^\d]/g, '');
             } 
+            // 暴力扫描：如果没找到列，扫描整行
             if (!phone || phone.length !== 11) {
                 const rowText = row.innerText;
                 const match = rowText.match(/1[3-9]\d{9}/);
@@ -187,24 +204,28 @@
                     addToDB('phone', phone);
                     uploadOneToCloud('phone', phone);
                     newItemsCount++;
-                    log(`🆕 抓取电话: ${phone}`, 'success');
+                    log(`🆕 抓取新电话: ${phone}`, 'success');
                 }
             }
 
+            // --- 提取地址 ---
             let addr = '';
             if (addrIdx > -1 && cells[addrIdx]) {
                 addr = cells[addrIdx].innerText.trim();
+                // 简单的地址清洗
                 if (addr && addr.length > 1) {
                     const isBlocked = state.blacklist.split(/[,，]/).some(k => k && addr.includes(k));
                     const hanziCount = (addr.match(/[\u4e00-\u9fa5]/g) || []).length;
                     
                     if (!isBlocked && hanziCount <= 7 && !/^\d+$/.test(addr)) {
+                        // 智能去重
                         const exists = state.db.addrs.some(exist => exist.includes(addr) || addr.includes(exist));
+                        
                         if (!exists) {
                             addToDB('address', addr);
                             uploadOneToCloud('addr', addr);
                             newItemsCount++;
-                            log(`🆕 抓取地址: ${addr}`, 'success');
+                            log(`🆕 抓取新地址: ${addr}`, 'success');
                         }
                     }
                 }
@@ -214,10 +235,11 @@
         if (newItemsCount > 0) {
             state.scrapedCount += newItemsCount;
             updateListsUI();
-            updateScrapeStatus();
+            updateScrapeStatus(); 
         }
     };
 
+    // 单条上传
     const uploadOneToCloud = (type, data) => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
@@ -230,10 +252,13 @@
             url: targetUrl,
             data: JSON.stringify({ type: type, data: data }),
             headers: { "Content-Type": "application/json" },
-            onload: function(response) {}
+            onload: function(response) {
+                // 静默上传，不干扰用户
+            }
         });
     };
 
+    // 显示状态吐司
     const showToast = (msg) => {
         let toast = document.getElementById('gj-toast');
         if(!toast) {
@@ -254,6 +279,10 @@
         }
     };
 
+    // ==============================================
+    //               其他基础功能 (保持不变)
+    // ==============================================
+
     const applyDistanceByTime = () => {
         if (!isDispatchPage()) return;
         const now = new Date();
@@ -265,7 +294,9 @@
         const startVal = parseTime(state.timeConfig.start);
         const endVal = parseTime(state.timeConfig.end);
         let targetKm = 3;
-        if (currentVal >= startVal && currentVal < endVal) { targetKm = 2; }
+        if (currentVal >= startVal && currentVal < endVal) {
+            targetKm = 2;
+        }
         setSliderValue(targetKm);
     };
 
@@ -273,9 +304,13 @@
         if (!value) return;
         const list = type === 'address' ? state.db.addrs : state.db.phones;
         const index = list.indexOf(value);
-        if (index > -1) list.splice(index, 1);
+        if (index > -1) {
+            list.splice(index, 1);
+        }
         list.unshift(value);
-        if (list.length > CONFIG.STORAGE.MAX_ITEMS) list.length = CONFIG.STORAGE.MAX_ITEMS;
+        if (list.length > CONFIG.STORAGE.MAX_ITEMS) {
+            list.length = CONFIG.STORAGE.MAX_ITEMS;
+        }
         if (type === 'address') GM_setValue('dbAddrs', JSON.stringify(list));
         else GM_setValue('dbPhones', JSON.stringify(list));
     };
@@ -306,14 +341,21 @@
                         for(let i=1; i<sections.length; i+=2) {
                             if(sections[i] === 'BLACKLIST') {
                                 const bl = sections[i+1].split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s).join(',');
-                                if(bl) { state.blacklist = bl; GM_setValue('blacklist', bl); }
+                                if(bl) {
+                                    state.blacklist = bl;
+                                    GM_setValue('blacklist', bl);
+                                    cleanDBWithBlacklist();
+                                    if(!silent) log('✅ 已从 Worker 覆盖黑名单', 'success');
+                                }
                             }
                         }
                     } else fetchGithubFallback(silent, t);
                 },
                 onerror: () => fetchGithubFallback(silent, t)
             });
-        } else fetchGithubFallback(silent, t);
+        } else {
+            fetchGithubFallback(silent, t);
+        }
     };
     
     const fetchGithubFallback = (silent, t) => {
@@ -325,6 +367,8 @@
                     const cleanList = response.responseText.replace(/[\r\n\s]+/g, ',').replace(/，/g, ',');
                     state.blacklist = cleanList;
                     GM_setValue('blacklist', cleanList);
+                    cleanDBWithBlacklist();
+                    if(!silent) log('✅ 已从 GitHub 同步黑名单', 'success');
                 }
             }
         });
@@ -334,56 +378,90 @@
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
         if (!url || !token) { if (!isAuto) { alert('请设置云端'); setupCloudConfig(); } return; }
+
         const targetUrl = `${url.replace(/\/$/, '')}/txt?token=${token}`;
+        if (!isAuto) log('正在全量拉取(覆盖模式)...', 'info');
+
         GM_xmlhttpRequest({
             method: "GET",
             url: targetUrl + '&t=' + new Date().getTime(),
             onload: function(response) {
                 if (response.status === 200 && response.responseText) {
                     const text = response.responseText;
-                    if (text.includes('[BLACKLIST]') || text.includes('[ADDRS]')) {
+                    
+                    if (text.includes('[BLACKLIST]') || text.includes('[ADDRS]') || text.includes('[PHONES]')) {
                         const sections = text.split(/\[(BLACKLIST|ADDRS|PHONES)\]/);
                         for(let i=1; i<sections.length; i+=2) {
                             const type = sections[i];
                             const content = sections[i+1];
                             const lines = content.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
-                            if (type === 'BLACKLIST') { state.blacklist = lines.join(','); GM_setValue('blacklist', state.blacklist); }
-                            else if (type === 'ADDRS') { state.db.addrs = lines; GM_setValue('dbAddrs', JSON.stringify(state.db.addrs)); }
-                            else if (type === 'PHONES') { state.db.phones = lines; GM_setValue('dbPhones', JSON.stringify(state.db.phones)); }
+                            
+                            if (type === 'BLACKLIST') {
+                                state.blacklist = lines.join(',');
+                                GM_setValue('blacklist', state.blacklist);
+                            } else if (type === 'ADDRS') {
+                                state.db.addrs = lines; 
+                                GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
+                            } else if (type === 'PHONES') {
+                                state.db.phones = lines;
+                                GM_setValue('dbPhones', JSON.stringify(state.db.phones));
+                            }
                         }
                     } else {
                         const lines = text.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
                         state.db.addrs = lines;
                         GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
                     }
-                    cleanDBWithBlacklist();
+
+                    cleanDBWithBlacklist(); 
                     updateListsUI();
-                    if(!isAuto) alert('☁️ 覆盖成功！');
+                    
+                    if (!isAuto) alert(`☁️ 覆盖成功！`);
+                } else {
+                    if (!isAuto) alert('❌ 拉取失败: ' + response.statusText);
                 }
-            }
+            },
+            onerror: function(e) { if (!isAuto) alert('❌ 网络错误'); }
         });
     };
 
     const pushToCloud = () => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
-        if (!url || !token) { alert('请设置云端'); return; }
-        if (!confirm('确定覆盖云端数据？')) return;
+        if (!url || !token) { alert('请先设置云端'); setupCloudConfig(); return; }
+
+        if (!confirm('⚠️ 警告：这将覆盖云端文件！\n\n确定将本地数据上传到云端吗？')) return;
+
         const targetUrl = `${url.replace(/\/$/, '')}/api/sync?token=${token}`;
+        
         const blData = state.blacklist.split(/[,，]/).map(s=>s.trim()).filter(s=>s).join('\n');
         const addrData = (state.db.addrs || []).join('\n');
         const phoneData = (state.db.phones || []).join('\n');
         const fileContent = `[BLACKLIST]\n${blData}\n\n[ADDRS]\n${addrData}\n\n[PHONES]\n${phoneData}`;
-        GM_xmlhttpRequest({ method: "POST", url: targetUrl, data: fileContent, headers: { "Content-Type": "text/plain" }, onload: function(r){ alert(r.status===200?'✅ 上传成功':'❌ 失败'); } });
+
+        GM_xmlhttpRequest({
+            method: "POST",
+            url: targetUrl,
+            data: fileContent,
+            headers: { "Content-Type": "text/plain" },
+            onload: function(response) {
+                if (response.status === 200) alert(`✅ 上传成功！`);
+                else alert('❌ 上传失败: ' + response.responseText);
+            },
+            onerror: function(e) { alert('❌ 网络错误'); }
+        });
     };
     
     const setupCloudConfig = () => {
-        const url = prompt("Worker域名:", CONFIG.CLOUD.SYNC_URL);
-        if (url) {
-            GM_setValue('cloud_sync_url', url.replace(/\/$/, ''));
-            const token = prompt("Token:", CONFIG.CLOUD.SYNC_TOKEN);
-            if (token) GM_setValue('cloud_sync_token', token.trim());
-            location.reload();
+        const url = prompt("请输入 Worker 域名 (不带末尾斜杠)\n例如: https://txt.abcai.online", CONFIG.CLOUD.SYNC_URL);
+        if (url !== null) {
+            GM_setValue('cloud_sync_url', url.trim().replace(/\/$/, ''));
+            const token = prompt("请输入访客 Token", CONFIG.CLOUD.SYNC_TOKEN);
+            if (token !== null) {
+                GM_setValue('cloud_sync_token', token.trim());
+                alert("✅ 配置已保存！请刷新页面生效。");
+                location.reload();
+            }
         }
     };
 
@@ -405,7 +483,10 @@
         let btn = document.querySelector(selector);
         if (!btn && isOrderPage()) btn = document.querySelector(CONFIG.ORDER.ALT_SELECTOR)?.closest('button');
         if (!btn && isDriverPage()) btn = document.querySelector(CONFIG.DRIVER.ALT_SELECTOR)?.closest('button');
-        if (btn) { btn.click(); state.countdown = state.refreshInterval; }
+        if (btn) {
+            btn.click();
+            state.countdown = state.refreshInterval;
+        }
     };
 
     const startCountdown = () => {
@@ -416,7 +497,10 @@
             if (state.manualPause) return;
             state.countdown--;
             updateStatusText(); 
-            if (state.countdown <= 0) { performAction(); state.countdown = state.refreshInterval; }
+            if (state.countdown <= 0) {
+                performAction();
+                state.countdown = state.refreshInterval; 
+            }
         }, 1000);
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
@@ -429,7 +513,11 @@
         let tempText = fullText;
         while ((phoneMatch = phoneRegex.exec(tempText)) !== null) {
             const num = phoneMatch[1];
-            if (/^1\d{10}$/.test(num)) { addToDB('phone', num); hasUpdate = true; }
+            if (/^1\d{10}$/.test(num)) {
+                addToDB('phone', num);
+                hasUpdate = true;
+                log('提取电话: ' + num, 'success');
+            }
         }
         let addrText = fullText.replace(phoneRegex, ' ').trim();
         const segments = addrText.split(/[\r\n,;，；]+/); 
@@ -439,7 +527,9 @@
             if (!cleanSeg || cleanSeg.length < 2) return;
             const firstChar = cleanSeg.charAt(0);
             if (/[0-9]/.test(firstChar) || /[a-zA-Z]/.test(firstChar) || symbolRegex.test(firstChar)) return; 
-            addToDB('address', cleanSeg); hasUpdate = true;
+            addToDB('address', cleanSeg);
+            hasUpdate = true;
+            log('提取地址: ' + cleanSeg.substring(0, 6) + '...', 'info');
         });
         if (hasUpdate) cleanDBWithBlacklist();
         return hasUpdate;
@@ -450,19 +540,23 @@
             const text = await navigator.clipboard.readText();
             const hasUpdate = parseTextToDB(text);
             if (hasUpdate) updateListsUI();
-            if (autoFill && state.db.addrs.length > 0) fillInput('address', state.db.addrs[0]);
+            if (autoFill && state.db.addrs && state.db.addrs.length > 0) {
+                fillInput('address', state.db.addrs[0]);
+            }
         } catch (e) {}
     };
 
     const handleFileImport = (e) => {
         const file = e.target.files[0];
         if (!file) return;
+        if(!confirm(`确认导入文件 "${file.name}" 到本地库吗？\n将会自动清洗。`)) { e.target.value = ''; return; }
         const reader = new FileReader();
         reader.onload = (event) => {
             const lines = event.target.result.split(/[\r\n]+/);
-            lines.forEach(line => parseTextToDB(line));
+            let count = 0;
+            lines.forEach(line => { if (parseTextToDB(line)) count++; });
             updateListsUI();
-            alert(`✅ 导入完成`);
+            alert(`✅ 导入处理完成`);
         };
         reader.readAsText(file);
         e.target.value = '';
@@ -495,6 +589,9 @@
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
             input.click(); input.focus();
+            input.style.transition = 'all 0.3s';
+            input.style.boxShadow = '0 0 0 2px rgba(103, 194, 58, 0.3)';
+            setTimeout(() => input.style.boxShadow = '', 800);
         }
     };
 
