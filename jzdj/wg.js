@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v12.4 自动同步版)
+// @name          代驾调度系统助手 (v12.5 强制覆盖版)
 // @namespace     http://tampermonkey.net/
-// @version       12.4
-// @description   【自动化】进入派单页自动拉取云端[地址/电话/黑名单]；已添加网络白名单。
+// @version       12.5
+// @description   【强制同步】以云端为准！进入派单页或点击下载时，直接用云端数据覆盖本地；已添加网络白名单。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -85,7 +85,7 @@
         blacklist: GM_getValue('blacklist', '位置，电话，司机，请您，收到，偏远地区，已派单，代驾，师傅，安全，感谢，马上，联系，好的'),
         
         // 搜索与视图状态
-        viewTab: GM_getValue('viewTab', 'address'), // 'address' or 'phone'
+        viewTab: GM_getValue('viewTab', 'address'),
         searchText: '',
 
         currentVersion: GM_info.script.version,
@@ -121,10 +121,10 @@
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
             log('进入派单界面，开始自动同步...', 'info');
             
-            // 1. 自动同步黑名单 (保留GitHub兜底)
+            // 1. 自动同步黑名单
             fetchOnlineBlacklist(true);
             
-            // 2. [新增] 自动全量拉取地址和电话
+            // 2. [关键] 自动全量覆盖地址和电话
             pullFromCloud(true);
             
             setTimeout(applyDistanceByTime, 1500);
@@ -171,16 +171,12 @@
         const list = type === 'address' ? state.db.addrs : state.db.phones;
         const index = list.indexOf(value);
         if (index > -1) {
-            list.splice(index, 1); // 移除旧的
+            list.splice(index, 1);
         }
-        list.unshift(value); // 加到最前
-        
-        // 限制最大数量
+        list.unshift(value);
         if (list.length > CONFIG.STORAGE.MAX_ITEMS) {
             list.length = CONFIG.STORAGE.MAX_ITEMS;
         }
-
-        // 保存到本地
         if (type === 'address') GM_setValue('dbAddrs', JSON.stringify(list));
         else GM_setValue('dbPhones', JSON.stringify(list));
     };
@@ -199,18 +195,16 @@
         if (originalCount !== state.db.addrs.length) {
             GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
             updateListsUI();
-            log(`库清洗完成: 移除 ${originalCount - state.db.addrs.length} 条`, 'warning');
+            // log(`库清洗完成: 移除 ${originalCount - state.db.addrs.length} 条`, 'warning');
         }
     };
 
     // ==============================================
-    //               云端同步核心逻辑
+    //               云端同步核心逻辑 (覆盖模式)
     // ==============================================
 
-    // 获取在线黑名单 (优先 Worker，失败降级 Github)
     const fetchOnlineBlacklist = (silent = false) => {
         const t = new Date().getTime();
-        // 1. 尝试从 Cloudflare Worker 获取
         if (CONFIG.CLOUD.SYNC_URL && CONFIG.CLOUD.SYNC_TOKEN) {
             const cloudUrl = `${CONFIG.CLOUD.SYNC_URL.replace(/\/$/, '')}/txt?token=${CONFIG.CLOUD.SYNC_TOKEN}`;
             GM_xmlhttpRequest({
@@ -228,7 +222,7 @@
                                         state.blacklist = bl;
                                         GM_setValue('blacklist', bl);
                                         cleanDBWithBlacklist();
-                                        if(!silent) log('✅ 已从 Worker 同步黑名单', 'success');
+                                        if(!silent) log('✅ 已从 Worker 覆盖黑名单', 'success');
                                         return;
                                     }
                                 }
@@ -244,7 +238,6 @@
         }
     };
     
-    // GitHub 备用黑名单
     const fetchGithubFallback = (silent, t) => {
         GM_xmlhttpRequest({
             method: "GET",
@@ -264,19 +257,18 @@
         });
     };
 
-    // 从云端拉取 (Pull) - 增加 isAuto 参数
+    // 从云端拉取并覆盖 (Overwrite)
     const pullFromCloud = (isAuto = false) => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
         
-        // 自动模式下，如果没配置 Worker，则不弹窗警告，直接退出
         if (!url || !token) { 
             if (!isAuto) { alert('请先点击 ⚙️ 设置 Worker 域名和 Token'); setupCloudConfig(); }
             return; 
         }
 
         const targetUrl = `${url.replace(/\/$/, '')}/txt?token=${token}`;
-        if (!isAuto) log('正在全量拉取...', 'info');
+        if (!isAuto) log('正在全量拉取(覆盖模式)...', 'info');
 
         GM_xmlhttpRequest({
             method: "GET",
@@ -296,6 +288,7 @@
                         for(let i=1; i<sections.length; i+=2) {
                             const type = sections[i];
                             const content = sections[i+1];
+                            // 过滤空行和首尾空格
                             const lines = content.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
                             
                             if (type === 'BLACKLIST') {
@@ -303,26 +296,32 @@
                                 GM_setValue('blacklist', state.blacklist);
                                 blCount = lines.length;
                             } else if (type === 'ADDRS') {
-                                lines.reverse().forEach(line => { addToDB('address', line); importedAddrs++; });
+                                // 核心修改：直接替换本地数组 (Overwrite)
+                                state.db.addrs = lines; 
+                                GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
+                                importedAddrs = lines.length;
                             } else if (type === 'PHONES') {
-                                lines.reverse().forEach(line => { addToDB('phone', line); importedPhones++; });
+                                // 核心修改：直接替换本地数组 (Overwrite)
+                                state.db.phones = lines;
+                                GM_setValue('dbPhones', JSON.stringify(state.db.phones));
+                                importedPhones = lines.length;
                             }
                         }
                     } else {
-                        // 兼容旧格式
-                        const lines = text.split(/[\r\n]+/);
-                        lines.reverse().forEach(line => {
-                            if(parseTextToDB(line.trim())) importedAddrs++;
-                        });
+                        // 兼容旧格式：当做地址处理
+                        const lines = text.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
+                        state.db.addrs = lines;
+                        GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
+                        importedAddrs = lines.length;
                     }
 
-                    cleanDBWithBlacklist(); 
+                    cleanDBWithBlacklist(); // 再次清洗确保合规
                     updateListsUI();
                     
                     if (!isAuto) {
-                        alert(`☁️ 同步成功！\n\n- 隔离库更新: ${blCount} 条\n- 地址库合并: ${importedAddrs} 条\n- 电话库合并: ${importedPhones} 条`);
+                        alert(`☁️ 覆盖成功！本地数据已与云端同步。\n\n- 隔离库: ${blCount} 条\n- 地址库: ${importedAddrs} 条\n- 电话库: ${importedPhones} 条`);
                     } else {
-                        log(`[自动同步] 成功: 隔离${blCount}/地址${importedAddrs}/电话${importedPhones}`, 'success');
+                        log(`[自动同步] 完成: 覆盖地址${importedAddrs}条 / 电话${importedPhones}条`, 'success');
                     }
                 } else {
                     if (!isAuto) alert('❌ 拉取失败: ' + response.statusText);
@@ -338,16 +337,13 @@
         const token = CONFIG.CLOUD.SYNC_TOKEN;
         if (!url || !token) { alert('请先设置云端'); setupCloudConfig(); return; }
 
-        if (!confirm('⚠️ 警告：这将覆盖云端现有的文件！\n\n将上传本地的 [黑名单]、[地址库]、[电话库]。\n确定要继续吗？')) return;
+        if (!confirm('⚠️ 警告：这将覆盖云端文件！\n\n确定将本地数据上传到云端吗？')) return;
 
         const targetUrl = `${url.replace(/\/$/, '')}/api/sync?token=${token}`;
         
-        // 1. 准备数据
         const blData = state.blacklist.split(/[,，]/).map(s=>s.trim()).filter(s=>s).join('\n');
         const addrData = (state.db.addrs || []).join('\n');
         const phoneData = (state.db.phones || []).join('\n');
-        
-        // 2. 拼接格式
         const fileContent = `[BLACKLIST]\n${blData}\n\n[ADDRS]\n${addrData}\n\n[PHONES]\n${phoneData}`;
 
         GM_xmlhttpRequest({
@@ -356,11 +352,8 @@
             data: fileContent,
             headers: { "Content-Type": "text/plain" },
             onload: function(response) {
-                if (response.status === 200) {
-                    alert(`✅ 上传成功！\n\n已备份本地所有数据到 Cloudflare Worker。`);
-                } else {
-                    alert('❌ 上传失败: ' + response.responseText);
-                }
+                if (response.status === 200) alert(`✅ 上传成功！`);
+                else alert('❌ 上传失败: ' + response.responseText);
             },
             onerror: function(e) { alert('❌ 网络错误'); }
         });
@@ -504,9 +497,7 @@
                  for (let i = 0; i < inputs.length; i++) {
                      const el = inputs[i];
                      if (el.closest('.gj-window')) continue;
-                     if (!el.closest('.el-form-item') && el.type === 'text') { 
-                         input = el; break; 
-                     }
+                     if (!el.closest('.el-form-item') && el.type === 'text') { input = el; break; }
                  }
              }
              if (!input) {
@@ -516,9 +507,7 @@
                      const el = allInputs[i];
                      if (el.closest('.gj-window')) continue; 
                      const ph = (el.placeholder || '').toLowerCase();
-                     if (keywords.some(k => ph.includes(k))) {
-                         input = el; break;
-                     }
+                     if (keywords.some(k => ph.includes(k))) { input = el; break; }
                  }
              }
         } else if (type === 'phone') {
@@ -527,9 +516,7 @@
                  const el = inputs[i];
                  if (el.closest('.gj-window')) continue; 
                  const ph = (el.placeholder || '').toLowerCase();
-                 if (ph.includes('用户电话') || ph.includes('电话') || el.type === 'tel') {
-                     input = el; break;
-                 }
+                 if (ph.includes('用户电话') || ph.includes('电话') || el.type === 'tel') { input = el; break; }
              }
         }
         if (input) {
@@ -577,10 +564,7 @@
             if (cleanKey.includes(dbItem)) return true;
             if (/^\d+$/.test(cleanKey) && cleanKey.length >= 4) {
                 const pattern = cleanKey.split('').join('.*');
-                try {
-                    const re = new RegExp(pattern);
-                    return re.test(dbItem);
-                } catch(e) {}
+                try { const re = new RegExp(pattern); return re.test(dbItem); } catch(e) {}
             }
             return false;
         }
@@ -677,8 +661,8 @@
                 </div>
                 <div style="display:flex; gap:4px;">
                     <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
-                    <span class="btn-icon-circle" id="btn-cloud-pull" title="⬇️ 从云端拉取并合并" style="background:rgba(230,162,60,0.6)">⬇</span>
-                    <span class="btn-icon-circle" id="btn-cloud-push" title="⬆️ 本地覆盖上传到云端" style="background:rgba(245,108,108,0.6)">⬆</span>
+                    <span class="btn-icon-circle" id="btn-cloud-pull" title="⬇️ 覆盖下载(以云端为准)" style="background:rgba(230,162,60,0.6)">⬇</span>
+                    <span class="btn-icon-circle" id="btn-cloud-push" title="⬆️ 上传本地数据" style="background:rgba(245,108,108,0.6)">⬆</span>
 
                     <label class="btn-icon-circle" title="导入本地文件(txt/csv)">
                         📂<input type="file" id="gj-file-import" style="display:none" accept=".txt,.csv">
@@ -708,7 +692,7 @@
 
         // 绑定同步事件
         widget.querySelector('#btn-cloud-setting').addEventListener('click', setupCloudConfig);
-        widget.querySelector('#btn-cloud-pull').addEventListener('click', () => pullFromCloud(false)); // 手动点，弹窗
+        widget.querySelector('#btn-cloud-pull').addEventListener('click', () => pullFromCloud(false)); // 手动点击，显示弹窗
         widget.querySelector('#btn-cloud-push').addEventListener('click', pushToCloud);
 
         widget.querySelector('#btn-refresh-addr').addEventListener('click', () => processClipboard(true));
