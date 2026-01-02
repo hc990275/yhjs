@@ -1,12 +1,12 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v13.5 指定列强力版)
+// @name          代驾调度系统助手 (v14.0 手动同步版)
 // @namespace     http://tampermonkey.net/
-// @version       13.5
-// @description   【指定列抓取】默认电话在第4列；增加“强力清洗”功能，即使电话有空格/横杠也能识别；只抓指定列，拒绝乱抓。
+// @version       14.0
+// @description   【基于v13.5修改】第4列抓电话；派单页不自动同步(需手动点)；停止自动上传以节省额度；保留无效订单过滤。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
-// @connect       github.abcai.online
+// @connect       abcai.online
 // @connect       *
 // @grant         GM_setValue
 // @grant         GM_getValue
@@ -102,6 +102,7 @@
     const checkPage = () => {
         state.currentHash = window.location.hash;
         
+        // 订单页逻辑
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
             setupTableObserver();
@@ -109,17 +110,20 @@
             disconnectTableObserver();
         }
 
+        // 司机页逻辑
         if (isDriverPage()) {
             let saved = GM_getValue('driverInterval');
             if (!saved) saved = CONFIG.DRIVER.DEFAULT_INTERVAL;
             state.refreshInterval = saved;
         } 
         
+        // 派单页逻辑
         if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
-            log('进入派单界面，自动同步...', 'info');
+            // 【修改点】此处不再自动 pullFromCloud，改为只初始化 UI
+            log('进入派单界面 (手动同步模式)', 'info');
+            // 只自动加载黑名单，不拉取地址库，节省流量
             fetchOnlineBlacklist(true);
-            pullFromCloud(true);
             setTimeout(applyDistanceByTime, 1500);
         }
 
@@ -142,7 +146,7 @@
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
     
     // ==============================================
-    //        核心修正：指定第4列抓取电话
+    //        核心修正：列定位 + 过滤 + 本地存储
     // ==============================================
     
     const setupTableObserver = () => {
@@ -163,7 +167,6 @@
                 }
             }
             if (timeout) clearTimeout(timeout);
-            // 稍作延迟，等待表格渲染完全
             timeout = setTimeout(() => { scanOrderPage(); }, 800); 
         });
         state.scrapeObserver.observe(targetNode, config);
@@ -180,20 +183,19 @@
         if (!isOrderPage() || !state.isScrapingEnabled) return;
 
         // --- 1. 确定列号 ---
-        // 默认：电话在第4列 (索引3)
-        let phoneIndex = 3; 
-        // 默认：地址尝试自动识别，找不到就暂定不抓
-        let addrIndex = -1;
+        // 强制指定：电话在第4列 (索引3)
+        const IDX_PHONE = 3; 
+        // 辅助列：状态在第2列(索引1)，渠道在第3列(索引2)
+        const IDX_STATUS = 1;
+        const IDX_CHANNEL = 2;
 
-        // 尝试通过表头修正列号（万一以后变了）
+        // 地址列：尝试自动识别
+        let addrIndex = -1;
         const headerThs = document.querySelectorAll('.el-table__header-wrapper th');
         if (headerThs && headerThs.length > 0) {
             headerThs.forEach((th, index) => {
                 const text = th.innerText.trim();
-                if (text.includes('电话') || text.includes('手机') || text.includes('乘客电话')) {
-                    phoneIndex = index;
-                    // log(`自动定位电话列: 第${index+1}列`, 'info');
-                } else if (text.includes('起点') || text.includes('地址') || text.includes('出发')) {
+                if (text.includes('起点') || text.includes('地址') || text.includes('出发')) {
                     addrIndex = index;
                 }
             });
@@ -201,19 +203,28 @@
 
         // --- 2. 遍历内容行 ---
         const rows = document.querySelectorAll('.el-table__body-wrapper .el-table__row');
-        
+        let newCount = 0;
+
         rows.forEach(row => {
             const cells = row.querySelectorAll('td');
-            
-            // --- 抓取电话 (指定列 + 强力清洗) ---
-            if (cells[phoneIndex]) {
-                const rawText = cells[phoneIndex].innerText.trim();
-                // 强力清洗：只保留数字。处理 "138 0000 0000" 或 "138-1234..."
-                const cleanNum = rawText.replace(/\D/g, ''); 
+            if (cells.length < 4) return; // 单元格不足，跳过
+
+            // === 过滤逻辑 ===
+            // 1. 排除状态
+            const statusText = cells[IDX_STATUS].innerText.trim();
+            if (statusText.includes('后台销单') || statusText.includes('后台消单') || statusText.includes('乘客取消')) return;
+
+            // 2. 排除渠道
+            const channelText = cells[IDX_CHANNEL].innerText.trim();
+            if (channelText.includes('新腾讯出行') || channelText.includes('盛大')) return;
+
+            // --- 抓取电话 (第4列) ---
+            if (cells[IDX_PHONE]) {
+                const rawText = cells[IDX_PHONE].innerText.trim();
+                const cleanNum = rawText.replace(/\D/g, ''); // 强力清洗
                 
-                // 验证：必须是 11 位且以 1 开头
                 if (/^1\d{10}$/.test(cleanNum)) {
-                    processPhone(cleanNum);
+                    if (processPhone(cleanNum)) newCount++;
                 }
             }
 
@@ -223,52 +234,37 @@
                 if (addrText && addrText.length > 1) {
                     const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                     if (!blockers.some(b => addrText.includes(b))) {
-                        // 排除日期
                         if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) {
-                             processAddr(addrText);
+                             if (processAddr(addrText)) newCount++;
                         }
                     }
                 }
             }
         });
+
+        if (newCount > 0) {
+            updateListsUI(); // 刷新本地界面，但不自动上传
+        }
     };
     
     const processPhone = (num) => {
         if (!state.db.phones.includes(num)) {
             addToDB('phone', num);
-            uploadSingleItem('phone', num);
-            log(`🆕 抓取电话: ${num}`, 'success');
+            // 【修改点】不再自动上传，只本地保存
+            log(`🆕 [本地] 抓取电话: ${num}`, 'success');
+            return true;
         }
+        return false;
     };
     
     const processAddr = (addr) => {
         if (!state.db.addrs.includes(addr)) {
             addToDB('address', addr);
-            uploadSingleItem('addr', addr);
-            log(`🆕 抓取地址: ${addr}`, 'success');
+            // 【修改点】不再自动上传，只本地保存
+            log(`🆕 [本地] 抓取地址: ${addr}`, 'success');
+            return true;
         }
-    };
-
-    // 单条数据上传
-    const uploadSingleItem = (type, value) => {
-        const url = CONFIG.CLOUD.SYNC_URL;
-        const token = CONFIG.CLOUD.SYNC_TOKEN;
-        if (!url || !token) return;
-
-        const targetUrl = `${url.replace(/\/$/, '')}/api/add?token=${token}`;
-        
-        GM_xmlhttpRequest({
-            method: "POST",
-            url: targetUrl,
-            data: JSON.stringify({ type: type, data: value }),
-            headers: { "Content-Type": "application/json" },
-            onload: function(response) {
-                if (response.status !== 200) {
-                    console.error('[自动上传失败]', response.responseText);
-                }
-            },
-            onerror: function(e) { console.error('[自动上传网络错误]', e); }
-        });
+        return false;
     };
 
     // ==============================================
@@ -449,7 +445,7 @@
         const token = CONFIG.CLOUD.SYNC_TOKEN;
         if (!url || !token) { alert('请先设置云端'); setupCloudConfig(); return; }
 
-        if (!confirm('⚠️ 警告：这将覆盖云端文件！\n\n确定将本地数据上传到云端吗？')) return;
+        if (!confirm('⚠️ 流量警告：\n\n这会将所有本地数据（新旧汇总）一次性上传覆盖到云端。\n请确保在一天工作结束后点击，以节省Cloudflare写入额度。\n\n确定上传吗？')) return;
 
         const targetUrl = `${url.replace(/\/$/, '')}/api/sync?token=${token}`;
         const blData = state.blacklist.split(/[,，]/).map(s=>s.trim()).filter(s=>s).join('\n');
