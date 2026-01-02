@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v13.4 电话双重保险版)
+// @name          代驾调度系统助手 (v13.5 指定列强力版)
 // @namespace     http://tampermonkey.net/
-// @version       13.4
-// @description   【抓取增强】地址采用精准定位防止乱抓；电话采用“列定位+全行扫描”双重保险，确保能抓到；保留云端同步功能。
+// @version       13.5
+// @description   【指定列抓取】默认电话在第4列；增加“强力清洗”功能，即使电话有空格/横杠也能识别；只抓指定列，拒绝乱抓。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -142,7 +142,7 @@
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
     
     // ==============================================
-    //        核心修正：电话双重抓取 / 地址精准抓取
+    //        核心修正：指定第4列抓取电话
     // ==============================================
     
     const setupTableObserver = () => {
@@ -163,6 +163,7 @@
                 }
             }
             if (timeout) clearTimeout(timeout);
+            // 稍作延迟，等待表格渲染完全
             timeout = setTimeout(() => { scanOrderPage(); }, 800); 
         });
         state.scrapeObserver.observe(targetNode, config);
@@ -178,63 +179,51 @@
     const scanOrderPage = () => {
         if (!isOrderPage() || !state.isScrapingEnabled) return;
 
-        // 1. 寻找表头
-        const headerThs = document.querySelectorAll('.el-table__header-wrapper th');
-        if (!headerThs || headerThs.length === 0) return;
-
-        let phoneIndex = -1;
+        // --- 1. 确定列号 ---
+        // 默认：电话在第4列 (索引3)
+        let phoneIndex = 3; 
+        // 默认：地址尝试自动识别，找不到就暂定不抓
         let addrIndex = -1;
 
-        // 模糊匹配表头
-        headerThs.forEach((th, index) => {
-            const text = th.innerText.trim();
-            // 只要包含这些字眼，就认为是对应列
-            if (text.includes('电话') || text.includes('手机') || text.includes('用户')) {
-                phoneIndex = index;
-            } else if (text.includes('起点') || text.includes('地址')) {
-                addrIndex = index;
-            }
-        });
+        // 尝试通过表头修正列号（万一以后变了）
+        const headerThs = document.querySelectorAll('.el-table__header-wrapper th');
+        if (headerThs && headerThs.length > 0) {
+            headerThs.forEach((th, index) => {
+                const text = th.innerText.trim();
+                if (text.includes('电话') || text.includes('手机') || text.includes('乘客电话')) {
+                    phoneIndex = index;
+                    // log(`自动定位电话列: 第${index+1}列`, 'info');
+                } else if (text.includes('起点') || text.includes('地址') || text.includes('出发')) {
+                    addrIndex = index;
+                }
+            });
+        }
 
-        // 2. 遍历内容行
+        // --- 2. 遍历内容行 ---
         const rows = document.querySelectorAll('.el-table__body-wrapper .el-table__row');
         
         rows.forEach(row => {
             const cells = row.querySelectorAll('td');
             
-            // --- 抓取电话 (双重保险) ---
-            let phoneFound = false;
-            
-            // 策略A：尝试从对应列抓取
-            if (phoneIndex !== -1 && cells[phoneIndex]) {
+            // --- 抓取电话 (指定列 + 强力清洗) ---
+            if (cells[phoneIndex]) {
                 const rawText = cells[phoneIndex].innerText.trim();
-                // 提取数字
-                const match = rawText.match(/^1\d{10}$/);
-                if (match) {
-                    processPhone(match[0]);
-                    phoneFound = true;
+                // 强力清洗：只保留数字。处理 "138 0000 0000" 或 "138-1234..."
+                const cleanNum = rawText.replace(/\D/g, ''); 
+                
+                // 验证：必须是 11 位且以 1 开头
+                if (/^1\d{10}$/.test(cleanNum)) {
+                    processPhone(cleanNum);
                 }
             }
 
-            // 策略B：如果策略A没抓到，扫描该行所有格子 (因为电话格式很固定，不容易误判)
-            if (!phoneFound) {
-                cells.forEach(cell => {
-                    const txt = cell.innerText.trim();
-                    // 必须纯11位数字，且以1开头，防止抓到时间戳或金额
-                    if (/^1\d{10}$/.test(txt)) {
-                         processPhone(txt);
-                    }
-                });
-            }
-
-            // --- 抓取地址 (严格列匹配) ---
-            // 地址绝对不能全行扫描，否则会抓到“时间模式”等文字
+            // --- 抓取地址 ---
             if (addrIndex !== -1 && cells[addrIndex]) {
                 const addrText = cells[addrIndex].innerText.trim();
                 if (addrText && addrText.length > 1) {
                     const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                     if (!blockers.some(b => addrText.includes(b))) {
-                        // 排除日期格式
+                        // 排除日期
                         if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) {
                              processAddr(addrText);
                         }
@@ -1154,6 +1143,7 @@
 
     const addStyles = () => {
         GM_addStyle(`
+            /* 全局反转滤镜 */
             html.gj-global-dark {
                 filter: invert(0.92) hue-rotate(180deg) !important;
                 background-color: #111 !important;
