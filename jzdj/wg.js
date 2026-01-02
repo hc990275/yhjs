@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v11.8 强力清洗版)
+// @name          代驾调度系统助手 (v12.3 完整全量版)
 // @namespace     http://tampermonkey.net/
-// @version       11.8
-// @description   【清洗升级】每次刷新自动删除超过7个汉字的地址、自动剔除隔离库地址；保留精准定位、自动填入、一键清除搜索等全部功能。
+// @version       12.3
+// @description   【云同步】基于v11.8完整内核；支持 [黑名单]、[地址]、[电话] 三库独立同步到 Cloudflare Worker；保留全部拖拽、缩放、主题功能。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @grant         GM_setValue
@@ -40,8 +40,12 @@
             RAPID_INTERVAL: 500
         },
         CLOUD: {
-            // 隔离库（黑名单）
-            BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=yf2kve&t=1767326208607"
+            // 默认 GitHub 黑名单 (未配置云端时的备用)
+            FALLBACK_BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=yf2kve&t=1767326208607",
+            
+            // === 云同步配置 (自动读取设置) ===
+            SYNC_URL: GM_getValue('cloud_sync_url', 'https://txt.abcai.online/'), 
+            SYNC_TOKEN: GM_getValue('cloud_sync_token', '990299') 
         },
         STORAGE: {
             MAX_ITEMS: 800000 // 本地库容量限制
@@ -50,7 +54,8 @@
 
     // --------------- 2. 全局状态 ---------------
     const safeParse = (key, def) => {
-        try { return JSON.parse(GM_getValue(key, def)); } catch (e) { return JSON.parse(def); }
+        try { return JSON.parse(GM_getValue(key, def));
+        } catch (e) { return JSON.parse(def); }
     };
 
     let state = {
@@ -61,6 +66,8 @@
         countdown: 0,
         timerId: null,
         rapidTimer: null,
+        
+        // 窗口位置与布局
         posMain: safeParse('posMain', '{"top":"80px","left":"20px"}'),
         posAddr: safeParse('posAddr', '{"top":"80px","left":"300px"}'),
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
@@ -101,7 +108,6 @@
 
     const checkPage = () => {
         state.currentHash = window.location.hash;
-
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
         } else if (isDriverPage()) {
@@ -109,11 +115,13 @@
             if (!saved) saved = CONFIG.DRIVER.DEFAULT_INTERVAL;
             state.refreshInterval = saved;
         } else if (isDispatchPage()) {
-            state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000; 
-            log('进入派单界面，开始同步数据...', 'info');
-            // 每次进入/刷新派单页，都会触发黑名单拉取和随后的清洗
+            state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
+            log('进入派单界面，开始同步...', 'info');
+            
+            // 自动同步黑名单
             fetchOnlineBlacklist(true);
-            setTimeout(applyDistanceByTime, 1500); 
+            
+            setTimeout(applyDistanceByTime, 1500);
         }
 
         updateUI(); 
@@ -133,18 +141,18 @@
     const isOrderPage = () => state.currentHash.includes(CONFIG.ORDER.HASH);
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
-
+    
     const applyDistanceByTime = () => {
         if (!isDispatchPage()) return;
         const now = new Date();
-        const currentVal = now.getHours() * 60 + now.getMinutes(); 
+        const currentVal = now.getHours() * 60 + now.getMinutes();
         const parseTime = (str) => {
             const parts = str.split(':');
             return parseInt(parts[0]) * 60 + parseInt(parts[1]);
         };
         const startVal = parseTime(state.timeConfig.start);
         const endVal = parseTime(state.timeConfig.end);
-        let targetKm = 3; 
+        let targetKm = 3;
         if (currentVal >= startVal && currentVal < endVal) {
             targetKm = 2;
         }
@@ -171,45 +179,84 @@
         else GM_setValue('dbPhones', JSON.stringify(list));
     };
 
-    // 【核心升级】地址库清洗（包含隔离库剔除 + 超长地址剔除）
+    // 地址库清洗（包含隔离库剔除 + 超长地址剔除）
     const cleanDBWithBlacklist = () => {
         if (!state.db.addrs || state.db.addrs.length === 0) return;
-        
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
         const originalCount = state.db.addrs.length;
-        
         // 执行过滤
         state.db.addrs = state.db.addrs.filter(addr => {
             // 规则1：包含隔离库关键词 -> 删
             if (blockers.length > 0 && blockers.some(keyword => addr.includes(keyword))) {
                 return false;
             }
-            
             // 规则2：汉字数量超过 7 个 -> 删
-            // 使用正则匹配所有汉字
             const hanziMatches = addr.match(/[\u4e00-\u9fa5]/g);
             const hanziCount = hanziMatches ? hanziMatches.length : 0;
             if (hanziCount > 6) {
                 return false;
             }
-
             return true;
         });
-        
         if (originalCount !== state.db.addrs.length) {
             GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
             updateListsUI();
             log(`库清洗完成: 移除 ${originalCount - state.db.addrs.length} 条 (命中隔离库或汉字>7)`, 'warning');
         } else {
-            log('库清洗完成: 无需移除', 'info');
+            // log('库清洗完成: 无需移除', 'info');
         }
     };
 
+    // ==============================================
+    //               云端同步核心逻辑
+    // ==============================================
+
+    // 获取在线黑名单 (优先 Worker，失败降级 Github)
     const fetchOnlineBlacklist = (silent = false) => {
         const t = new Date().getTime();
+        
+        // 1. 尝试从 Cloudflare Worker 获取
+        if (CONFIG.CLOUD.SYNC_URL && CONFIG.CLOUD.SYNC_TOKEN) {
+            const cloudUrl = `${CONFIG.CLOUD.SYNC_URL.replace(/\/$/, '')}/txt?token=${CONFIG.CLOUD.SYNC_TOKEN}`;
+            GM_xmlhttpRequest({
+                method: "GET",
+                url: cloudUrl + '&t=' + t,
+                onload: function(response) {
+                    if (response.status === 200) {
+                        const text = response.responseText;
+                        // 尝试解析 Worker 格式
+                        if (text && text.includes('[BLACKLIST]')) {
+                            const sections = text.split(/\[(BLACKLIST|ADDRS|PHONES)\]/);
+                            for(let i=1; i<sections.length; i+=2) {
+                                if(sections[i] === 'BLACKLIST') {
+                                    const bl = sections[i+1].split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s).join(',');
+                                    if(bl) {
+                                        state.blacklist = bl;
+                                        GM_setValue('blacklist', bl);
+                                        cleanDBWithBlacklist();
+                                        if(!silent) log('✅ 已从 Worker 同步黑名单', 'success');
+                                        return;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    // Worker 失败或为空，降级
+                    fetchGithubFallback(silent, t);
+                },
+                onerror: () => fetchGithubFallback(silent, t)
+            });
+        } else {
+            // 未配置 Worker，直接用 Github
+            fetchGithubFallback(silent, t);
+        }
+    };
+    
+    // GitHub 备用黑名单
+    const fetchGithubFallback = (silent, t) => {
         GM_xmlhttpRequest({
             method: "GET",
-            url: CONFIG.CLOUD.BLACKLIST_URL + (CONFIG.CLOUD.BLACKLIST_URL.includes('?') ? '&' : '?') + '_=' + t,
+            url: CONFIG.CLOUD.FALLBACK_BLACKLIST_URL + '&_=' + t,
             onload: function(response) {
                 if (response.status === 200) {
                     const text = response.responseText;
@@ -217,14 +264,130 @@
                         const cleanList = text.replace(/[\r\n\s]+/g, ',').replace(/，/g, ',');
                         state.blacklist = cleanList;
                         GM_setValue('blacklist', cleanList);
-                        // 获取完最新黑名单后，立刻执行清洗
                         cleanDBWithBlacklist();
-                        if(!silent) log('隔离库同步并清洗完成', 'success');
+                        if(!silent) log('✅ 已从 GitHub 同步黑名单', 'success');
                     }
                 }
             }
         });
     };
+
+    // 从云端拉取 (Pull) - 支持分库读取
+    const pullFromCloud = () => {
+        const url = CONFIG.CLOUD.SYNC_URL;
+        const token = CONFIG.CLOUD.SYNC_TOKEN;
+        if (!url || !token) { alert('请先点击 ⚙️ 设置 Worker 域名和 Token'); setupCloudConfig(); return; }
+
+        const targetUrl = `${url.replace(/\/$/, '')}/txt?token=${token}`;
+        log('正在全量拉取...', 'info');
+
+        GM_xmlhttpRequest({
+            method: "GET",
+            url: targetUrl + '&t=' + new Date().getTime(),
+            onload: function(response) {
+                if (response.status === 200) {
+                    const text = response.responseText;
+                    if (!text) return;
+                    
+                    let importedAddrs = 0;
+                    let importedPhones = 0;
+                    let blCount = 0;
+                    
+                    // 智能解析格式
+                    if (text.includes('[BLACKLIST]') || text.includes('[ADDRS]') || text.includes('[PHONES]')) {
+                        const sections = text.split(/\[(BLACKLIST|ADDRS|PHONES)\]/);
+                        for(let i=1; i<sections.length; i+=2) {
+                            const type = sections[i];
+                            const content = sections[i+1];
+                            const lines = content.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
+                            
+                            if (type === 'BLACKLIST') {
+                                state.blacklist = lines.join(',');
+                                GM_setValue('blacklist', state.blacklist);
+                                blCount = lines.length;
+                            } else if (type === 'ADDRS') {
+                                lines.reverse().forEach(line => { addToDB('address', line); importedAddrs++; });
+                            } else if (type === 'PHONES') {
+                                lines.reverse().forEach(line => { addToDB('phone', line); importedPhones++; });
+                            }
+                        }
+                    } else {
+                        // 兼容旧的混合纯文本格式
+                        const lines = text.split(/[\r\n]+/);
+                        lines.reverse().forEach(line => {
+                            if(parseTextToDB(line.trim())) importedAddrs++;
+                        });
+                    }
+
+                    cleanDBWithBlacklist(); 
+                    updateListsUI();
+                    alert(`☁️ 同步成功！\n\n- 隔离库更新: ${blCount} 条\n- 地址库合并: ${importedAddrs} 条\n- 电话库合并: ${importedPhones} 条`);
+                } else {
+                    alert('❌ 拉取失败: ' + response.statusText);
+                }
+            },
+            onerror: function(e) { alert('❌ 网络错误'); }
+        });
+    };
+
+    // 上传到云端 (Push) - 分库打包
+    const pushToCloud = () => {
+        const url = CONFIG.CLOUD.SYNC_URL;
+        const token = CONFIG.CLOUD.SYNC_TOKEN;
+        if (!url || !token) { alert('请先设置云端'); setupCloudConfig(); return; }
+
+        if (!confirm('⚠️ 警告：这将覆盖云端现有的文件！\n\n将上传本地的 [黑名单]、[地址库]、[电话库]。\n确定要继续吗？')) return;
+
+        const targetUrl = `${url.replace(/\/$/, '')}/api/sync?token=${token}`;
+        
+        // 1. 准备数据
+        const blData = state.blacklist.split(/[,，]/).map(s=>s.trim()).filter(s=>s).join('\n');
+        const addrData = (state.db.addrs || []).join('\n');
+        const phoneData = (state.db.phones || []).join('\n');
+        
+        // 2. 拼接格式
+        const fileContent = `[BLACKLIST]\n${blData}\n\n[ADDRS]\n${addrData}\n\n[PHONES]\n${phoneData}`;
+
+        GM_xmlhttpRequest({
+            method: "POST",
+            url: targetUrl,
+            data: fileContent,
+            headers: { "Content-Type": "text/plain" },
+            onload: function(response) {
+                if (response.status === 200) {
+                    alert(`✅ 上传成功！\n\n已备份本地所有数据到 Cloudflare Worker。`);
+                } else {
+                    alert('❌ 上传失败: ' + response.responseText);
+                }
+            },
+            onerror: function(e) { alert('❌ 网络错误'); }
+        });
+    };
+    
+    // 设置向导
+    const setupCloudConfig = () => {
+        const currentUrl = CONFIG.CLOUD.SYNC_URL || '';
+        const currentToken = CONFIG.CLOUD.SYNC_TOKEN || '';
+        
+        const url = prompt("请输入 Worker 域名 (不带末尾斜杠)\n例如: https://txt.abcai.online", currentUrl);
+        if (url !== null) {
+            const cleanUrl = url.trim().replace(/\/$/, '');
+            GM_setValue('cloud_sync_url', cleanUrl);
+            CONFIG.CLOUD.SYNC_URL = cleanUrl;
+            
+            const token = prompt("请输入访客 Token", currentToken);
+            if (token !== null) {
+                GM_setValue('cloud_sync_token', token.trim());
+                CONFIG.CLOUD.SYNC_TOKEN = token.trim();
+                alert("✅ 配置已保存！请刷新页面生效。");
+                location.reload();
+            }
+        }
+    };
+
+    // ==============================================
+    //               其他辅助功能
+    // ==============================================
 
     const startRapidRefresh = () => {
         if (state.rapidTimer) return;
@@ -235,7 +398,7 @@
         }, CONFIG.DISPATCH.RAPID_INTERVAL);
     };
     const stopRapidRefresh = () => { if (state.rapidTimer) { clearInterval(state.rapidTimer); state.rapidTimer = null; } };
-
+    
     const performAction = () => {
         if (state.manualPause) return;
         let selector = null;
@@ -246,7 +409,7 @@
         if (!btn && isDriverPage()) btn = document.querySelector(CONFIG.DRIVER.ALT_SELECTOR)?.closest('button');
         if (btn) {
             btn.click();
-            state.countdown = state.refreshInterval; 
+            state.countdown = state.refreshInterval;
         }
     };
 
@@ -269,19 +432,11 @@
     // 处理剪贴板文本
     const parseTextToDB = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
-        
-        // 剪贴板入库时，不直接过滤，因为我们会在后续统一清洗
-        // 或者为了效率，也可以在这里先做简单预处理，
-        // 但统一交给 cleanDBWithBlacklist 处理逻辑更集中。
-        // 这里仅做格式提取。
-        
         let hasUpdate = false;
-
         // 提取电话
         const phoneRegex = /(?:^|[^\d])(1\d{10})(?:$|[^\d])/g;
         let phoneMatch;
         let tempTextForPhone = fullText;
-        
         while ((phoneMatch = phoneRegex.exec(tempTextForPhone)) !== null) {
             const num = phoneMatch[1];
             if (/^1\d{10}$/.test(num)) {
@@ -304,103 +459,75 @@
             
             // 注意：这里我们先把地址存进去，哪怕它有违规词或太长。
             // 存完后，调用 cleanDBWithBlacklist() 会自动把它删掉。
-            // 这样能保证逻辑的一致性。
-            
             addToDB('address', cleanSeg);
             hasUpdate = true;
             log('提取地址: ' + cleanSeg.substring(0, 6) + '...', 'info');
         });
         
-        // 如果有新数据入库，立刻执行一次清洗，确保脏数据不会停留
         if (hasUpdate) {
             cleanDBWithBlacklist();
         }
-
         return hasUpdate;
     };
 
-    // 核心修改：支持 autoFill 参数
     const processClipboard = async (autoFill = false) => {
         try {
             const text = await navigator.clipboard.readText();
-            // 解析文本并入库（内部会触发清洗）
             const hasUpdate = parseTextToDB(text);
-            
-            // 只要解析动作发生，就更新UI
             if (hasUpdate) updateListsUI();
-            
-            // 如果要求自动填入，且库里有地址，就把最新的那条填进去
             if (autoFill && state.db.addrs && state.db.addrs.length > 0) {
-                // state.db.addrs[0] 是最新的一条（因为 unshift）
                 fillInput('address', state.db.addrs[0]);
             }
         } catch (e) {}
     };
 
-    // 本地文件导入逻辑（关键修改：纯本地）
+    // 本地文件导入逻辑
     const handleFileImport = (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        
-        // 确认对话框
         if(!confirm(`确认导入文件 "${file.name}" 到本地库吗？\n将会自动清洗（汉字>7或含违禁词）。`)) {
             e.target.value = '';
             return;
         }
-
         const reader = new FileReader();
         reader.onload = (event) => {
             const content = event.target.result;
             const lines = content.split(/[\r\n]+/);
             let updateCount = 0;
             lines.forEach(line => {
-                // parseTextToDB 内部会调用清洗逻辑
                 if (parseTextToDB(line)) updateCount++;
             });
             updateListsUI();
-            alert(`✅ 导入处理完成！\n（已自动过滤掉超长和违规地址）`);
+            alert(`✅ 导入处理完成！`);
         };
         reader.readAsText(file);
-        e.target.value = ''; // 重置input以便下次重复导入
+        e.target.value = '';
     };
 
-    // 【核心修复】输入框定位逻辑 (v11.6 精准版)
+    // 输入框定位逻辑
     const fillInput = (type, value) => {
         let input = null;
-        
         if (type === 'address') {
-             // 策略1：优先查找明确的ID (高德地图常用)
              input = document.getElementById('tipinput');
-
-             // 策略2：查找页面上所有 input
              if (!input) {
                  const inputs = document.querySelectorAll('input');
                  for (let i = 0; i < inputs.length; i++) {
                      const el = inputs[i];
-                     
-                     // 排除助手自己的窗口元素！
                      if (el.closest('.gj-window')) continue;
-
-                     // 排除表单内元素
                      if (!el.closest('.el-form-item') && el.type === 'text') { 
-                         input = el; 
-                         break; 
+                         input = el; break; 
                      }
                  }
              }
-             
-             // 策略3：placeholder 关键词查找
              if (!input) {
                  const keywords = ['起点', '出发', '搜索', '关键字'];
                  const allInputs = document.querySelectorAll('input');
                  for (let i = 0; i < allInputs.length; i++) {
                      const el = allInputs[i];
-                     if (el.closest('.gj-window')) continue; // 排除助手
-                     
+                     if (el.closest('.gj-window')) continue; 
                      const ph = (el.placeholder || '').toLowerCase();
                      if (keywords.some(k => ph.includes(k))) {
-                         input = el;
-                         break;
+                         input = el; break;
                      }
                  }
              }
@@ -409,12 +536,10 @@
              const inputs = document.querySelectorAll('input');
              for (let i = 0; i < inputs.length; i++) {
                  const el = inputs[i];
-                 if (el.closest('.gj-window')) continue; // 排除助手
-                 
+                 if (el.closest('.gj-window')) continue; 
                  const ph = (el.placeholder || '').toLowerCase();
                  if (ph.includes('用户电话') || ph.includes('电话') || el.type === 'tel') {
-                     input = el;
-                     break;
+                     input = el; break;
                  }
              }
         }
@@ -425,17 +550,14 @@
             input.dispatchEvent(new Event('change', { bubbles: true }));
             input.click();
             input.focus();
-            
             input.style.transition = 'all 0.3s';
             input.style.boxShadow = '0 0 0 2px rgba(103, 194, 58, 0.3)';
             setTimeout(() => input.style.boxShadow = '', 800);
-        } else {
-            console.log(`[助手] 找不到${type}输入框`);
         }
     };
 
     const setSliderValue = (targetValue) => {
-        const MAX_VAL = 20; 
+        const MAX_VAL = 20;
         const calibrationMap = { 2: 1, 3: 2, 5: 4, 10: 10, 20: 20 };
         const calcValue = calibrationMap[targetValue] !== undefined ? calibrationMap[targetValue] : targetValue;
         const sliderDiv = document.querySelector('.el-slider'); 
@@ -458,20 +580,15 @@
         }
     };
 
-    // --------------- 4. 搜索算法 ---------------
-
-    // 超级模糊匹配逻辑
+    // 搜索算法
     const isMatch = (dbItem, inputKey, type) => {
         if (!inputKey) return true;
         const cleanKey = inputKey.trim();
         if (!cleanKey) return true;
 
         if (type === 'phone') {
-            // 场景A: 标准包含
             if (dbItem.includes(cleanKey)) return true;
-            // 场景B: 反向包含
             if (cleanKey.includes(dbItem)) return true;
-            // 场景C: 漏输/跳着输
             if (/^\d+$/.test(cleanKey) && cleanKey.length >= 4) {
                 const pattern = cleanKey.split('').join('.*');
                 try {
@@ -482,12 +599,11 @@
             return false;
         }
         
-        // 地址库：空格分隔多关键字
         const keywords = cleanKey.split(/\s+/);
         return keywords.every(k => dbItem.includes(k));
     };
 
-    // --------------- 5. UI 界面 ---------------
+    // --------------- UI 界面生成 ---------------
 
     const applyLayout = () => {
         const addrWidget = document.getElementById('gj-widget-addr');
@@ -498,7 +614,6 @@
             listBody.style.setProperty('--gj-col-width', state.colWidth + 'px');
         }
     };
-
     const toggleTheme = () => {
         state.theme = state.theme === 'light' ? 'dark' : 'light';
         GM_setValue('theme', state.theme);
@@ -514,11 +629,9 @@
             doc.classList.remove('gj-global-dark');
         }
     };
-
     const createMainWidget = () => {
         let widget = document.getElementById('gj-widget-main');
         if (widget) widget.remove();
-
         widget = document.createElement('div');
         widget.id = 'gj-widget-main';
         widget.className = state.theme === 'dark' ? 'gj-dark gj-window' : 'gj-light gj-window';
@@ -543,7 +656,6 @@
             <div id="gj-main-content" style="display: ${state.isCollapsed ? 'none' : 'block'}"></div>
             <div id="gj-scale-handle" class="gj-resize-handle" title="拖拽缩放"></div>
         `;
-
         document.body.appendChild(widget);
         setupDrag(widget, 'posMain');
         setupScaleDrag(widget);
@@ -554,12 +666,10 @@
             GM_setValue('uiCollapsed', state.isCollapsed);
             updateUI();
         });
-
         widget.querySelector('#gj-theme-toggle').addEventListener('click', (e) => {
              e.stopPropagation();
              toggleTheme();
         });
-
         return widget;
     };
 
@@ -575,16 +685,19 @@
         widget.style.transform = `scale(${state.uiScale})`;
         widget.style.transformOrigin = 'top left';
         widget.style.width = state.layout.width + 'px';
-
         const activeTabClass = (tab) => state.viewTab === tab ? 'active-tab' : '';
-
+        
         widget.innerHTML = `
             <div class="gj-header gj-drag-header">
                 <div class="gj-tabs">
                     <span class="gj-tab ${activeTabClass('address')}" data-tab="address">📍 地址库</span>
                     <span class="gj-tab ${activeTabClass('phone')}" data-tab="phone">📞 电话库</span>
                 </div>
-                <div style="display:flex; gap:5px;">
+                <div style="display:flex; gap:4px;">
+                    <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
+                    <span class="btn-icon-circle" id="btn-cloud-pull" title="⬇️ 从云端拉取并合并" style="background:rgba(230,162,60,0.6)">⬇</span>
+                    <span class="btn-icon-circle" id="btn-cloud-push" title="⬆️ 本地覆盖上传到云端" style="background:rgba(245,108,108,0.6)">⬆</span>
+
                     <label class="btn-icon-circle" title="导入本地文件(txt/csv)">
                         📂<input type="file" id="gj-file-import" style="display:none" accept=".txt,.csv">
                     </label>
@@ -611,8 +724,12 @@
         setupDrag(widget, 'posAddr');
         setupResizeDrag(widget);
 
+        // 绑定同步事件
+        widget.querySelector('#btn-cloud-setting').addEventListener('click', setupCloudConfig);
+        widget.querySelector('#btn-cloud-pull').addEventListener('click', pullFromCloud);
+        widget.querySelector('#btn-cloud-push').addEventListener('click', pushToCloud);
+
         widget.querySelector('#btn-refresh-addr').addEventListener('click', () => processClipboard(true));
-        
         widget.querySelector('#gj-file-import').addEventListener('change', handleFileImport);
         
         widget.querySelectorAll('.gj-tab').forEach(tab => {
@@ -626,13 +743,11 @@
 
         const searchInput = widget.querySelector('#gj-search-input');
         const clearBtn = widget.querySelector('#gj-btn-clear');
-
         searchInput.addEventListener('input', (e) => {
             state.searchText = e.target.value;
             clearBtn.style.display = state.searchText ? 'block' : 'none';
             updateListsUI();
         });
-
         clearBtn.addEventListener('click', () => {
             state.searchText = '';
             searchInput.value = '';
@@ -640,7 +755,6 @@
             updateListsUI();
             searchInput.focus();
         });
-
         const slider = widget.querySelector('#gj-col-slider');
         slider.addEventListener('input', (e) => {
             state.colWidth = parseInt(e.target.value);
@@ -649,7 +763,6 @@
         slider.addEventListener('change', (e) => {
              GM_setValue('addrColWidth', state.colWidth);
         });
-        
         return widget;
     };
 
@@ -690,10 +803,8 @@
 
         const mainContent = document.getElementById('gj-main-content');
         const scaleHandle = document.getElementById('gj-scale-handle');
-        
         if (mainContent) mainContent.style.display = state.isCollapsed ? 'none' : 'block';
         if (scaleHandle) scaleHandle.style.display = state.isCollapsed ? 'none' : 'block';
-        
         if (mainContent) renderMainContent(mainContent);
         updateStatusText();
     };
@@ -722,7 +833,6 @@
             const buttonsHtml = CONFIG.DISPATCH.PRESETS.map(num => 
                 `<button class="btn-preset" data-val="${num}">${num}</button>`
             ).join('');
-            
             html = `
                 <div class="gj-group">
                     <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
@@ -734,7 +844,7 @@
                 <div class="gj-grid-btns">${buttonsHtml}</div>
                 
                 <div class="gj-bottom-controls">
-                    <button id="btn-sync-cloud" class="gj-btn-text">☁️ 同步隔离库</button>
+                    <button id="btn-sync-cloud" class="gj-btn-text">☁️ Worker 同步</button>
                     <span style="font-size:10px;color:var(--gj-text-mute);">缩放: ${(state.uiScale*100).toFixed(0)}%</span>
                 </div>
             `;
@@ -748,13 +858,9 @@
     const updateListsUI = () => {
         const addrBody = document.getElementById('list-addr-body');
         if (!addrBody) return;
-
         const isPhone = state.viewTab === 'phone';
         const sourceList = isPhone ? state.db.phones : state.db.addrs;
-        
-        // 核心：应用搜索过滤
         const filteredList = (sourceList || []).filter(item => isMatch(item, state.searchText, isPhone ? 'phone' : 'address'));
-
         const renderItem = (item) => {
             return `<div class="gj-list-item" title="${item}" data-val="${item}" data-type="${isPhone ? 'phone' : 'address'}">
                 ${isPhone ? '📞' : ''}
@@ -809,16 +915,15 @@
     const updateStatusText = () => {
         const text = document.querySelector('.gj-timer-text');
         if (text) {
-            if (state.manualPause) { text.textContent = "暂停"; text.style.color = "var(--gj-text-sec)"; }
+            if (state.manualPause) { text.textContent = "暂停";
+            text.style.color = "var(--gj-text-sec)"; }
             else { 
-                text.innerHTML = `${state.countdown}<span style="font-size:16px;margin-left:2px;opacity:0.6">s</span>`; 
+                text.innerHTML = `${state.countdown}<span style="font-size:16px;margin-left:2px;opacity:0.6">s</span>`;
                 text.style.color = state.countdown <= 3 ? "#F56C6C" : "#409EFF"; 
             }
         }
     };
-
     const log = (text, type) => { console.log(`[助手] ${text}`); };
-
     const applyPos = (el, pos) => {
         if (pos.left) { el.style.left = pos.left; el.style.right = 'auto'; }
         else { el.style.right = pos.right || '20px'; el.style.left = 'auto'; }
@@ -827,10 +932,10 @@
     };
 
     const setupDrag = (el, posKey) => {
-        const header = el.querySelector('.gj-header'); 
+        const header = el.querySelector('.gj-header');
         let isDragging = false, startX, startY, rect;
         header.addEventListener('mousedown', e => {
-            if(e.target.closest('.gj-toggle') || e.target.closest('#gj-theme-toggle') || e.target.closest('.gj-tab') || e.target.closest('input') || e.target.closest('label')) return;
+            if(e.target.closest('.gj-toggle') || e.target.closest('#gj-theme-toggle') || e.target.closest('.gj-tab') || e.target.closest('input') || e.target.closest('label') || e.target.closest('.btn-icon-circle')) return;
             isDragging = true; startX = e.clientX; startY = e.clientY;
             rect = el.getBoundingClientRect();
             header.style.cursor = 'grabbing';
@@ -875,7 +980,6 @@
             const addrW = document.getElementById('gj-widget-addr');
             if(mainW) mainW.style.transform = `scale(${newScale})`;
             if(addrW) addrW.style.transform = `scale(${newScale})`;
-            
             const label = document.querySelector('.gj-bottom-controls span');
             if(label) label.textContent = `缩放: ${(newScale*100).toFixed(0)}%`;
         });
@@ -928,7 +1032,6 @@
                 filter: invert(0.92) hue-rotate(180deg) !important;
                 background-color: #111 !important;
             }
-            /* 保护图片、视频不被反转 */
             html.gj-global-dark img,
             html.gj-global-dark video,
             html.gj-global-dark iframe,
@@ -965,7 +1068,8 @@
             }
 
             .gj-window {
-                position: fixed; z-index: 99999;
+                position: fixed;
+                z-index: 99999;
                 display: flex; flex-direction: column;
                 font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
                 font-size: 14px; user-select: none;
@@ -980,7 +1084,7 @@
             #gj-widget-addr { /* width dynamic */ }
 
             .gj-header {
-                padding: 10px 12px; 
+                padding: 10px 12px;
                 background: var(--gj-header-bg);
                 color: #fff;
                 display: flex; justify-content: space-between; align-items: center;
@@ -994,7 +1098,8 @@
             .gj-timer-text { font-size: 38px; font-weight: 700; line-height:1; letter-spacing: -1px; }
             
             .gj-btn {
-                width: 100%; border: none; padding: 10px; border-radius: 8px; 
+                width: 100%;
+                border: none; padding: 10px; border-radius: 8px; 
                 cursor: pointer; font-weight: 600; font-size: 14px;
                 transition: all 0.2s; box-shadow: 0 2px 6px rgba(0,0,0,0.1);
                 display:flex; justify-content:center; align-items:center; gap:5px;
@@ -1011,7 +1116,8 @@
             
             .gj-control-row { display: flex; justify-content: space-between; align-items: center; margin-top: 15px; padding: 0 2px;}
             .gj-input-mini { 
-                width: 45px; border: 1px solid var(--gj-border); border-radius: 6px; 
+                width: 45px;
+                border: 1px solid var(--gj-border); border-radius: 6px; 
                 text-align: center; padding: 4px; font-size:13px; outline:none;
                 background: var(--gj-bg-input); color: var(--gj-text-main); transition: all 0.2s;
             }
@@ -1027,7 +1133,8 @@
             .gj-label-sm { font-size: 11px; color: var(--gj-text-mute); margin: 0 8px; white-space:nowrap;}
             .gj-grid-btns { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
             .btn-preset { 
-                background: var(--gj-bg-sec); border: 1px solid var(--gj-border); color: var(--gj-text-sec); 
+                background: var(--gj-bg-sec);
+                border: 1px solid var(--gj-border); color: var(--gj-text-sec); 
                 padding: 6px 0; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight:600;
             }
             .btn-preset:hover { background: var(--gj-hover); border-color: #b3d8ff; color: #409EFF; }
@@ -1041,42 +1148,32 @@
             }
             .btn-icon-circle:hover { background:rgba(255,255,255,0.4); transform:scale(1.1); }
 
-            /* List & Tabs Styles */
             .gj-tabs { display:flex; gap:10px; align-items:center; }
             .gj-tab { cursor:pointer; padding:2px 0; opacity:0.6; border-bottom:2px solid transparent; transition:0.2s; }
             .gj-tab:hover { opacity:0.9; }
             .gj-tab.active-tab { opacity:1; font-weight:bold; border-bottom-color:#fff; }
 
             .gj-toolbar { 
-                padding: 8px; 
-                background: var(--gj-bg-sec); 
+                padding: 8px; background: var(--gj-bg-sec); 
                 border-bottom: 1px solid var(--gj-border); 
-                display: flex;
-                align-items: center;
-                gap: 5px;
+                display: flex; align-items: center; gap: 5px;
             }
             #gj-search-input {
-                flex: 1; /* 占据剩余宽度 */
-                border: 1px solid var(--gj-border); border-radius: 4px;
-                padding: 5px 8px; font-size: 14px; outline: none;
+                flex: 1; border: 1px solid var(--gj-border);
+                border-radius: 4px; padding: 5px 8px; font-size: 14px; outline: none;
                 background: var(--gj-bg-input); color: var(--gj-text-main);
                 font-family: monospace; letter-spacing: 1px;
             }
             #gj-search-input:focus { border-color: #409EFF; }
             
             .btn-clear {
-                cursor: pointer;
-                color: var(--gj-text-mute);
-                font-size: 18px;
-                line-height: 1;
-                padding: 0 4px;
-                transition: color 0.2s;
+                cursor: pointer; color: var(--gj-text-mute);
+                font-size: 18px; line-height: 1; padding: 0 4px; transition: color 0.2s;
             }
             .btn-clear:hover { color: #F56C6C; }
 
             .gj-list-body { 
-                overflow-y: auto; 
-                display: grid;
+                overflow-y: auto; display: grid;
                 grid-template-columns: repeat(auto-fill, minmax(var(--gj-col-width, 80px), 1fr));
                 gap: 1px; background: var(--gj-bg-sec); padding: 1px;
                 transition: height 0.05s;
@@ -1086,11 +1183,8 @@
             
             .gj-list-item {
                 background: var(--gj-bg-main); padding: 6px 4px; 
-                cursor: pointer; 
-                font-size: 13px;
-                font-weight: 500;
-                color: var(--gj-text-main);
-                display: flex; align-items: center; justify-content: center;
+                cursor: pointer; font-size: 13px; font-weight: 500;
+                color: var(--gj-text-main); display: flex; align-items: center; justify-content: center;
                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
             }
             .gj-list-item:hover { background: var(--gj-hover); color: var(--gj-hover-text); }
@@ -1098,20 +1192,14 @@
             .gj-empty { grid-column: 1 / -1; text-align: center; color: var(--gj-text-mute); padding: 30px 10px; font-size: 12px; background: var(--gj-bg-main);}
             
             .gj-resize-handle {
-                position: absolute;
-                bottom: 1px;
-                right: 1px;
-                width: 12px;
-                height: 12px;
-                cursor: nwse-resize;
+                position: absolute; bottom: 1px; right: 1px;
+                width: 12px; height: 12px; cursor: nwse-resize;
                 background: linear-gradient(135deg, transparent 50%, var(--gj-text-mute) 50%);
-                opacity: 0.5;
-                z-index: 10;
+                opacity: 0.5; z-index: 10;
                 clip-path: polygon(100% 0, 100% 100%, 0 100%);
             }
             .gj-resize-handle:hover {
-                background: linear-gradient(135deg, transparent 50%, #409EFF 50%);
-                opacity: 1;
+                background: linear-gradient(135deg, transparent 50%, #409EFF 50%); opacity: 1;
             }
         `);
     };
