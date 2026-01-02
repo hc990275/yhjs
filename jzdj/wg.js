@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v12.7 终极完整版)
+// @name          代驾调度系统助手 (v12.8 自动抓取上传版)
 // @namespace     http://tampermonkey.net/
-// @version       12.7
-// @description   【强制同步】以云端为准！进入派单页或点击下载时，直接用云端数据覆盖本地；已添加网络白名单。
+// @version       12.8
+// @description   【全自动闭环】自动抓取订单列表的[乘客电话]和[起点名称]；如果库里没有，自动同步上传到云端；保留所有去重清洗功能。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -43,15 +43,12 @@
             RAPID_INTERVAL: 500
         },
         CLOUD: {
-            // 默认 GitHub 黑名单 (未配置云端时的备用)
             FALLBACK_BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=yf2kve&t=1767326208607",
-            
-            // === 云同步配置 (自动读取设置) ===
             SYNC_URL: GM_getValue('cloud_sync_url', 'https://txt.abcai.online'), 
             SYNC_TOKEN: GM_getValue('cloud_sync_token', '990299') 
         },
         STORAGE: {
-            MAX_ITEMS: 800000 // 本地库容量限制
+            MAX_ITEMS: 800000 
         }
     };
 
@@ -70,39 +67,30 @@
         timerId: null,
         rapidTimer: null,
         
-        // 窗口位置与布局
         posMain: safeParse('posMain', '{"top":"80px","left":"20px"}'),
         posAddr: safeParse('posAddr', '{"top":"80px","left":"300px"}'),
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
         layout: safeParse('uiLayout', '{"width": 280, "height": 350}'),
         colWidth: parseInt(GM_getValue('addrColWidth', 80)),
         
-        // 数据库 (纯本地存储)
         db: {
             addrs: safeParse('dbAddrs', '[]'),
             phones: safeParse('dbPhones', '[]')
         },
         blacklist: GM_getValue('blacklist', '位置，电话，司机，请您，收到，偏远地区，已派单，代驾，师傅，安全，感谢，马上，联系，好的'),
         
-        // 搜索与视图状态
         viewTab: GM_getValue('viewTab', 'address'),
         searchText: '',
-
         currentVersion: GM_info.script.version,
         timeConfig: safeParse('timeConfig', '{"start":"20:00", "end":"22:00"}'),
         theme: GM_getValue('theme', 'light') 
     };
 
-    // 兼容旧版本数据迁移
     const migrateOldData = () => {
         const oldHistory = safeParse('clipHistory', null);
         if (oldHistory) {
-            if (oldHistory.addrs && oldHistory.addrs.length > 0) {
-                oldHistory.addrs.forEach(a => addToDB('address', a));
-            }
-            if (oldHistory.phones && oldHistory.phones.length > 0) {
-                oldHistory.phones.forEach(p => addToDB('phone', p));
-            }
+            if (oldHistory.addrs) oldHistory.addrs.forEach(a => addToDB('address', a));
+            if (oldHistory.phones) oldHistory.phones.forEach(p => addToDB('phone', p));
             GM_setValue('clipHistory', ''); 
         }
     };
@@ -111,22 +99,25 @@
 
     const checkPage = () => {
         state.currentHash = window.location.hash;
+        
+        // 订单管理页逻辑
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
-        } else if (isDriverPage()) {
+            // 【新增】自动抓取订单列表
+            setTimeout(autoScrapeOrders, 2000); 
+        } 
+        // 司机调度页逻辑
+        else if (isDriverPage()) {
             let saved = GM_getValue('driverInterval');
             if (!saved) saved = CONFIG.DRIVER.DEFAULT_INTERVAL;
             state.refreshInterval = saved;
-        } else if (isDispatchPage()) {
+        } 
+        // 派单页逻辑
+        else if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
             log('进入派单界面，开始自动同步...', 'info');
-            
-            // 1. 自动同步黑名单
-            fetchOnlineBlacklist(true);
-            
-            // 2. [关键] 自动全量覆盖地址和电话
-            pullFromCloud(true);
-            
+            fetchOnlineBlacklist(true); // 同步黑名单
+            pullFromCloud(true); // 同步地址库
             setTimeout(applyDistanceByTime, 1500);
         }
 
@@ -148,6 +139,108 @@
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
     
+    // ==============================================
+    //           [新增] 自动抓取与上传逻辑
+    // ==============================================
+
+    // 自动抓取订单表格
+    const autoScrapeOrders = () => {
+        if (!isOrderPage() || state.manualPause) return;
+
+        // 查找表格行 (Element UI 的表格结构)
+        const rows = document.querySelectorAll('.el-table__body-wrapper tbody tr');
+        if (!rows || rows.length === 0) return;
+
+        // 动态定位列索引 (防止表格列顺序变化)
+        const headers = document.querySelectorAll('.el-table__header-wrapper th');
+        let phoneIdx = -1;
+        let addrIdx = -1;
+
+        headers.forEach((th, index) => {
+            const text = th.innerText.trim();
+            if (text.includes('乘客电话')) phoneIdx = index;
+            if (text.includes('起点名称')) addrIdx = index;
+        });
+
+        // 如果找不到列，尝试硬编码兜底 (根据你提供的截图推测)
+        if (phoneIdx === -1) phoneIdx = 3; // 第4列
+        if (addrIdx === -1) addrIdx = 7;   // 第8列
+
+        let newItemsCount = 0;
+
+        rows.forEach(row => {
+            const cells = row.querySelectorAll('td');
+            if (cells.length < Math.max(phoneIdx, addrIdx)) return;
+
+            // 1. 抓取电话
+            if (phoneIdx > -1) {
+                const phoneText = cells[phoneIdx].innerText.trim();
+                // 清洗电话 (去除非数字)
+                const phone = phoneText.replace(/[^\d]/g, '');
+                if (/^1\d{10}$/.test(phone)) {
+                    // 如果本地库没有，则添加并上传
+                    if (!state.db.phones.includes(phone)) {
+                        addToDB('phone', phone);
+                        uploadOneToCloud('phone', phone);
+                        newItemsCount++;
+                        log(`🆕 抓取新电话: ${phone}`, 'success');
+                    }
+                }
+            }
+
+            // 2. 抓取地址
+            if (addrIdx > -1) {
+                const addrText = cells[addrIdx].innerText.trim();
+                // 简单的地址清洗
+                if (addrText && addrText.length > 1) {
+                    const isBlocked = state.blacklist.split(/[,，]/).some(k => k && addrText.includes(k));
+                    const hanziCount = (addrText.match(/[\u4e00-\u9fa5]/g) || []).length;
+                    
+                    // 只有非黑名单且字数正常的才收录
+                    if (!isBlocked && hanziCount <= 7) {
+                        // 地址去重检查 (包含关系检查)
+                        const exists = state.db.addrs.some(exist => exist.includes(addrText) || addrText.includes(exist));
+                        
+                        if (!exists) {
+                            addToDB('address', addrText);
+                            uploadOneToCloud('addr', addrText);
+                            newItemsCount++;
+                            log(`🆕 抓取新地址: ${addrText}`, 'success');
+                        }
+                    }
+                }
+            }
+        });
+
+        if (newItemsCount > 0) {
+            updateListsUI();
+        }
+    };
+
+    // 单条数据上传到云端 (利用 Worker v13.6 的 /api/add 接口)
+    const uploadOneToCloud = (type, data) => {
+        const url = CONFIG.CLOUD.SYNC_URL;
+        const token = CONFIG.CLOUD.SYNC_TOKEN;
+        if (!url || !token) return;
+
+        const targetUrl = `${url.replace(/\/$/, '')}/api/add?token=${token}`;
+        
+        GM_xmlhttpRequest({
+            method: "POST",
+            url: targetUrl,
+            data: JSON.stringify({ type: type, data: data }),
+            headers: { "Content-Type": "application/json" },
+            onload: function(response) {
+                // 静默上传，不需要弹窗打扰
+                // console.log('上传结果:', response.responseText);
+            }
+        });
+    };
+
+    // ==============================================
+    //               原有逻辑保持不变
+    // ==============================================
+
     const applyDistanceByTime = () => {
         if (!isDispatchPage()) return;
         const now = new Date();
@@ -165,7 +258,6 @@
         setSliderValue(targetKm);
     };
 
-    // 数据库操作：添加数据（自动去重、置顶）
     const addToDB = (type, value) => {
         if (!value) return;
         const list = type === 'address' ? state.db.addrs : state.db.phones;
@@ -181,7 +273,6 @@
         else GM_setValue('dbPhones', JSON.stringify(list));
     };
 
-    // 地址库清洗
     const cleanDBWithBlacklist = () => {
         if (!state.db.addrs || state.db.addrs.length === 0) return;
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
@@ -195,13 +286,8 @@
         if (originalCount !== state.db.addrs.length) {
             GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
             updateListsUI();
-            // log(`库清洗完成: 移除 ${originalCount - state.db.addrs.length} 条`, 'warning');
         }
     };
-
-    // ==============================================
-    //               云端同步核心逻辑 (覆盖模式)
-    // ==============================================
 
     const fetchOnlineBlacklist = (silent = false) => {
         const t = new Date().getTime();
@@ -257,7 +343,6 @@
         });
     };
 
-    // 从云端拉取并覆盖 (Overwrite)
     const pullFromCloud = (isAuto = false) => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
@@ -282,13 +367,11 @@
                     let importedPhones = 0;
                     let blCount = 0;
                     
-                    // 智能解析格式
                     if (text.includes('[BLACKLIST]') || text.includes('[ADDRS]') || text.includes('[PHONES]')) {
                         const sections = text.split(/\[(BLACKLIST|ADDRS|PHONES)\]/);
                         for(let i=1; i<sections.length; i+=2) {
                             const type = sections[i];
                             const content = sections[i+1];
-                            // 过滤空行和首尾空格
                             const lines = content.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
                             
                             if (type === 'BLACKLIST') {
@@ -296,30 +379,27 @@
                                 GM_setValue('blacklist', state.blacklist);
                                 blCount = lines.length;
                             } else if (type === 'ADDRS') {
-                                // 核心修改：直接替换本地数组 (Overwrite)
                                 state.db.addrs = lines; 
                                 GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
                                 importedAddrs = lines.length;
                             } else if (type === 'PHONES') {
-                                // 核心修改：直接替换本地数组 (Overwrite)
                                 state.db.phones = lines;
                                 GM_setValue('dbPhones', JSON.stringify(state.db.phones));
                                 importedPhones = lines.length;
                             }
                         }
                     } else {
-                        // 兼容旧格式：当做地址处理
                         const lines = text.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
                         state.db.addrs = lines;
                         GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
                         importedAddrs = lines.length;
                     }
 
-                    cleanDBWithBlacklist(); // 再次清洗确保合规
+                    cleanDBWithBlacklist();
                     updateListsUI();
                     
                     if (!isAuto) {
-                        alert(`☁️ 覆盖成功！本地数据已与云端同步。\n\n- 隔离库: ${blCount} 条\n- 地址库: ${importedAddrs} 条\n- 电话库: ${importedPhones} 条`);
+                        alert(`☁️ 覆盖成功！\n\n- 隔离库: ${blCount} 条\n- 地址库: ${importedAddrs} 条\n- 电话库: ${importedPhones} 条`);
                     } else {
                         log(`[自动同步] 完成: 覆盖地址${importedAddrs}条 / 电话${importedPhones}条`, 'success');
                     }
@@ -331,7 +411,6 @@
         });
     };
 
-    // 上传到云端 (Push)
     const pushToCloud = () => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
@@ -359,7 +438,6 @@
         });
     };
     
-    // 设置向导
     const setupCloudConfig = () => {
         const currentUrl = CONFIG.CLOUD.SYNC_URL || '';
         const currentToken = CONFIG.CLOUD.SYNC_TOKEN || '';
@@ -381,7 +459,7 @@
     };
 
     // ==============================================
-    //               其他辅助功能
+    //               UI 和 其他辅助功能
     // ==============================================
 
     const startRapidRefresh = () => {
@@ -424,7 +502,6 @@
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
 
-    // 处理剪贴板文本
     const parseTextToDB = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
         let hasUpdate = false;
