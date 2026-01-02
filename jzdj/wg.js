@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v13.0 自动抓取同步版)
+// @name          代驾调度系统助手 (v13.2 强力抓取修复版)
 // @namespace     http://tampermonkey.net/
-// @version       13.0
-// @description   【自动同步】订单页自动抓取新电话/地址并上传云端；保留原有全部功能；以云端为准强力覆盖。
+// @version       13.2
+// @description   【抓取修复】采用 DOM 监听技术，表格一变立即抓取；即使"暂停刷新"也能正常抓取；抓取更灵敏。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -24,7 +24,7 @@
     const CONFIG = {
         ORDER: {
             HASH: '#/substituteDrivingOrder',
-            TITLE: '订单刷新(自动抓取中)',
+            TITLE: '订单管理',
             DEFAULT_INTERVAL: 20,
             BUTTON_SELECTOR: 'button.el-button.el-button--primary.el-button--small i.el-icon-search',
             ALT_SELECTOR: '.el-icon-search'
@@ -64,11 +64,15 @@
     let state = {
         currentHash: window.location.hash,
         isCollapsed: GM_getValue('uiCollapsed', false),
+        
+        // 核心状态
         manualPause: GM_getValue('manualPause', false),
+        isScrapingEnabled: GM_getValue('scrapeEnabled', false), // 抓取开关状态
+
         refreshInterval: 20, 
         countdown: 0,
-        timerId: null,
-        rapidTimer: null,
+        timerId: null,      // 刷新倒计时定时器
+        scrapeObserver: null, // DOM 监听器
         
         // 窗口位置与布局
         posMain: safeParse('posMain', '{"top":"80px","left":"20px"}'),
@@ -77,7 +81,7 @@
         layout: safeParse('uiLayout', '{"width": 280, "height": 350}'),
         colWidth: parseInt(GM_getValue('addrColWidth', 80)),
         
-        // 数据库 (纯本地存储)
+        // 数据库
         db: {
             addrs: safeParse('dbAddrs', '[]'),
             phones: safeParse('dbPhones', '[]')
@@ -87,7 +91,6 @@
         // 搜索与视图状态
         viewTab: GM_getValue('viewTab', 'address'),
         searchText: '',
-
         currentVersion: GM_info.script.version,
         timeConfig: safeParse('timeConfig', '{"start":"20:00", "end":"22:00"}'),
         theme: GM_getValue('theme', 'light') 
@@ -111,33 +114,42 @@
 
     const checkPage = () => {
         state.currentHash = window.location.hash;
+        
+        // --- 订单页逻辑 ---
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
-            // 进入订单页，启动自动扫描抓取
-            if (!state.manualPause) scanOrderPage(); 
-        } else if (isDriverPage()) {
+            // 开启页面监听
+            setupTableObserver();
+        } else {
+            // 离开订单页，断开监听
+            disconnectTableObserver();
+        }
+
+        // --- 司机页逻辑 ---
+        if (isDriverPage()) {
             let saved = GM_getValue('driverInterval');
             if (!saved) saved = CONFIG.DRIVER.DEFAULT_INTERVAL;
             state.refreshInterval = saved;
-        } else if (isDispatchPage()) {
+        } 
+        
+        // --- 派单页逻辑 ---
+        if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
             log('进入派单界面，开始自动同步...', 'info');
-            
-            // 1. 自动同步黑名单
             fetchOnlineBlacklist(true);
-            // 2. [关键] 自动全量覆盖地址和电话
             pullFromCloud(true);
-            
             setTimeout(applyDistanceByTime, 1500);
         }
 
         updateUI(); 
         
+        // --- 计时器管理 ---
         if (isDispatchPage()) {
              if (!state.manualPause) startRapidRefresh();
         } else {
             stopRapidRefresh();
             if (isOrderPage() || isDriverPage()) {
+                // 如果没有计时器且没暂停，则开始
                 if (!state.manualPause && !state.timerId) startCountdown();
             } else {
                 stopCountdown();
@@ -148,6 +160,145 @@
     const isOrderPage = () => state.currentHash.includes(CONFIG.ORDER.HASH);
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
+    
+    // ==============================================
+    //        核心增强：DOM 监听与自动抓取
+    // ==============================================
+    
+    // 建立表格监听器 (MutationObserver)
+    const setupTableObserver = () => {
+        // 如果已经存在，先不重复创建
+        if (state.scrapeObserver) return;
+
+        log('启动 DOM 监听系统...', 'info');
+        
+        // 观察整个 document body，因为 Element UI 的 table 可能会动态重绘
+        const targetNode = document.body;
+        const config = { childList: true, subtree: true };
+
+        // 防抖动：避免一瞬间触发几十次
+        let timeout = null;
+        
+        state.scrapeObserver = new MutationObserver((mutationsList) => {
+            // 只有当开关开启时才执行
+            if (!state.isScrapingEnabled) return;
+
+            // 检查是否有表格相关的变动
+            let hasTableChange = false;
+            for(let mutation of mutationsList) {
+                if (mutation.target.classList && 
+                   (mutation.target.classList.contains('el-table__row') || 
+                    mutation.target.classList.contains('el-table__body') ||
+                    mutation.target.nodeName === 'TBODY')) {
+                    hasTableChange = true;
+                    break;
+                }
+            }
+
+            // 如果检测到变动，或者为了保险起见（简单粗暴模式），稍微延迟执行扫描
+            if (timeout) clearTimeout(timeout);
+            timeout = setTimeout(() => {
+                scanOrderPage();
+            }, 500); // 500ms 延迟，确保渲染完成
+        });
+
+        state.scrapeObserver.observe(targetNode, config);
+    };
+
+    const disconnectTableObserver = () => {
+        if (state.scrapeObserver) {
+            state.scrapeObserver.disconnect();
+            state.scrapeObserver = null;
+            log('DOM 监听已停止', 'info');
+        }
+    };
+
+    // 扫描订单表格 (核心执行者)
+    const scanOrderPage = () => {
+        if (!isOrderPage() || !state.isScrapingEnabled) return;
+
+        // 查找所有表格行 (适配 Element UI)
+        const rows = document.querySelectorAll('.el-table__row');
+        if (rows.length === 0) return;
+
+        // log(`[抓取系统] 正在扫描 ${rows.length} 行数据...`, 'info');
+
+        const ignoreKeywords = [
+            '等待乘客', '前往接驾', '支付完成', '后台销单', '服务中', '未支付', '已支付', '三方无效', 
+            '时间模式', '一口价', '腾讯出行', '自创单', '高德', '滴滴',
+            '查看', '手机尾号', '尾号', '操作', '订单状态'
+        ];
+        const dateRegex = /^\d{4}-\d{2}-\d{2}/; 
+
+        rows.forEach(row => {
+            const cells = row.querySelectorAll('.cell');
+            cells.forEach(cell => {
+                // 获取文本并去除两端空格
+                let text = cell.innerText ? cell.innerText.trim() : '';
+                if (!text) return;
+
+                // 1. 识别电话: 精确 11 位数字
+                // 有时候电话里会有不可见字符，再用正则提取一遍
+                const phoneMatch = text.match(/^1\d{10}$/);
+                if (phoneMatch) {
+                    const phone = phoneMatch[0];
+                    if (!state.db.phones.includes(phone)) {
+                        addToDB('phone', phone);
+                        uploadSingleItem('phone', phone);
+                        log(`🆕 抓取新号码: ${phone}`, 'success');
+                    }
+                    return; // 这一格是电话，就不用看是不是地址了
+                }
+
+                // 2. 识别地址: 排除法
+                // 长度限制宽松一点，防止短地名漏掉
+                if (text.length >= 3 && /[\u4e00-\u9fa5]/.test(text) && !dateRegex.test(text)) {
+                    // 再次检查是否含有被排除的词
+                    const isIgnored = ignoreKeywords.some(k => text.includes(k));
+                    if (!isIgnored) {
+                        // 确保不是纯数字混杂
+                        if (/^\d+$/.test(text)) return; 
+
+                        if (!state.db.addrs.includes(text)) {
+                            // 黑名单再次过滤
+                            const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
+                            if (!blockers.some(b => text.includes(b))) {
+                                addToDB('address', text);
+                                uploadSingleItem('addr', text);
+                                log(`🆕 抓取新地址: ${text}`, 'success');
+                            }
+                        }
+                    }
+                }
+            });
+        });
+    };
+
+    // 单条数据上传
+    const uploadSingleItem = (type, value) => {
+        const url = CONFIG.CLOUD.SYNC_URL;
+        const token = CONFIG.CLOUD.SYNC_TOKEN;
+        if (!url || !token) return;
+
+        const targetUrl = `${url.replace(/\/$/, '')}/api/add?token=${token}`;
+        
+        GM_xmlhttpRequest({
+            method: "POST",
+            url: targetUrl,
+            data: JSON.stringify({ type: type, data: value }),
+            headers: { "Content-Type": "application/json" },
+            onload: function(response) {
+                if (response.status !== 200) {
+                    console.error('[自动上传失败]', response.responseText);
+                }
+            },
+            onerror: function(e) { console.error('[自动上传网络错误]', e); }
+        });
+    };
+
+    // ==============================================
+    //               云端同步 / 数据库
+    // ==============================================
     
     const applyDistanceByTime = () => {
         if (!isDispatchPage()) return;
@@ -166,7 +317,6 @@
         setSliderValue(targetKm);
     };
 
-    // 数据库操作：添加数据（自动去重、置顶）
     const addToDB = (type, value) => {
         if (!value) return;
         const list = type === 'address' ? state.db.addrs : state.db.phones;
@@ -182,7 +332,6 @@
         else GM_setValue('dbPhones', JSON.stringify(list));
     };
 
-    // 地址库清洗
     const cleanDBWithBlacklist = () => {
         if (!state.db.addrs || state.db.addrs.length === 0) return;
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
@@ -198,97 +347,6 @@
             updateListsUI();
         }
     };
-
-    // ==============================================
-    //        新增功能：自动扫描订单页并上传
-    // ==============================================
-    
-    // 扫描订单表格
-    const scanOrderPage = () => {
-        if (!isOrderPage()) return;
-        
-        // Element UI 表格行选择器
-        const rows = document.querySelectorAll('.el-table__body-wrapper tbody tr, .el-table__row');
-        if (rows.length === 0) return;
-
-        // 定义不需要的关键词（排除状态、模式等）
-        const ignoreKeywords = [
-            '等待乘客', '前往接驾', '支付完成', '后台销单', '服务中', '未支付', '已支付', '三方无效', 
-            '时间模式', '一口价', '腾讯出行', '自创单', '高德', '滴滴',
-            '查看', '手机尾号', '尾号'
-        ];
-        
-        const dateRegex = /^\d{4}-\d{2}-\d{2}/; // 排除日期列
-
-        let newPhoneCount = 0;
-        let newAddrCount = 0;
-
-        rows.forEach(row => {
-            const cells = row.querySelectorAll('.cell');
-            cells.forEach(cell => {
-                let text = cell.innerText.trim();
-                if (!text) return;
-                
-                // 1. 识别电话 (11位数字)
-                if (/^1\d{10}$/.test(text)) {
-                    if (!state.db.phones.includes(text)) {
-                        addToDB('phone', text);
-                        uploadSingleItem('phone', text); // 触发单条上传
-                        log(`🆕 抓取新号码: ${text}`, 'success');
-                        newPhoneCount++;
-                    }
-                    return;
-                }
-
-                // 2. 识别地址 (排除法)
-                // 条件：长度>=4, 包含中文, 不是日期, 不包含排除词
-                if (text.length >= 4 && /[\u4e00-\u9fa5]/.test(text) && !dateRegex.test(text)) {
-                    // 检查排除词
-                    const isIgnored = ignoreKeywords.some(k => text.includes(k));
-                    if (!isIgnored) {
-                        // 额外清洗：有时候地址会带括号说明，尽量提取核心
-                        if (!state.db.addrs.includes(text)) {
-                            // 再次经过黑名单清洗确保安全
-                            const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
-                            if (!blockers.some(b => text.includes(b))) {
-                                addToDB('address', text);
-                                uploadSingleItem('addr', text); // 触发单条上传
-                                log(`🆕 抓取新地址: ${text}`, 'success');
-                                newAddrCount++;
-                            }
-                        }
-                    }
-                }
-            });
-        });
-    };
-
-    // 单条数据上传 (调用 Worker /api/add)
-    const uploadSingleItem = (type, value) => {
-        const url = CONFIG.CLOUD.SYNC_URL;
-        const token = CONFIG.CLOUD.SYNC_TOKEN;
-        if (!url || !token) return;
-
-        const targetUrl = `${url.replace(/\/$/, '')}/api/add?token=${token}`;
-        
-        GM_xmlhttpRequest({
-            method: "POST",
-            url: targetUrl,
-            data: JSON.stringify({ type: type, data: value }), // type: 'addr' or 'phone'
-            headers: { "Content-Type": "application/json" },
-            onload: function(response) {
-                // 静默上传，不需要频繁弹窗，只在控制台记录
-                if (response.status !== 200) {
-                    console.error('[自动上传失败]', response.responseText);
-                }
-            },
-            onerror: function(e) { console.error('[自动上传网络错误]', e); }
-        });
-    };
-
-    // ==============================================
-    //               云端同步核心逻辑 (覆盖模式)
-    // ==============================================
 
     const fetchOnlineBlacklist = (silent = false) => {
         const t = new Date().getTime();
@@ -344,7 +402,6 @@
         });
     };
 
-    // 从云端拉取并覆盖 (Overwrite)
     const pullFromCloud = (isAuto = false) => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
@@ -369,39 +426,34 @@
                     let importedPhones = 0;
                     let blCount = 0;
                     
-                    // 智能解析格式
                     if (text.includes('[BLACKLIST]') || text.includes('[ADDRS]') || text.includes('[PHONES]')) {
                         const sections = text.split(/\[(BLACKLIST|ADDRS|PHONES)\]/);
                         for(let i=1; i<sections.length; i+=2) {
                             const type = sections[i];
                             const content = sections[i+1];
-                            // 过滤空行和首尾空格
                             const lines = content.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
                             if (type === 'BLACKLIST') {
                                 state.blacklist = lines.join(',');
                                 GM_setValue('blacklist', state.blacklist);
                                 blCount = lines.length;
                             } else if (type === 'ADDRS') {
-                                // 核心修改：直接替换本地数组 (Overwrite)
                                 state.db.addrs = lines;
                                 GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
                                 importedAddrs = lines.length;
                             } else if (type === 'PHONES') {
-                                // 核心修改：直接替换本地数组 (Overwrite)
                                 state.db.phones = lines;
                                 GM_setValue('dbPhones', JSON.stringify(state.db.phones));
                                 importedPhones = lines.length;
                             }
                         }
                     } else {
-                        // 兼容旧格式：当做地址处理
                         const lines = text.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
                         state.db.addrs = lines;
                         GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
                         importedAddrs = lines.length;
                     }
 
-                    cleanDBWithBlacklist(); // 再次清洗确保合规
+                    cleanDBWithBlacklist(); 
                     updateListsUI();
                     if (!isAuto) {
                         alert(`☁️ 覆盖成功！本地数据已与云端同步。\n\n- 隔离库: ${blCount} 条\n- 地址库: ${importedAddrs} 条\n- 电话库: ${importedPhones} 条`);
@@ -417,7 +469,6 @@
         });
     };
 
-    // 上传到云端 (Push - 覆盖模式，保留手动按钮功能)
     const pushToCloud = () => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
@@ -443,7 +494,6 @@
         });
     };
     
-    // 设置向导
     const setupCloudConfig = () => {
         const currentUrl = CONFIG.CLOUD.SYNC_URL || '';
         const currentToken = CONFIG.CLOUD.SYNC_TOKEN || '';
@@ -490,8 +540,7 @@
         if (btn) {
             btn.click();
             state.countdown = state.refreshInterval;
-            // 点击刷新后，稍微延迟一下进行数据抓取，等待表格加载
-            if(isOrderPage()) setTimeout(scanOrderPage, 2500); 
+            // 点击刷新后，不依赖 setTimeout 抓取，而是依赖 MutationObserver
         }
     };
 
@@ -500,16 +549,13 @@
         state.countdown = state.refreshInterval;
         updateStatusText();
         state.timerId = setInterval(() => {
+            // 注意：这里是刷新倒计时，与抓取无关
             if (state.manualPause) return;
             state.countdown--;
             updateStatusText(); 
             if (state.countdown <= 0) {
                 performAction();
                 state.countdown = state.refreshInterval; 
-            }
-            // 在倒计时期间也定期尝试抓取（防止页面未刷新但有数据残留）
-            if (isOrderPage() && state.countdown % 3 === 0) {
-                scanOrderPage();
             }
         }, 1000);
     };
@@ -877,18 +923,26 @@
     const renderMainContent = (container) => {
         let html = '';
         if (isOrderPage() || isDriverPage()) {
-            const btnClass = state.manualPause ?
-            'btn-resume' : 'btn-pause';
+            // 刷新按钮样式
+            const btnClass = state.manualPause ? 'btn-resume' : 'btn-pause';
             const btnText = state.manualPause ? '▶ 恢复运行' : '⏸ 暂停刷新';
-            const statusColor = state.manualPause ?
-            'var(--gj-text-sec)' : '#409EFF';
+            const statusColor = state.manualPause ? 'var(--gj-text-sec)' : '#409EFF';
             
+            // 抓取按钮样式 (新增)
+            const scrapeClass = state.isScrapingEnabled ? 'btn-resume' : 'btn-preset';
+            const scrapeText = state.isScrapingEnabled ? '👁️ 自动抓取: 开启' : '🙈 自动抓取: 关闭';
+            const scrapeStyle = state.isScrapingEnabled ? 'border:1px solid #e1f3d8;background:#f0f9eb;color:#67c23a;' : 'border:1px solid var(--gj-border);background:var(--gj-bg-sec);color:var(--gj-text-mute);';
+
             html = `
                 <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
                     <span class="gj-timer-text" style="color:${statusColor}">${state.manualPause ?
                     '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
                 </div>
+                
                 <button id="gj-btn-toggle" class="gj-btn ${btnClass}">${btnText}</button>
+                
+                <button id="gj-btn-scrape" class="gj-btn" style="margin-top:8px; ${scrapeStyle}">${scrapeText}</button>
+
                 <div class="gj-control-row">
                     <span style="color:var(--gj-text-sec);font-size:12px;">刷新间隔</span>
                     <div style="display:flex;align-items:center;">
@@ -964,11 +1018,27 @@
         }
         
         if (document.getElementById('gj-btn-toggle')) {
+            // 暂停/恢复 按钮
             document.getElementById('gj-btn-toggle').addEventListener('click', () => {
                 state.manualPause = !state.manualPause;
                 GM_setValue('manualPause', state.manualPause);
                 updateUI();
             });
+
+            // 抓取开关 按钮
+            const scrapeBtn = document.getElementById('gj-btn-scrape');
+            if (scrapeBtn) {
+                scrapeBtn.addEventListener('click', () => {
+                    state.isScrapingEnabled = !state.isScrapingEnabled;
+                    GM_setValue('scrapeEnabled', state.isScrapingEnabled);
+                    updateUI();
+                    // 开启时立即尝试扫描一次
+                    if (state.isScrapingEnabled) {
+                        scanOrderPage();
+                    }
+                });
+            }
+
             document.getElementById('gj-btn-set').addEventListener('click', () => {
                 const val = parseInt(document.getElementById('gj-input-interval').value);
                 if (val > 0) {
@@ -1194,6 +1264,14 @@
             color: #67c23a; border:1px solid #e1f3d8; }
             .gj-dark .btn-resume { background: #1b4a24;
             color: #67c23a; border:1px solid #2b6339; }
+            
+            .btn-preset { 
+                background: var(--gj-bg-sec);
+                border: 1px solid var(--gj-border); color: var(--gj-text-sec); 
+                padding: 6px 0; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight:600;
+            }
+            .btn-preset:hover { background: var(--gj-hover); border-color: #b3d8ff; color: #409EFF;
+            }
 
             .btn-green { background: linear-gradient(135deg, #42e695 0%, #3bb2b8 100%);
             color: white; }
@@ -1228,14 +1306,7 @@
             color: var(--gj-text-mute); margin: 0 8px; white-space:nowrap;}
             .gj-grid-btns { display: grid;
             grid-template-columns: repeat(5, 1fr); gap: 5px; }
-            .btn-preset { 
-                background: var(--gj-bg-sec);
-                border: 1px solid var(--gj-border); color: var(--gj-text-sec); 
-                padding: 6px 0; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight:600;
-            }
-            .btn-preset:hover { background: var(--gj-hover); border-color: #b3d8ff; color: #409EFF;
-            }
-            
+
             .gj-bottom-controls { display:flex;
             justify-content:space-between; align-items:center; margin-top:12px; padding-top:10px; border-top:1px dashed var(--gj-border); }
             
