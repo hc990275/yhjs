@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v12.5 强制覆盖版)
+// @name          代驾调度系统助手 (v12.6 强制覆盖版)
 // @namespace     http://tampermonkey.net/
-// @version       12.5
+// @version       12.6
 // @description   【强制同步】以云端为准！进入派单页或点击下载时，直接用云端数据覆盖本地；已添加网络白名单。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
@@ -1165,7 +1165,8 @@
                 clip-path: polygon(100% 0, 100% 100%, 0 100%);
             }
             .gj-resize-handle:hover {
-                background: linear-gradient(135deg, transparent 50%, #409EFF 50%); opacity: 1;
+                background: linear-gradient(135deg, transparent 50%, #409EFF 50%);
+                opacity: 1;
             }
         `);
     };
