@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v12.6 强制覆盖版)
+// @name          代驾调度系统助手 (v12.7 终极完整版)
 // @namespace     http://tampermonkey.net/
-// @version       12.6
+// @version       12.7
 // @description   【强制同步】以云端为准！进入派单页或点击下载时，直接用云端数据覆盖本地；已添加网络白名单。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
