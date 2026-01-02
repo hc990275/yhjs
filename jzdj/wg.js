@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v12.3 修复连接版)
+// @name          代驾调度系统助手 (v12.4 自动同步版)
 // @namespace     http://tampermonkey.net/
-// @version       12.3
-// @description   【云同步】已添加网络白名单。支持 [黑名单]、[地址]、[电话] 三库独立同步到 Cloudflare Worker。
+// @version       12.4
+// @description   【自动化】进入派单页自动拉取云端[地址/电话/黑名单]；已添加网络白名单。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -47,7 +47,7 @@
             FALLBACK_BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=yf2kve&t=1767326208607",
             
             // === 云同步配置 (自动读取设置) ===
-            SYNC_URL: GM_getValue('cloud_sync_url', 'https://txt.abcai.online/'), 
+            SYNC_URL: GM_getValue('cloud_sync_url', 'https://txt.abcai.online'), 
             SYNC_TOKEN: GM_getValue('cloud_sync_token', '990299') 
         },
         STORAGE: {
@@ -119,10 +119,13 @@
             state.refreshInterval = saved;
         } else if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
-            log('进入派单界面，开始同步...', 'info');
+            log('进入派单界面，开始自动同步...', 'info');
             
-            // 自动同步黑名单
+            // 1. 自动同步黑名单 (保留GitHub兜底)
             fetchOnlineBlacklist(true);
+            
+            // 2. [新增] 自动全量拉取地址和电话
+            pullFromCloud(true);
             
             setTimeout(applyDistanceByTime, 1500);
         }
@@ -182,31 +185,21 @@
         else GM_setValue('dbPhones', JSON.stringify(list));
     };
 
-    // 地址库清洗（包含隔离库剔除 + 超长地址剔除）
+    // 地址库清洗
     const cleanDBWithBlacklist = () => {
         if (!state.db.addrs || state.db.addrs.length === 0) return;
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
         const originalCount = state.db.addrs.length;
-        // 执行过滤
         state.db.addrs = state.db.addrs.filter(addr => {
-            // 规则1：包含隔离库关键词 -> 删
-            if (blockers.length > 0 && blockers.some(keyword => addr.includes(keyword))) {
-                return false;
-            }
-            // 规则2：汉字数量超过 7 个 -> 删
+            if (blockers.length > 0 && blockers.some(keyword => addr.includes(keyword))) return false;
             const hanziMatches = addr.match(/[\u4e00-\u9fa5]/g);
-            const hanziCount = hanziMatches ? hanziMatches.length : 0;
-            if (hanziCount > 6) {
-                return false;
-            }
+            if ((hanziMatches ? hanziMatches.length : 0) > 6) return false;
             return true;
         });
         if (originalCount !== state.db.addrs.length) {
             GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
             updateListsUI();
-            log(`库清洗完成: 移除 ${originalCount - state.db.addrs.length} 条 (命中隔离库或汉字>7)`, 'warning');
-        } else {
-            // log('库清洗完成: 无需移除', 'info');
+            log(`库清洗完成: 移除 ${originalCount - state.db.addrs.length} 条`, 'warning');
         }
     };
 
@@ -217,7 +210,6 @@
     // 获取在线黑名单 (优先 Worker，失败降级 Github)
     const fetchOnlineBlacklist = (silent = false) => {
         const t = new Date().getTime();
-        
         // 1. 尝试从 Cloudflare Worker 获取
         if (CONFIG.CLOUD.SYNC_URL && CONFIG.CLOUD.SYNC_TOKEN) {
             const cloudUrl = `${CONFIG.CLOUD.SYNC_URL.replace(/\/$/, '')}/txt?token=${CONFIG.CLOUD.SYNC_TOKEN}`;
@@ -227,7 +219,6 @@
                 onload: function(response) {
                     if (response.status === 200) {
                         const text = response.responseText;
-                        // 尝试解析 Worker 格式
                         if (text && text.includes('[BLACKLIST]')) {
                             const sections = text.split(/\[(BLACKLIST|ADDRS|PHONES)\]/);
                             for(let i=1; i<sections.length; i+=2) {
@@ -244,13 +235,11 @@
                             }
                         }
                     }
-                    // Worker 失败或为空，降级
                     fetchGithubFallback(silent, t);
                 },
                 onerror: () => fetchGithubFallback(silent, t)
             });
         } else {
-            // 未配置 Worker，直接用 Github
             fetchGithubFallback(silent, t);
         }
     };
@@ -275,14 +264,19 @@
         });
     };
 
-    // 从云端拉取 (Pull) - 支持分库读取
-    const pullFromCloud = () => {
+    // 从云端拉取 (Pull) - 增加 isAuto 参数
+    const pullFromCloud = (isAuto = false) => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
-        if (!url || !token) { alert('请先点击 ⚙️ 设置 Worker 域名和 Token'); setupCloudConfig(); return; }
+        
+        // 自动模式下，如果没配置 Worker，则不弹窗警告，直接退出
+        if (!url || !token) { 
+            if (!isAuto) { alert('请先点击 ⚙️ 设置 Worker 域名和 Token'); setupCloudConfig(); }
+            return; 
+        }
 
         const targetUrl = `${url.replace(/\/$/, '')}/txt?token=${token}`;
-        log('正在全量拉取...', 'info');
+        if (!isAuto) log('正在全量拉取...', 'info');
 
         GM_xmlhttpRequest({
             method: "GET",
@@ -315,7 +309,7 @@
                             }
                         }
                     } else {
-                        // 兼容旧的混合纯文本格式
+                        // 兼容旧格式
                         const lines = text.split(/[\r\n]+/);
                         lines.reverse().forEach(line => {
                             if(parseTextToDB(line.trim())) importedAddrs++;
@@ -324,16 +318,21 @@
 
                     cleanDBWithBlacklist(); 
                     updateListsUI();
-                    alert(`☁️ 同步成功！\n\n- 隔离库更新: ${blCount} 条\n- 地址库合并: ${importedAddrs} 条\n- 电话库合并: ${importedPhones} 条`);
+                    
+                    if (!isAuto) {
+                        alert(`☁️ 同步成功！\n\n- 隔离库更新: ${blCount} 条\n- 地址库合并: ${importedAddrs} 条\n- 电话库合并: ${importedPhones} 条`);
+                    } else {
+                        log(`[自动同步] 成功: 隔离${blCount}/地址${importedAddrs}/电话${importedPhones}`, 'success');
+                    }
                 } else {
-                    alert('❌ 拉取失败: ' + response.statusText);
+                    if (!isAuto) alert('❌ 拉取失败: ' + response.statusText);
                 }
             },
-            onerror: function(e) { alert('❌ 网络错误'); }
+            onerror: function(e) { if (!isAuto) alert('❌ 网络错误'); }
         });
     };
 
-    // 上传到云端 (Push) - 分库打包
+    // 上传到云端 (Push)
     const pushToCloud = () => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
@@ -436,7 +435,6 @@
     const parseTextToDB = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
         let hasUpdate = false;
-        // 提取电话
         const phoneRegex = /(?:^|[^\d])(1\d{10})(?:$|[^\d])/g;
         let phoneMatch;
         let tempTextForPhone = fullText;
@@ -448,28 +446,19 @@
                 log('提取电话: ' + num, 'success');
             }
         }
-
-        // 提取地址
         let addrText = fullText.replace(phoneRegex, ' ').trim();
         const segments = addrText.split(/[\r\n,;，；]+/); 
         const symbolRegex = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`·！@#￥%……&*（）—+={}|【】；：‘’“”、，。《》？]/;
-
         segments.reverse().forEach(seg => {
             const cleanSeg = seg.trim();
             if (!cleanSeg || cleanSeg.length < 2) return;
             const firstChar = cleanSeg.charAt(0);
             if (/[0-9]/.test(firstChar) || /[a-zA-Z]/.test(firstChar) || symbolRegex.test(firstChar)) return; 
-            
-            // 注意：这里我们先把地址存进去，哪怕它有违规词或太长。
-            // 存完后，调用 cleanDBWithBlacklist() 会自动把它删掉。
             addToDB('address', cleanSeg);
             hasUpdate = true;
             log('提取地址: ' + cleanSeg.substring(0, 6) + '...', 'info');
         });
-        
-        if (hasUpdate) {
-            cleanDBWithBlacklist();
-        }
+        if (hasUpdate) cleanDBWithBlacklist();
         return hasUpdate;
     };
 
@@ -484,7 +473,6 @@
         } catch (e) {}
     };
 
-    // 本地文件导入逻辑
     const handleFileImport = (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -507,7 +495,6 @@
         e.target.value = '';
     };
 
-    // 输入框定位逻辑
     const fillInput = (type, value) => {
         let input = null;
         if (type === 'address') {
@@ -534,7 +521,6 @@
                      }
                  }
              }
-
         } else if (type === 'phone') {
              const inputs = document.querySelectorAll('input');
              for (let i = 0; i < inputs.length; i++) {
@@ -546,7 +532,6 @@
                  }
              }
         }
-
         if (input) {
             input.value = value;
             input.dispatchEvent(new Event('input', { bubbles: true }));
@@ -583,12 +568,10 @@
         }
     };
 
-    // 搜索算法
     const isMatch = (dbItem, inputKey, type) => {
         if (!inputKey) return true;
         const cleanKey = inputKey.trim();
         if (!cleanKey) return true;
-
         if (type === 'phone') {
             if (dbItem.includes(cleanKey)) return true;
             if (cleanKey.includes(dbItem)) return true;
@@ -601,12 +584,9 @@
             }
             return false;
         }
-        
         const keywords = cleanKey.split(/\s+/);
         return keywords.every(k => dbItem.includes(k));
     };
-
-    // --------------- UI 界面生成 ---------------
 
     const applyLayout = () => {
         const addrWidget = document.getElementById('gj-widget-addr');
@@ -623,7 +603,6 @@
         updateUI();
         applyGlobalTheme(); 
     };
-
     const applyGlobalTheme = () => {
         const doc = document.documentElement;
         if (state.theme === 'dark') {
@@ -729,7 +708,7 @@
 
         // 绑定同步事件
         widget.querySelector('#btn-cloud-setting').addEventListener('click', setupCloudConfig);
-        widget.querySelector('#btn-cloud-pull').addEventListener('click', pullFromCloud);
+        widget.querySelector('#btn-cloud-pull').addEventListener('click', () => pullFromCloud(false)); // 手动点，弹窗
         widget.querySelector('#btn-cloud-push').addEventListener('click', pushToCloud);
 
         widget.querySelector('#btn-refresh-addr').addEventListener('click', () => processClipboard(true));
