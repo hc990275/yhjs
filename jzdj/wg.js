@@ -1,14 +1,12 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v13.7 网络修复版)
+// @name          代驾调度系统助手 (v13.8 智能过滤版)
 // @namespace     http://tampermonkey.net/
-// @version       13.7
-// @description   【修复上传错误】增加了网络连接权限声明；保留第4列抓电话、排除第2/3列无效订单的功能；解决 Refused to connect 报错。
+// @version       13.8
+// @description   【智能过滤】自动识别表头列名；精准排除"后台销单/乘客取消"和"新腾讯/盛大"渠道；自动忽略无效订单；网络权限已优化。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
 // @connect       abcai.online
-// @connect       localhost
-// @connect       127.0.0.1
 // @connect       *
 // @grant         GM_setValue
 // @grant         GM_getValue
@@ -46,7 +44,6 @@
         },
         CLOUD: {
             FALLBACK_BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=yf2kve&t=1767326208607",
-            // 这里使用了更宽松的默认值，防止用户未配置时报错
             SYNC_URL: GM_getValue('cloud_sync_url', 'https://txt.abcai.online'), 
             SYNC_TOKEN: GM_getValue('cloud_sync_token', '990299') 
         },
@@ -72,6 +69,9 @@
         timerId: null,
         scrapeObserver: null,
         
+        // 动态列索引缓存
+        colIndices: { status: -1, channel: -1, phone: -1, addr: -1 },
+
         posMain: safeParse('posMain', '{"top":"80px","left":"20px"}'),
         posAddr: safeParse('posAddr', '{"top":"80px","left":"300px"}'),
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
@@ -145,7 +145,7 @@
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
     
     // ==============================================
-    //        核心修正：列定位 + 行过滤
+    //        核心修正：智能列识别 + 严格过滤
     // ==============================================
     
     const setupTableObserver = () => {
@@ -166,7 +166,7 @@
                 }
             }
             if (timeout) clearTimeout(timeout);
-            timeout = setTimeout(() => { scanOrderPage(); }, 800); 
+            timeout = setTimeout(() => { updateColumnIndices(); scanOrderPage(); }, 800); 
         });
         state.scrapeObserver.observe(targetNode, config);
     };
@@ -178,62 +178,75 @@
         }
     };
 
+    // 新增：自动识别各列索引
+    const updateColumnIndices = () => {
+        const headerThs = document.querySelectorAll('.el-table__header-wrapper th');
+        if (!headerThs || headerThs.length === 0) return;
+
+        // 重置索引
+        state.colIndices = { status: -1, channel: -1, phone: -1, addr: -1 };
+
+        headerThs.forEach((th, index) => {
+            const text = th.innerText.trim();
+            if (!text) return;
+
+            if (text.includes('状态') || text.includes('订单状态')) state.colIndices.status = index;
+            else if (text.includes('渠道') || text.includes('来源') || text.includes('订单渠道')) state.colIndices.channel = index;
+            else if (text.includes('电话') || text.includes('手机') || text.includes('用户')) state.colIndices.phone = index;
+            else if (text.includes('起点') || text.includes('地址') || text.includes('出发')) state.colIndices.addr = index;
+        });
+
+        // 没找到时使用默认兜底（假设用户之前说的顺序：2状态, 3渠道, 4电话）
+        // DOM索引通常从0开始，所以 2列->1, 3列->2, 4列->3
+        if (state.colIndices.status === -1) state.colIndices.status = 1;
+        if (state.colIndices.channel === -1) state.colIndices.channel = 2;
+        if (state.colIndices.phone === -1) state.colIndices.phone = 3;
+        
+        // console.log('[调试] 列索引识别结果:', state.colIndices);
+    };
+
     const scanOrderPage = () => {
         if (!isOrderPage() || !state.isScrapingEnabled) return;
 
-        // --- 1. 确定列号 (基于0开始的索引) ---
-        const IDX_STATUS = 1; // 第2列
-        const IDX_CHANNEL = 2; // 第3列
-        const IDX_PHONE = 3;   // 第4列
-        
-        // 地址列尝试自动识别
-        let addrIndex = -1;
-        const headerThs = document.querySelectorAll('.el-table__header-wrapper th');
-        if (headerThs && headerThs.length > 0) {
-            headerThs.forEach((th, index) => {
-                const text = th.innerText.trim();
-                if (text.includes('起点') || text.includes('地址') || text.includes('出发')) {
-                    addrIndex = index;
-                }
-            });
-        }
+        // 确保有了索引
+        if (state.colIndices.phone === -1) updateColumnIndices();
 
-        // --- 2. 遍历内容行 ---
         const rows = document.querySelectorAll('.el-table__body-wrapper .el-table__row');
         
         rows.forEach(row => {
             const cells = row.querySelectorAll('td');
-            if (cells.length < 4) return; // 单元格不足，跳过
+            if (cells.length < 4) return; 
 
-            // === 过滤逻辑 Start ===
-            
-            // 1. 检查第2列(状态)：排除“后台消单”、“乘客取消”
-            const statusText = cells[IDX_STATUS].innerText.trim();
-            if (statusText.includes('后台销单') || statusText.includes('后台消单') || statusText.includes('乘客取消')) {
-                return; // 跳过此行
+            // === 1. 状态过滤 (后台销单 / 乘客取消) ===
+            if (state.colIndices.status !== -1 && cells[state.colIndices.status]) {
+                const statusText = cells[state.colIndices.status].innerText.trim();
+                if (statusText.includes('后台销单') || statusText.includes('后台消单') || statusText.includes('乘客取消')) {
+                    // console.log('❌ 跳过无效订单:', statusText);
+                    return; 
+                }
             }
 
-            // 2. 检查第3列(渠道)：排除“新腾讯出行”、“盛大”
-            const channelText = cells[IDX_CHANNEL].innerText.trim();
-            if (channelText.includes('新腾讯出行') || channelText.includes('盛大')) {
-                return; // 跳过此行
+            // === 2. 渠道过滤 (新腾讯出行 / 盛大) ===
+            if (state.colIndices.channel !== -1 && cells[state.colIndices.channel]) {
+                const channelText = cells[state.colIndices.channel].innerText.trim();
+                if (channelText.includes('新腾讯出行') || channelText.includes('盛大')) {
+                    // console.log('❌ 跳过无效渠道:', channelText);
+                    return; 
+                }
             }
             
-            // === 过滤逻辑 End ===
-
-            // --- 抓取电话 (第4列) ---
-            if (cells[IDX_PHONE]) {
-                const rawText = cells[IDX_PHONE].innerText.trim();
-                const cleanNum = rawText.replace(/\D/g, ''); // 仅保留数字
-                
+            // === 3. 抓取电话 ===
+            if (state.colIndices.phone !== -1 && cells[state.colIndices.phone]) {
+                const rawText = cells[state.colIndices.phone].innerText.trim();
+                const cleanNum = rawText.replace(/\D/g, ''); 
                 if (/^1\d{10}$/.test(cleanNum)) {
                     processPhone(cleanNum);
                 }
             }
 
-            // --- 抓取地址 ---
-            if (addrIndex !== -1 && cells[addrIndex]) {
-                const addrText = cells[addrIndex].innerText.trim();
+            // === 4. 抓取地址 ===
+            if (state.colIndices.addr !== -1 && cells[state.colIndices.addr]) {
+                const addrText = cells[state.colIndices.addr].innerText.trim();
                 if (addrText && addrText.length > 1) {
                     const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                     if (!blockers.some(b => addrText.includes(b))) {
@@ -277,14 +290,11 @@
             headers: { "Content-Type": "application/json" },
             onload: function(response) {
                 if (response.status !== 200) {
-                    // 如果仍然报错，但在控制台看到，说明是跨域或者服务器错误
-                    console.error('[自动上传失败] 状态码:', response.status, '内容:', response.responseText);
-                } else {
-                    console.log('[自动上传成功]', type, value);
+                    console.error('[自动上传失败]', response.responseText);
                 }
             },
             onerror: function(e) { 
-                console.error('[自动上传网络错误] 请检查油猴Tampermonkey是否有跨域权限。请点击脚本管理页面的"设置" -> "XHR安全" -> 添加域名。', e); 
+                console.error('[自动上传网络错误] 请检查油猴Tampermonkey设置 -> XHR安全 -> 添加域名: txt.abcai.online', e); 
             }
         });
     };
