@@ -1,12 +1,14 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v13.6 精准过滤版)
+// @name          代驾调度系统助手 (v13.7 网络修复版)
 // @namespace     http://tampermonkey.net/
-// @version       13.6
-// @description   【过滤增强】第4列抓电话；第2列排除(后台销单/乘客取消)；第3列排除(新腾讯出行/盛大)；精准抓取有效订单。
+// @version       13.7
+// @description   【修复上传错误】增加了网络连接权限声明；保留第4列抓电话、排除第2/3列无效订单的功能；解决 Refused to connect 报错。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
-// @connect       github.abcai.online
+// @connect       abcai.online
+// @connect       localhost
+// @connect       127.0.0.1
 // @connect       *
 // @grant         GM_setValue
 // @grant         GM_getValue
@@ -44,6 +46,7 @@
         },
         CLOUD: {
             FALLBACK_BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=yf2kve&t=1767326208607",
+            // 这里使用了更宽松的默认值，防止用户未配置时报错
             SYNC_URL: GM_getValue('cloud_sync_url', 'https://txt.abcai.online'), 
             SYNC_TOKEN: GM_getValue('cloud_sync_token', '990299') 
         },
@@ -179,12 +182,9 @@
         if (!isOrderPage() || !state.isScrapingEnabled) return;
 
         // --- 1. 确定列号 (基于0开始的索引) ---
-        // 第2列 -> 索引1 (状态)
-        // 第3列 -> 索引2 (渠道)
-        // 第4列 -> 索引3 (电话)
-        const IDX_STATUS = 1;
-        const IDX_CHANNEL = 2;
-        const IDX_PHONE = 3;
+        const IDX_STATUS = 1; // 第2列
+        const IDX_CHANNEL = 2; // 第3列
+        const IDX_PHONE = 3;   // 第4列
         
         // 地址列尝试自动识别
         let addrIndex = -1;
@@ -208,7 +208,6 @@
             // === 过滤逻辑 Start ===
             
             // 1. 检查第2列(状态)：排除“后台消单”、“乘客取消”
-            // 注意：ElementUI 有时候会有隐藏列，通常 text 提取比较准
             const statusText = cells[IDX_STATUS].innerText.trim();
             if (statusText.includes('后台销单') || statusText.includes('后台消单') || statusText.includes('乘客取消')) {
                 return; // 跳过此行
@@ -222,7 +221,6 @@
             
             // === 过滤逻辑 End ===
 
-            
             // --- 抓取电话 (第4列) ---
             if (cells[IDX_PHONE]) {
                 const rawText = cells[IDX_PHONE].innerText.trim();
@@ -279,10 +277,15 @@
             headers: { "Content-Type": "application/json" },
             onload: function(response) {
                 if (response.status !== 200) {
-                    console.error('[自动上传失败]', response.responseText);
+                    // 如果仍然报错，但在控制台看到，说明是跨域或者服务器错误
+                    console.error('[自动上传失败] 状态码:', response.status, '内容:', response.responseText);
+                } else {
+                    console.log('[自动上传成功]', type, value);
                 }
             },
-            onerror: function(e) { console.error('[自动上传网络错误]', e); }
+            onerror: function(e) { 
+                console.error('[自动上传网络错误] 请检查油猴Tampermonkey是否有跨域权限。请点击脚本管理页面的"设置" -> "XHR安全" -> 添加域名。', e); 
+            }
         });
     };
 
