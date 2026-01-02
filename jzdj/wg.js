@@ -1,7 +1,7 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v12.10 终极完整版)
+// @name          代驾调度系统助手 (v12.11 自动抓取上传版)
 // @namespace     http://tampermonkey.net/
-// @version       12.10
+// @version       12.11
 // @description   【全自动闭环】持续监控订单列表；自动识别并抓取[电话]和[地址]上传云端；修复抓取中断问题；增加状态显示。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
@@ -112,28 +112,29 @@
     const checkPage = () => {
         state.currentHash = window.location.hash;
         
-        // 停止之前的抓取循环
+        // 每次切页面先清除抓取定时器
         if (state.scrapeTimer) {
             clearInterval(state.scrapeTimer);
             state.scrapeTimer = null;
         }
 
-        // 订单管理页
+        // 1. 订单列表页 -> 开启抓取
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
+            
             // 开启持续监控循环，每3秒扫一次表格
             if (!state.manualPause) {
                 state.scrapeTimer = setInterval(autoScrapeOrders, 3000);
                 showToast('👁️ 自动抓取已启动');
             }
         } 
-        // 司机调度页
+        // 2. 司机调度页
         else if (isDriverPage()) {
             let saved = GM_getValue('driverInterval');
             if (!saved) saved = CONFIG.DRIVER.DEFAULT_INTERVAL;
             state.refreshInterval = saved;
         } 
-        // 派单页
+        // 3. 派单页 -> 开启同步
         else if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
             log('进入派单界面，开始自动同步...', 'info');
@@ -167,10 +168,11 @@
     const autoScrapeOrders = () => {
         if (!isOrderPage() || state.manualPause) return;
 
+        // 获取ElementUI表格行
         const rows = document.querySelectorAll('.el-table__body-wrapper tbody tr');
         if (!rows || rows.length === 0) return;
 
-        // 动态定位列索引
+        // 动态定位列索引 (防止列顺序变化)
         const headers = document.querySelectorAll('.el-table__header-wrapper th');
         let phoneIdx = -1;
         let addrIdx = -1;
@@ -187,12 +189,12 @@
             const cells = row.querySelectorAll('td');
             if (cells.length === 0) return;
 
-            // --- 提取电话 ---
+            // --- 1. 抓取电话 ---
             let phone = '';
             if (phoneIdx > -1 && cells[phoneIdx]) {
                 phone = cells[phoneIdx].innerText.replace(/[^\d]/g, '');
             } 
-            // 暴力扫描：如果没找到列，扫描整行
+            // 兜底：如果列没找到，扫描整行找11位手机号
             if (!phone || phone.length !== 11) {
                 const rowText = row.innerText;
                 const match = rowText.match(/1[3-9]\d{9}/);
@@ -200,6 +202,7 @@
             }
 
             if (/^1\d{10}$/.test(phone)) {
+                // 如果本地没有，说明是新的
                 if (!state.db.phones.includes(phone)) {
                     addToDB('phone', phone);
                     uploadOneToCloud('phone', phone);
@@ -208,17 +211,18 @@
                 }
             }
 
-            // --- 提取地址 ---
+            // --- 2. 抓取地址 ---
             let addr = '';
             if (addrIdx > -1 && cells[addrIdx]) {
                 addr = cells[addrIdx].innerText.trim();
-                // 简单的地址清洗
+                // 简单的地址清洗与校验
                 if (addr && addr.length > 1) {
                     const isBlocked = state.blacklist.split(/[,，]/).some(k => k && addr.includes(k));
                     const hanziCount = (addr.match(/[\u4e00-\u9fa5]/g) || []).length;
                     
+                    // 过滤黑名单、过滤超长、过滤纯数字
                     if (!isBlocked && hanziCount <= 7 && !/^\d+$/.test(addr)) {
-                        // 智能去重
+                        // 智能去重：检查是否包含或被包含
                         const exists = state.db.addrs.some(exist => exist.includes(addr) || addr.includes(exist));
                         
                         if (!exists) {
@@ -236,10 +240,11 @@
             state.scrapedCount += newItemsCount;
             updateListsUI();
             updateScrapeStatus(); 
+            showToast(`抓取到 ${newItemsCount} 条新数据并上传`);
         }
     };
 
-    // 单条上传
+    // 单条上传到 Worker (使用 /api/add 接口)
     const uploadOneToCloud = (type, data) => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
@@ -253,23 +258,23 @@
             data: JSON.stringify({ type: type, data: data }),
             headers: { "Content-Type": "application/json" },
             onload: function(response) {
-                // 静默上传，不干扰用户
+                // 静默上传，不需要打扰用户，除非出错
+                // if(response.status !== 200) console.log('上传失败', response.responseText);
             }
         });
     };
 
-    // 显示状态吐司
     const showToast = (msg) => {
         let toast = document.getElementById('gj-toast');
         if(!toast) {
             toast = document.createElement('div');
             toast.id = 'gj-toast';
-            toast.style.cssText = "position:fixed; bottom:20px; left:20px; background:rgba(0,0,0,0.7); color:#fff; padding:8px 12px; border-radius:4px; font-size:12px; z-index:999999; pointer-events:none;";
+            toast.style.cssText = "position:fixed; bottom:20px; left:20px; background:rgba(0,0,0,0.7); color:#fff; padding:8px 12px; border-radius:4px; font-size:12px; z-index:999999; pointer-events:none; transition: opacity 0.5s;";
             document.body.appendChild(toast);
         }
         toast.textContent = msg;
-        toast.style.display = 'block';
-        setTimeout(() => { if(toast) toast.style.display='none'; }, 3000);
+        toast.style.opacity = '1';
+        setTimeout(() => { if(toast) toast.style.opacity = '0'; }, 3000);
     };
 
     const updateScrapeStatus = () => {
@@ -280,7 +285,7 @@
     };
 
     // ==============================================
-    //               其他基础功能 (保持不变)
+    //               原有核心逻辑 (完整保留)
     // ==============================================
 
     const applyDistanceByTime = () => {
@@ -318,14 +323,17 @@
     const cleanDBWithBlacklist = () => {
         if (!state.db.addrs || state.db.addrs.length === 0) return;
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
+        const originalCount = state.db.addrs.length;
         state.db.addrs = state.db.addrs.filter(addr => {
             if (blockers.length > 0 && blockers.some(keyword => addr.includes(keyword))) return false;
             const hanziMatches = addr.match(/[\u4e00-\u9fa5]/g);
             if ((hanziMatches ? hanziMatches.length : 0) > 6) return false;
             return true;
         });
-        GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
-        updateListsUI();
+        if (originalCount !== state.db.addrs.length) {
+            GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
+            updateListsUI();
+        }
     };
 
     const fetchOnlineBlacklist = (silent = false) => {
@@ -336,20 +344,25 @@
                 method: "GET",
                 url: cloudUrl + '&t=' + t,
                 onload: function(response) {
-                    if (response.status === 200 && response.responseText.includes('[BLACKLIST]')) {
-                        const sections = response.responseText.split(/\[(BLACKLIST|ADDRS|PHONES)\]/);
-                        for(let i=1; i<sections.length; i+=2) {
-                            if(sections[i] === 'BLACKLIST') {
-                                const bl = sections[i+1].split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s).join(',');
-                                if(bl) {
-                                    state.blacklist = bl;
-                                    GM_setValue('blacklist', bl);
-                                    cleanDBWithBlacklist();
-                                    if(!silent) log('✅ 已从 Worker 覆盖黑名单', 'success');
+                    if (response.status === 200) {
+                        const text = response.responseText;
+                        if (text && text.includes('[BLACKLIST]')) {
+                            const sections = text.split(/\[(BLACKLIST|ADDRS|PHONES)\]/);
+                            for(let i=1; i<sections.length; i+=2) {
+                                if(sections[i] === 'BLACKLIST') {
+                                    const bl = sections[i+1].split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s).join(',');
+                                    if(bl) {
+                                        state.blacklist = bl;
+                                        GM_setValue('blacklist', bl);
+                                        cleanDBWithBlacklist();
+                                        if(!silent) log('✅ 已从 Worker 覆盖黑名单', 'success');
+                                        return;
+                                    }
                                 }
                             }
                         }
-                    } else fetchGithubFallback(silent, t);
+                    }
+                    fetchGithubFallback(silent, t);
                 },
                 onerror: () => fetchGithubFallback(silent, t)
             });
@@ -363,21 +376,29 @@
             method: "GET",
             url: CONFIG.CLOUD.FALLBACK_BLACKLIST_URL + '&_=' + t,
             onload: function(response) {
-                if (response.status === 200 && response.responseText.length > 0) {
-                    const cleanList = response.responseText.replace(/[\r\n\s]+/g, ',').replace(/，/g, ',');
-                    state.blacklist = cleanList;
-                    GM_setValue('blacklist', cleanList);
-                    cleanDBWithBlacklist();
-                    if(!silent) log('✅ 已从 GitHub 同步黑名单', 'success');
+                if (response.status === 200) {
+                    const text = response.responseText;
+                    if (text && text.length > 0) {
+                        const cleanList = text.replace(/[\r\n\s]+/g, ',').replace(/，/g, ',');
+                        state.blacklist = cleanList;
+                        GM_setValue('blacklist', cleanList);
+                        cleanDBWithBlacklist();
+                        if(!silent) log('✅ 已从 GitHub 同步黑名单', 'success');
+                    }
                 }
             }
         });
     };
 
+    // 从云端拉取并覆盖 (Overwrite)
     const pullFromCloud = (isAuto = false) => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
-        if (!url || !token) { if (!isAuto) { alert('请设置云端'); setupCloudConfig(); } return; }
+        
+        if (!url || !token) { 
+            if (!isAuto) { alert('请先点击 ⚙️ 设置 Worker 域名和 Token'); setupCloudConfig(); }
+            return; 
+        }
 
         const targetUrl = `${url.replace(/\/$/, '')}/txt?token=${token}`;
         if (!isAuto) log('正在全量拉取(覆盖模式)...', 'info');
@@ -386,9 +407,15 @@
             method: "GET",
             url: targetUrl + '&t=' + new Date().getTime(),
             onload: function(response) {
-                if (response.status === 200 && response.responseText) {
+                if (response.status === 200) {
                     const text = response.responseText;
+                    if (!text) return;
                     
+                    let importedAddrs = 0;
+                    let importedPhones = 0;
+                    let blCount = 0;
+                    
+                    // 智能解析格式
                     if (text.includes('[BLACKLIST]') || text.includes('[ADDRS]') || text.includes('[PHONES]')) {
                         const sections = text.split(/\[(BLACKLIST|ADDRS|PHONES)\]/);
                         for(let i=1; i<sections.length; i+=2) {
@@ -399,24 +426,33 @@
                             if (type === 'BLACKLIST') {
                                 state.blacklist = lines.join(',');
                                 GM_setValue('blacklist', state.blacklist);
+                                blCount = lines.length;
                             } else if (type === 'ADDRS') {
                                 state.db.addrs = lines; 
                                 GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
+                                importedAddrs = lines.length;
                             } else if (type === 'PHONES') {
                                 state.db.phones = lines;
                                 GM_setValue('dbPhones', JSON.stringify(state.db.phones));
+                                importedPhones = lines.length;
                             }
                         }
                     } else {
+                        // 兼容旧格式
                         const lines = text.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
                         state.db.addrs = lines;
                         GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
+                        importedAddrs = lines.length;
                     }
 
-                    cleanDBWithBlacklist(); 
+                    cleanDBWithBlacklist();
                     updateListsUI();
                     
-                    if (!isAuto) alert(`☁️ 覆盖成功！`);
+                    if (!isAuto) {
+                        alert(`☁️ 覆盖成功！本地数据已与云端同步。\n\n- 隔离库: ${blCount} 条\n- 地址库: ${importedAddrs} 条\n- 电话库: ${importedPhones} 条`);
+                    } else {
+                        log(`[自动同步] 完成: 覆盖地址${importedAddrs}条 / 电话${importedPhones}条`, 'success');
+                    }
                 } else {
                     if (!isAuto) alert('❌ 拉取失败: ' + response.statusText);
                 }
@@ -425,6 +461,7 @@
         });
     };
 
+    // 上传到云端 (Push)
     const pushToCloud = () => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
@@ -452,18 +489,30 @@
         });
     };
     
+    // 设置向导
     const setupCloudConfig = () => {
-        const url = prompt("请输入 Worker 域名 (不带末尾斜杠)\n例如: https://txt.abcai.online", CONFIG.CLOUD.SYNC_URL);
+        const currentUrl = CONFIG.CLOUD.SYNC_URL || '';
+        const currentToken = CONFIG.CLOUD.SYNC_TOKEN || '';
+        
+        const url = prompt("请输入 Worker 域名 (不带末尾斜杠)\n例如: https://txt.abcai.online", currentUrl);
         if (url !== null) {
-            GM_setValue('cloud_sync_url', url.trim().replace(/\/$/, ''));
-            const token = prompt("请输入访客 Token", CONFIG.CLOUD.SYNC_TOKEN);
+            const cleanUrl = url.trim().replace(/\/$/, '');
+            GM_setValue('cloud_sync_url', cleanUrl);
+            CONFIG.CLOUD.SYNC_URL = cleanUrl;
+            
+            const token = prompt("请输入访客 Token", currentToken);
             if (token !== null) {
                 GM_setValue('cloud_sync_token', token.trim());
+                CONFIG.CLOUD.SYNC_TOKEN = token.trim();
                 alert("✅ 配置已保存！请刷新页面生效。");
                 location.reload();
             }
         }
     };
+
+    // ==============================================
+    //               其他辅助功能
+    // ==============================================
 
     const startRapidRefresh = () => {
         if (state.rapidTimer) return;
@@ -505,13 +554,14 @@
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
 
+    // 处理剪贴板文本
     const parseTextToDB = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
         let hasUpdate = false;
         const phoneRegex = /(?:^|[^\d])(1\d{10})(?:$|[^\d])/g;
         let phoneMatch;
-        let tempText = fullText;
-        while ((phoneMatch = phoneRegex.exec(tempText)) !== null) {
+        let tempTextForPhone = fullText;
+        while ((phoneMatch = phoneRegex.exec(tempTextForPhone)) !== null) {
             const num = phoneMatch[1];
             if (/^1\d{10}$/.test(num)) {
                 addToDB('phone', num);
@@ -549,14 +599,20 @@
     const handleFileImport = (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        if(!confirm(`确认导入文件 "${file.name}" 到本地库吗？\n将会自动清洗。`)) { e.target.value = ''; return; }
+        if(!confirm(`确认导入文件 "${file.name}" 到本地库吗？\n将会自动清洗（汉字>7或含违禁词）。`)) {
+            e.target.value = '';
+            return;
+        }
         const reader = new FileReader();
         reader.onload = (event) => {
-            const lines = event.target.result.split(/[\r\n]+/);
-            let count = 0;
-            lines.forEach(line => { if (parseTextToDB(line)) count++; });
+            const content = event.target.result;
+            const lines = content.split(/[\r\n]+/);
+            let updateCount = 0;
+            lines.forEach(line => {
+                if (parseTextToDB(line)) updateCount++;
+            });
             updateListsUI();
-            alert(`✅ 导入处理完成`);
+            alert(`✅ 导入处理完成！`);
         };
         reader.readAsText(file);
         e.target.value = '';
@@ -569,26 +625,42 @@
              if (!input) {
                  const inputs = document.querySelectorAll('input');
                  for (let i = 0; i < inputs.length; i++) {
-                     if (!inputs[i].closest('.gj-window') && !inputs[i].closest('.el-form-item') && inputs[i].type === 'text') { input = inputs[i]; break; }
+                     const el = inputs[i];
+                     if (el.closest('.gj-window')) continue;
+                     if (!el.closest('.el-form-item') && el.type === 'text') { 
+                         input = el; break; 
+                     }
                  }
              }
              if (!input) {
-                 const inputs = document.querySelectorAll('input');
-                 for (let i = 0; i < inputs.length; i++) {
-                     if (!inputs[i].closest('.gj-window') && ['起点','出发','搜索'].some(k=>inputs[i].placeholder.includes(k))) { input = inputs[i]; break; }
+                 const keywords = ['起点', '出发', '搜索', '关键字'];
+                 const allInputs = document.querySelectorAll('input');
+                 for (let i = 0; i < allInputs.length; i++) {
+                     const el = allInputs[i];
+                     if (el.closest('.gj-window')) continue; 
+                     const ph = (el.placeholder || '').toLowerCase();
+                     if (keywords.some(k => ph.includes(k))) {
+                         input = el; break;
+                     }
                  }
              }
         } else if (type === 'phone') {
              const inputs = document.querySelectorAll('input');
              for (let i = 0; i < inputs.length; i++) {
-                 if (!inputs[i].closest('.gj-window') && (inputs[i].placeholder.includes('电话') || inputs[i].type === 'tel')) { input = inputs[i]; break; }
+                 const el = inputs[i];
+                 if (el.closest('.gj-window')) continue; 
+                 const ph = (el.placeholder || '').toLowerCase();
+                 if (ph.includes('用户电话') || ph.includes('电话') || el.type === 'tel') {
+                     input = el; break;
+                 }
              }
         }
         if (input) {
             input.value = value;
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
-            input.click(); input.focus();
+            input.click();
+            input.focus();
             input.style.transition = 'all 0.3s';
             input.style.boxShadow = '0 0 0 2px rgba(103, 194, 58, 0.3)';
             setTimeout(() => input.style.boxShadow = '', 800);
@@ -608,10 +680,13 @@
             if (percentage > 1) percentage = 1; if (percentage < 0) percentage = 0;
             const clientX = rect.left + (rect.width * percentage);
             const clientY = rect.top + (rect.height / 2);
+            const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+            const eventOpts = { bubbles: true, cancelable: true, view: win, clientX: clientX, clientY: clientY };
             try {
-                runway.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, clientX, clientY }));
-                runway.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, clientX, clientY }));
-                runway.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX, clientY }));
+                runway.dispatchEvent(new MouseEvent('mousemove', eventOpts));
+                runway.dispatchEvent(new MouseEvent('mousedown', eventOpts));
+                runway.dispatchEvent(new MouseEvent('mouseup', eventOpts));
+                runway.dispatchEvent(new MouseEvent('click', eventOpts));
             } catch (e) { }
         }
     };
@@ -624,11 +699,13 @@
             if (dbItem.includes(cleanKey)) return true;
             if (cleanKey.includes(dbItem)) return true;
             if (/^\d+$/.test(cleanKey) && cleanKey.length >= 4) {
-                try { return new RegExp(cleanKey.split('').join('.*')).test(dbItem); } catch(e) {}
+                const pattern = cleanKey.split('').join('.*');
+                try { const re = new RegExp(pattern); return re.test(dbItem); } catch(e) {}
             }
             return false;
         }
-        return cleanKey.split(/\s+/).every(k => dbItem.includes(k));
+        const keywords = cleanKey.split(/\s+/);
+        return keywords.every(k => dbItem.includes(k));
     };
 
     const applyLayout = () => {
