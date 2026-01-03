@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v16.0 自定义列号版)
+// @name          代驾调度系统助手 (v15.1 智能抓取修复版)
 // @namespace     http://tampermonkey.net/
-// @version       16.0
-// @description   【v16.0新增】支持手动指定电话和地址所在的列号(解决改版导致的抓取失败)；填0为自动模式。
+// @version       15.1
+// @description   【v15.1修复】修复无法抓取电话问题(改为全行智能扫描)；派单页手动同步；订单页集成云端控制。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -65,11 +65,6 @@
         isScrapingEnabled: GM_getValue('scrapeEnabled', false), 
 
         refreshInterval: 20, 
-        
-        // 【v16.0 新增】自定义列号配置 (0=自动)
-        customPhoneCol: parseInt(GM_getValue('customPhoneCol', 0)),
-        customAddrCol: parseInt(GM_getValue('customAddrCol', 0)),
-
         countdown: 0,
         timerId: null,
         scrapeObserver: null,
@@ -183,29 +178,21 @@
     const scanOrderPage = () => {
         if (!isOrderPage() || !state.isScrapingEnabled) return;
         
-        // 过滤列（假设状态和渠道位置相对固定，或者不影响核心业务）
-        const IDX_STATUS = 1; 
+        // 【修正】辅助列：状态在第2列(索引1)，渠道在第3列(索引2)
+        // 如果列序变了，这里的过滤可能也会失效，但通常状态和渠道列比较固定
+        const IDX_STATUS = 1;
         const IDX_CHANNEL = 2;
 
-        // --- 1. 确定列号逻辑 ---
-        let targetPhoneIdx = -1; // -1表示自动扫描
-        let targetAddrIdx = -1;
-
-        // 检查用户是否设置了强制列号 (用户输入1代表第1列，代码索引需-1)
-        if (state.customPhoneCol > 0) targetPhoneIdx = state.customPhoneCol - 1;
-        if (state.customAddrCol > 0) targetAddrIdx = state.customAddrCol - 1;
-
-        // 如果没有强制设置地址列，则尝试自动识别表头
-        if (targetAddrIdx === -1) {
-            const headerThs = document.querySelectorAll('.el-table__header-wrapper th');
-            if (headerThs && headerThs.length > 0) {
-                headerThs.forEach((th, index) => {
-                    const text = th.innerText.trim();
-                    if (text.includes('起点') || text.includes('地址') || text.includes('出发')) {
-                        targetAddrIdx = index;
-                    }
-                });
-            }
+        // 地址列：尝试自动识别
+        let addrIndex = -1;
+        const headerThs = document.querySelectorAll('.el-table__header-wrapper th');
+        if (headerThs && headerThs.length > 0) {
+            headerThs.forEach((th, index) => {
+                const text = th.innerText.trim();
+                if (text.includes('起点') || text.includes('地址') || text.includes('出发')) {
+                    addrIndex = index;
+                }
+            });
         }
 
         // --- 2. 遍历内容行 ---
@@ -214,7 +201,7 @@
 
         rows.forEach(row => {
             const cells = row.querySelectorAll('td');
-            if (cells.length < 3) return; 
+            if (cells.length < 3) return; // 单元格不足，跳过
 
             // === 过滤逻辑 ===
             const statusText = cells[IDX_STATUS]?.innerText.trim() || '';
@@ -224,41 +211,33 @@
             const channelText = cells[IDX_CHANNEL]?.innerText.trim() || '';
             if (channelText.includes('新腾讯出行') || channelText.includes('盛大')) return;
 
-            // --- 抓取电话 ---
-            // 策略 A: 强制指定列
-            if (targetPhoneIdx !== -1) {
-                if (cells[targetPhoneIdx]) {
-                    const raw = cells[targetPhoneIdx].innerText.trim();
-                    const clean = raw.replace(/\D/g, '');
-                    if (/^1\d{10}$/.test(clean)) {
-                        if (processPhone(clean)) newCount++;
+            // --- 抓取电话 (智能全行扫描) ---
+            // 【修改点 v15.1】不再死板取第4列，而是遍历该行所有格子寻找手机号
+            let phoneFound = false;
+            cells.forEach(cell => {
+                if (phoneFound) return; // 一行只抓一个
+                const rawText = cell.innerText.trim();
+                if (!rawText) return;
+                
+                // 强力清洗，只留数字
+                const cleanNum = rawText.replace(/\D/g, ''); 
+                
+                // 校验：1开头，11位纯数字
+                if (/^1\d{10}$/.test(cleanNum)) {
+                    if (processPhone(cleanNum)) {
+                        newCount++;
+                        phoneFound = true; 
                     }
                 }
-            } 
-            // 策略 B: 自动全行扫描 (未指定列时)
-            else {
-                let phoneFound = false;
-                cells.forEach(cell => {
-                    if (phoneFound) return;
-                    const rawText = cell.innerText.trim();
-                    if (!rawText) return;
-                    const cleanNum = rawText.replace(/\D/g, ''); 
-                    if (/^1\d{10}$/.test(cleanNum)) {
-                        if (processPhone(cleanNum)) {
-                            newCount++;
-                            phoneFound = true; 
-                        }
-                    }
-                });
-            }
+            });
 
             // --- 抓取地址 ---
-            if (targetAddrIdx !== -1 && cells[targetAddrIdx]) {
-                const addrText = cells[targetAddrIdx].innerText.trim();
+            if (addrIndex !== -1 && cells[addrIndex]) {
+                const addrText = cells[addrIndex].innerText.trim();
                 if (addrText && addrText.length > 1) {
                     const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                     if (!blockers.some(b => addrText.includes(b))) {
-                        if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) { 
+                        if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) { // 排除日期
                              if (processAddr(addrText)) newCount++;
                         }
                     }
@@ -784,7 +763,7 @@
 
         const activeTabClass = (tab) => state.viewTab === tab ? 'active-tab' : '';
 
-        // 派单页面不再显示上传下载按钮，已移动至订单页面
+        // 【修改点 v15.0】 派单页面不再显示上传下载按钮，已移动至订单页面
         widget.innerHTML = `
             <div class="gj-header gj-drag-header">
                 <div class="gj-tabs">
@@ -927,12 +906,6 @@
                     </div>
                 </div>
 
-                <div class="gj-control-row" style="font-size:12px; gap:5px; margin-top:10px;">
-                   <span style="color:var(--gj-text-sec);">强制列号(0自动):</span>
-                   <input placeholder="电话" id="gj-input-col-phone" value="${state.customPhoneCol}" class="gj-input-mini" title="第几列是电话(填数字)">
-                   <input placeholder="地址" id="gj-input-col-addr" value="${state.customAddrCol}" class="gj-input-mini" title="第几列是地址(填数字)">
-                </div>
-
                 <div class="gj-control-row" style="margin-top:10px; border-top:1px dashed var(--gj-border); padding-top:10px; justify-content: space-around;">
                     <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
                     <span class="btn-icon-circle" id="btn-cloud-pull" title="⬇️ 覆盖下载(以云端为准)" style="background:rgba(230,162,60,0.6)">⬇</span>
@@ -992,7 +965,7 @@
     };
 
     const bindEvents = () => {
-        // 绑定移动后的按钮事件（无论在哪个页面渲染，只要ID存在就绑定）
+        // 【修改点 v15.0】绑定移动后的按钮事件（无论在哪个页面渲染，只要ID存在就绑定）
         document.getElementById('btn-cloud-setting')?.addEventListener('click', setupCloudConfig);
         document.getElementById('btn-cloud-pull')?.addEventListener('click', () => pullFromCloud(false)); // 手动点击，显示弹窗
         document.getElementById('btn-cloud-push')?.addEventListener('click', pushToCloud);
@@ -1035,24 +1008,12 @@
 
             document.getElementById('gj-btn-set').addEventListener('click', () => {
                 const val = parseInt(document.getElementById('gj-input-interval').value);
-                // 【v16.0】同时保存列号设置
-                const pCol = parseInt(document.getElementById('gj-input-col-phone').value) || 0;
-                const aCol = parseInt(document.getElementById('gj-input-col-addr').value) || 0;
-                
-                state.customPhoneCol = pCol;
-                state.customAddrCol = aCol;
-                GM_setValue('customPhoneCol', pCol);
-                GM_setValue('customAddrCol', aCol);
-
                 if (val > 0) {
                     state.refreshInterval = val;
                     if(isOrderPage()) GM_setValue('orderInterval', val);
                     if(isDriverPage()) GM_setValue('driverInterval', val);
                     performAction(); startCountdown();
                 }
-                
-                // 提示保存成功
-                alert(`✅ 设置已保存！\n\n- 刷新间隔: ${val}秒\n- 电话列: ${pCol === 0 ? '自动' : '第'+pCol+'列'}\n- 地址列: ${aCol === 0 ? '自动' : '第'+aCol+'列'}`);
             });
         }
     };
