@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v14.0 手动同步版)
+// @name          代驾调度系统助手 (v15.0 纯手动同步版)
 // @namespace     http://tampermonkey.net/
-// @version       14.0
-// @description   【基于v13.5修改】第4列抓电话；派单页不自动同步(需手动点)；停止自动上传以节省额度；保留无效订单过滤。
+// @version       15.0
+// @description   【基于v14.0修改】云端同步按钮移动至订单页；派单页取消所有自动同步(完全手动)；保留无效订单过滤。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -79,6 +79,7 @@
             addrs: safeParse('dbAddrs', '[]'),
             phones: safeParse('dbPhones', '[]')
         },
+        
         blacklist: GM_getValue('blacklist', '位置，电话，司机，请您，收到，偏远地区，已派单，代驾，师傅，安全，感谢，马上，联系，好的'),
         
         viewTab: GM_getValue('viewTab', 'address'),
@@ -101,7 +102,6 @@
 
     const checkPage = () => {
         state.currentHash = window.location.hash;
-        
         // 订单页逻辑
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
@@ -120,10 +120,9 @@
         // 派单页逻辑
         if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
-            // 【修改点】此处不再自动 pullFromCloud，改为只初始化 UI
-            log('进入派单界面 (手动同步模式)', 'info');
-            // 只自动加载黑名单，不拉取地址库，节省流量
-            fetchOnlineBlacklist(true);
+            // 【修改点 v15.0】完全禁用自动同步，不再自动拉取黑名单
+            log('进入派单界面 (纯手动模式)', 'info');
+            // fetchOnlineBlacklist(true); // <--- 已注释掉
             setTimeout(applyDistanceByTime, 1500);
         }
 
@@ -144,7 +143,7 @@
     const isOrderPage = () => state.currentHash.includes(CONFIG.ORDER.HASH);
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
-    
+
     // ==============================================
     //        核心修正：列定位 + 过滤 + 本地存储
     // ==============================================
@@ -154,14 +153,13 @@
         const targetNode = document.body;
         const config = { childList: true, subtree: true };
         let timeout = null;
-        
         state.scrapeObserver = new MutationObserver((mutationsList) => {
             if (!state.isScrapingEnabled) return;
             let hasTableChange = false;
             for(let mutation of mutationsList) {
                 if (mutation.target.classList && 
                    (mutation.target.classList.contains('el-table__row') || 
-                    mutation.target.nodeName === 'TBODY')) {
+                   mutation.target.nodeName === 'TBODY')) {
                     hasTableChange = true;
                     break;
                 }
@@ -181,14 +179,12 @@
 
     const scanOrderPage = () => {
         if (!isOrderPage() || !state.isScrapingEnabled) return;
-
         // --- 1. 确定列号 ---
         // 强制指定：电话在第4列 (索引3)
-        const IDX_PHONE = 3; 
+        const IDX_PHONE = 3;
         // 辅助列：状态在第2列(索引1)，渠道在第3列(索引2)
         const IDX_STATUS = 1;
         const IDX_CHANNEL = 2;
-
         // 地址列：尝试自动识别
         let addrIndex = -1;
         const headerThs = document.querySelectorAll('.el-table__header-wrapper th');
@@ -212,7 +208,8 @@
             // === 过滤逻辑 ===
             // 1. 排除状态
             const statusText = cells[IDX_STATUS].innerText.trim();
-            if (statusText.includes('后台销单') || statusText.includes('后台消单') || statusText.includes('乘客取消')) return;
+            if (statusText.includes('后台销单') || statusText.includes('后台消单') || 
+                statusText.includes('乘客取消')) return;
 
             // 2. 排除渠道
             const channelText = cells[IDX_CHANNEL].innerText.trim();
@@ -241,12 +238,12 @@
                 }
             }
         });
-
         if (newCount > 0) {
-            updateListsUI(); // 刷新本地界面，但不自动上传
+            updateListsUI();
+            // 刷新本地界面，但不自动上传
         }
     };
-    
+
     const processPhone = (num) => {
         if (!state.db.phones.includes(num)) {
             addToDB('phone', num);
@@ -256,7 +253,7 @@
         }
         return false;
     };
-    
+
     const processAddr = (addr) => {
         if (!state.db.addrs.includes(addr)) {
             addToDB('address', addr);
@@ -328,7 +325,7 @@
                 url: cloudUrl + '&t=' + t,
                 onload: function(response) {
                     if (response.status === 200) {
-                         const text = response.responseText;
+                        const text = response.responseText;
                         if (text && text.includes('[BLACKLIST]')) {
                             const sections = text.split(/\[(BLACKLIST|ADDRS|PHONES)\]/);
                             for(let i=1; i<sections.length; i+=2) {
@@ -424,7 +421,7 @@
                         importedAddrs = lines.length;
                     }
 
-                    cleanDBWithBlacklist(); 
+                    cleanDBWithBlacklist();
                     updateListsUI();
                     if (!isAuto) {
                         alert(`☁️ 覆盖成功！本地数据已与云端同步。\n\n- 隔离库: ${blCount} 条\n- 地址库: ${importedAddrs} 条\n- 电话库: ${importedPhones} 条`);
@@ -435,8 +432,7 @@
                     if (!isAuto) alert('❌ 拉取失败: ' + response.statusText);
                 }
             },
-            onerror: function(e) { if (!isAuto) alert('❌ 网络错误');
-            }
+            onerror: function(e) { if (!isAuto) alert('❌ 网络错误'); }
         });
     };
 
@@ -507,7 +503,6 @@
         let btn = document.querySelector(selector);
         if (!btn && isOrderPage()) btn = document.querySelector(CONFIG.ORDER.ALT_SELECTOR)?.closest('button');
         if (!btn && isDriverPage()) btn = document.querySelector(CONFIG.DRIVER.ALT_SELECTOR)?.closest('button');
-        
         if (btn) {
             btn.click();
             state.countdown = state.refreshInterval;
@@ -603,8 +598,7 @@
                  for (let i = 0; i < inputs.length; i++) {
                      const el = inputs[i];
                      if (el.closest('.gj-window')) continue;
-                     if (!el.closest('.el-form-item') && el.type === 'text') { input = el; break;
-                     }
+                     if (!el.closest('.el-form-item') && el.type === 'text') { input = el; break; }
                  }
              }
              if (!input) {
@@ -614,8 +608,7 @@
                      const el = allInputs[i];
                      if (el.closest('.gj-window')) continue; 
                      const ph = (el.placeholder || '').toLowerCase();
-                     if (keywords.some(k => ph.includes(k))) { input = el; break;
-                     }
+                     if (keywords.some(k => ph.includes(k))) { input = el; break; }
                  }
              }
         } else if (type === 'phone') {
@@ -624,8 +617,7 @@
                  const el = inputs[i];
                  if (el.closest('.gj-window')) continue; 
                  const ph = (el.placeholder || '').toLowerCase();
-                 if (ph.includes('用户电话') || ph.includes('电话') || el.type === 'tel') { input = el;
-                 break; }
+                 if (ph.includes('用户电话') || ph.includes('电话') || el.type === 'tel') { input = el; break; }
              }
         }
         if (input) {
@@ -692,8 +684,7 @@
     };
 
     const toggleTheme = () => {
-        state.theme = state.theme === 'light' ?
-        'dark' : 'light';
+        state.theme = state.theme === 'light' ? 'dark' : 'light';
         GM_setValue('theme', state.theme);
         updateUI();
         applyGlobalTheme(); 
@@ -710,6 +701,7 @@
     const createMainWidget = () => {
         let widget = document.getElementById('gj-widget-main');
         if (widget) widget.remove();
+
         widget = document.createElement('div');
         widget.id = 'gj-widget-main';
         widget.className = state.theme === 'dark' ? 'gj-dark gj-window' : 'gj-light gj-window';
@@ -731,6 +723,7 @@
                      <span class="gj-toggle" title="折叠/展开">${toggleIcon}</span>
                 </div>
             </div>
+            
             <div id="gj-main-content" style="display: ${state.isCollapsed ? 'none' : 'block'}"></div>
             <div id="gj-scale-handle" class="gj-resize-handle" title="拖拽缩放"></div>
         `;
@@ -758,13 +751,15 @@
 
         widget = document.createElement('div');
         widget.id = 'gj-widget-addr';
-        widget.className = state.theme === 'dark' ?
-        'gj-dark gj-window' : 'gj-light gj-window';
+        widget.className = state.theme === 'dark' ? 'gj-dark gj-window' : 'gj-light gj-window';
         applyPos(widget, state.posAddr);
         widget.style.transform = `scale(${state.uiScale})`;
         widget.style.transformOrigin = 'top left';
         widget.style.width = state.layout.width + 'px';
+
         const activeTabClass = (tab) => state.viewTab === tab ? 'active-tab' : '';
+
+        // 【修改点 v15.0】 派单页面不再显示上传下载按钮，已移动至订单页面
         widget.innerHTML = `
             <div class="gj-header gj-drag-header">
                 <div class="gj-tabs">
@@ -772,27 +767,18 @@
                     <span class="gj-tab ${activeTabClass('phone')}" data-tab="phone">📞 电话库</span>
                 </div>
                 <div style="display:flex; gap:4px;">
-                    <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
-                    <span class="btn-icon-circle" id="btn-cloud-pull" title="⬇️ 覆盖下载(以云端为准)" style="background:rgba(230,162,60,0.6)">⬇</span>
-                    <span class="btn-icon-circle" id="btn-cloud-push" title="⬆️ 上传本地数据" style="background:rgba(245,108,108,0.6)">⬆</span>
-
-                    <label class="btn-icon-circle" title="导入本地文件(txt/csv)">
-                        📂<input type="file" id="gj-file-import" style="display:none" accept=".txt,.csv">
-                    </label>
                     <span class="btn-icon-circle" id="btn-refresh-addr" title="刷新并自动填入最新地址">↻</span>
                 </div>
             </div>
             
             <div class="gj-toolbar">
                 <input type="text" id="gj-search-input" placeholder="输入搜索..." value="${state.searchText}">
-                <span id="gj-btn-clear" class="btn-clear" title="清空搜索" style="display:${state.searchText ?
-                'block' : 'none'}">✕</span>
+                <span id="gj-btn-clear" class="btn-clear" title="清空搜索" style="display:${state.searchText ? 'block' : 'none'}">✕</span>
             </div>
 
             <div class="gj-list-body" id="list-addr-body" style="height:${state.layout.height}px;"></div>
             
-            <div style="padding:5px 8px;
-            font-size:11px; display:flex; align-items:center; gap:5px; border-top:1px dashed var(--gj-border);">
+            <div style="padding:5px 8px; font-size:11px; display:flex; align-items:center; gap:5px; border-top:1px dashed var(--gj-border);">
                 <span style="color:var(--gj-text-mute);white-space:nowrap;">列宽:</span>
                 <input type="range" id="gj-col-slider" min="50" max="250" value="${state.colWidth}" style="flex:1;" title="拖动改变显示字数">
             </div>
@@ -804,13 +790,8 @@
         setupDrag(widget, 'posAddr');
         setupResizeDrag(widget);
 
-        // 绑定同步事件
-        widget.querySelector('#btn-cloud-setting').addEventListener('click', setupCloudConfig);
-        widget.querySelector('#btn-cloud-pull').addEventListener('click', () => pullFromCloud(false)); // 手动点击，显示弹窗
-        widget.querySelector('#btn-cloud-push').addEventListener('click', pushToCloud);
-
         widget.querySelector('#btn-refresh-addr').addEventListener('click', () => processClipboard(true));
-        widget.querySelector('#gj-file-import').addEventListener('change', handleFileImport);
+        
         widget.querySelectorAll('.gj-tab').forEach(tab => {
             tab.addEventListener('click', (e) => {
                 state.viewTab = e.target.dataset.tab;
@@ -834,6 +815,7 @@
             updateListsUI();
             searchInput.focus();
         });
+
         const slider = widget.querySelector('#gj-col-slider');
         slider.addEventListener('input', (e) => {
             state.colWidth = parseInt(e.target.value);
@@ -842,6 +824,7 @@
         slider.addEventListener('change', (e) => {
              GM_setValue('addrColWidth', state.colWidth);
         });
+
         return widget;
     };
 
@@ -870,8 +853,7 @@
         if(addrWidget) addrWidget.className = cls;
 
         const themeIcon = document.getElementById('gj-theme-toggle');
-        if(themeIcon) themeIcon.textContent = state.theme === 'light' ?
-        '🌙' : '🌞';
+        if(themeIcon) themeIcon.textContent = state.theme === 'light' ? '🌙' : '🌞';
 
         const titleSpan = document.getElementById('gj-title-text');
         if (titleSpan) {
@@ -885,6 +867,7 @@
         const scaleHandle = document.getElementById('gj-scale-handle');
         if (mainContent) mainContent.style.display = state.isCollapsed ? 'none' : 'block';
         if (scaleHandle) scaleHandle.style.display = state.isCollapsed ? 'none' : 'block';
+
         if (mainContent) renderMainContent(mainContent);
         updateStatusText();
     };
@@ -904,8 +887,7 @@
 
             html = `
                 <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
-                    <span class="gj-timer-text" style="color:${statusColor}">${state.manualPause ?
-                    '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
+                    <span class="gj-timer-text" style="color:${statusColor}">${state.manualPause ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
                 </div>
                 
                 <button id="gj-btn-toggle" class="gj-btn ${btnClass}">${btnText}</button>
@@ -918,6 +900,15 @@
                         <input type="number" id="gj-input-interval" value="${state.refreshInterval}" class="gj-input-mini">
                         <button id="gj-btn-set" class="gj-btn-icon">🆗</button>
                     </div>
+                </div>
+
+                <div class="gj-control-row" style="margin-top:10px; border-top:1px dashed var(--gj-border); padding-top:10px; justify-content: space-around;">
+                    <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
+                    <span class="btn-icon-circle" id="btn-cloud-pull" title="⬇️ 覆盖下载(以云端为准)" style="background:rgba(230,162,60,0.6)">⬇</span>
+                    <span class="btn-icon-circle" id="btn-cloud-push" title="⬆️ 上传本地数据" style="background:rgba(245,108,108,0.6)">⬆</span>
+                    <label class="btn-icon-circle" title="导入本地文件(txt/csv)" style="background:rgba(103,194,58,0.6)">
+                        📂<input type="file" id="gj-file-import" style="display:none" accept=".txt,.csv">
+                    </label>
                 </div>
             `;
         } else if (isDispatchPage()) {
@@ -935,7 +926,7 @@
                 <div class="gj-grid-btns">${buttonsHtml}</div>
                 
                 <div class="gj-bottom-controls">
-                    <button id="btn-sync-cloud" class="gj-btn-text">☁️ Worker 同步</button>
+                    <button id="btn-sync-cloud" class="gj-btn-text">☁️ 手动同步</button>
                     <span style="font-size:10px;color:var(--gj-text-mute);">缩放: ${(state.uiScale*100).toFixed(0)}%</span>
                 </div>
             `;
@@ -960,8 +951,7 @@
         };
 
         if (filteredList.length === 0) {
-            addrBody.innerHTML = `<div class="gj-empty">${state.searchText ?
-            '无匹配结果' : '库为空<br>请导入文件或复制文本'}</div>`;
+            addrBody.innerHTML = `<div class="gj-empty">${state.searchText ? '无匹配结果' : '库为空<br>请导入文件或复制文本'}</div>`;
         } else {
             addrBody.innerHTML = filteredList.map(i => renderItem(i)).join('');
             addrBody.querySelectorAll('.gj-list-item').forEach(el => 
@@ -971,6 +961,12 @@
     };
 
     const bindEvents = () => {
+        // 【修改点 v15.0】绑定移动后的按钮事件（无论在哪个页面渲染，只要ID存在就绑定）
+        document.getElementById('btn-cloud-setting')?.addEventListener('click', setupCloudConfig);
+        document.getElementById('btn-cloud-pull')?.addEventListener('click', () => pullFromCloud(false)); // 手动点击，显示弹窗
+        document.getElementById('btn-cloud-push')?.addEventListener('click', pushToCloud);
+        document.getElementById('gj-file-import')?.addEventListener('change', handleFileImport);
+
         if (isDispatchPage()) {
             document.querySelectorAll('.btn-preset').forEach(btn => 
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
@@ -993,7 +989,6 @@
                 GM_setValue('manualPause', state.manualPause);
                 updateUI();
             });
-
             // 抓取开关 按钮
             const scrapeBtn = document.getElementById('gj-btn-scrape');
             if (scrapeBtn) {
@@ -1030,8 +1025,9 @@
             }
         }
     };
-    
+
     const log = (text, type) => { console.log(`[助手] ${text}`); };
+
     const applyPos = (el, pos) => {
         if (pos.left) { el.style.left = pos.left;
         el.style.right = 'auto'; }
@@ -1192,8 +1188,7 @@
                 overflow: hidden;
             }
 
-            #gj-widget-main { width: 250px;
-            }
+            #gj-widget-main { width: 250px; }
             #gj-widget-addr { /* width dynamic */ }
 
             .gj-header {
