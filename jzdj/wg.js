@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.0 纯手动同步版)
+// @name          代驾调度系统助手 (v15.1 智能抓取修复版)
 // @namespace     http://tampermonkey.net/
-// @version       15.0
-// @description   【基于v14.0修改】云端同步按钮移动至订单页；派单页取消所有自动同步(完全手动)；保留无效订单过滤。
+// @version       15.1
+// @description   【v15.1修复】修复无法抓取电话问题(改为全行智能扫描)；派单页手动同步；订单页集成云端控制。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -120,9 +120,7 @@
         // 派单页逻辑
         if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
-            // 【修改点 v15.0】完全禁用自动同步，不再自动拉取黑名单
             log('进入派单界面 (纯手动模式)', 'info');
-            // fetchOnlineBlacklist(true); // <--- 已注释掉
             setTimeout(applyDistanceByTime, 1500);
         }
 
@@ -179,12 +177,12 @@
 
     const scanOrderPage = () => {
         if (!isOrderPage() || !state.isScrapingEnabled) return;
-        // --- 1. 确定列号 ---
-        // 强制指定：电话在第4列 (索引3)
-        const IDX_PHONE = 3;
-        // 辅助列：状态在第2列(索引1)，渠道在第3列(索引2)
+        
+        // 【修正】辅助列：状态在第2列(索引1)，渠道在第3列(索引2)
+        // 如果列序变了，这里的过滤可能也会失效，但通常状态和渠道列比较固定
         const IDX_STATUS = 1;
         const IDX_CHANNEL = 2;
+
         // 地址列：尝试自动识别
         let addrIndex = -1;
         const headerThs = document.querySelectorAll('.el-table__header-wrapper th');
@@ -203,27 +201,35 @@
 
         rows.forEach(row => {
             const cells = row.querySelectorAll('td');
-            if (cells.length < 4) return; // 单元格不足，跳过
+            if (cells.length < 3) return; // 单元格不足，跳过
 
             // === 过滤逻辑 ===
-            // 1. 排除状态
-            const statusText = cells[IDX_STATUS].innerText.trim();
+            const statusText = cells[IDX_STATUS]?.innerText.trim() || '';
             if (statusText.includes('后台销单') || statusText.includes('后台消单') || 
                 statusText.includes('乘客取消')) return;
 
-            // 2. 排除渠道
-            const channelText = cells[IDX_CHANNEL].innerText.trim();
+            const channelText = cells[IDX_CHANNEL]?.innerText.trim() || '';
             if (channelText.includes('新腾讯出行') || channelText.includes('盛大')) return;
 
-            // --- 抓取电话 (第4列) ---
-            if (cells[IDX_PHONE]) {
-                const rawText = cells[IDX_PHONE].innerText.trim();
-                const cleanNum = rawText.replace(/\D/g, ''); // 强力清洗
+            // --- 抓取电话 (智能全行扫描) ---
+            // 【修改点 v15.1】不再死板取第4列，而是遍历该行所有格子寻找手机号
+            let phoneFound = false;
+            cells.forEach(cell => {
+                if (phoneFound) return; // 一行只抓一个
+                const rawText = cell.innerText.trim();
+                if (!rawText) return;
                 
+                // 强力清洗，只留数字
+                const cleanNum = rawText.replace(/\D/g, ''); 
+                
+                // 校验：1开头，11位纯数字
                 if (/^1\d{10}$/.test(cleanNum)) {
-                    if (processPhone(cleanNum)) newCount++;
+                    if (processPhone(cleanNum)) {
+                        newCount++;
+                        phoneFound = true; 
+                    }
                 }
-            }
+            });
 
             // --- 抓取地址 ---
             if (addrIndex !== -1 && cells[addrIndex]) {
@@ -231,23 +237,22 @@
                 if (addrText && addrText.length > 1) {
                     const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                     if (!blockers.some(b => addrText.includes(b))) {
-                        if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) {
+                        if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) { // 排除日期
                              if (processAddr(addrText)) newCount++;
                         }
                     }
                 }
             }
         });
+
         if (newCount > 0) {
             updateListsUI();
-            // 刷新本地界面，但不自动上传
         }
     };
 
     const processPhone = (num) => {
         if (!state.db.phones.includes(num)) {
             addToDB('phone', num);
-            // 【修改点】不再自动上传，只本地保存
             log(`🆕 [本地] 抓取电话: ${num}`, 'success');
             return true;
         }
@@ -257,7 +262,6 @@
     const processAddr = (addr) => {
         if (!state.db.addrs.includes(addr)) {
             addToDB('address', addr);
-            // 【修改点】不再自动上传，只本地保存
             log(`🆕 [本地] 抓取地址: ${addr}`, 'success');
             return true;
         }
