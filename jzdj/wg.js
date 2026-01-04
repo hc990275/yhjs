@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.6.7 透明同步版)
+// @name          代驾调度系统助手 (v15.6.8 防重复抓取版)
 // @namespace     http://tampermonkey.net/
-// @version       15.6.7
-// @description   【v15.6.7】修复：彻底移除地址长度限制(防止误删长地址)；下载弹窗增加“清洗前后”对比显示；控制台输出被过滤的垃圾数据明细。
+// @version       15.6.8
+// @description   【v15.6.8】修正：订单页自动抓取时，如果本地库已存在该数据则直接跳过(不再重复置顶)，防止列表反复刷新；派单页手动填充依然保持强制置顶。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -145,7 +145,7 @@
         
         if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
-            log('进入派单界面 (透明同步版)', 'info');
+            log('进入派单界面 (防重复抓取版)', 'info');
             setTimeout(applyDistanceByTime, 1500);
         }
 
@@ -199,6 +199,7 @@
         }
     };
 
+    // 核心扫描函数 (关键修改处)
     const scanOrderPage = () => {
         if (!isOrderPage() || !state.isScrapingEnabled) return;
         const idxExclude = CONFIG.SCRAPE.EXCLUDE_COL_INDEX;
@@ -212,27 +213,36 @@
             const cells = row.querySelectorAll('td');
             if (cells.length <= Math.max(idxExclude, idxPhone, idxAddr)) return;
 
+            // 1. 排除逻辑
             if (idxExclude !== null && cells[idxExclude]) {
                 const checkText = cells[idxExclude].innerText.trim();
                 const hit = excludeKeywords.find(kw => checkText.includes(kw));
                 if (hit) return; 
             }
 
+            // 2. 抓取电话 (只有本地库没有时才保存)
             if (idxPhone !== null && cells[idxPhone]) {
                 const rawText = cells[idxPhone].innerText.trim();
                 const cleanNum = rawText.replace(/\D/g, '');
                 if (/^1\d{10}$/.test(cleanNum)) {
-                    if (addToDB('phone', cleanNum, idxPhone)) newCount++;
+                    // 【新增判断】如果本地库没有，才添加
+                    if (!state.db.phones.includes(cleanNum)) {
+                        if (addToDB('phone', cleanNum, idxPhone)) newCount++;
+                    }
                 }
             }
 
+            // 3. 抓取地址 (只有本地库没有时才保存)
             if (idxAddr !== null && cells[idxAddr]) {
                 const addrText = cells[idxAddr].innerText.trim();
                 if (addrText && addrText.length > 1) {
                     const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                     if (!blockers.some(b => addrText.includes(b))) {
                         if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) { 
-                             if (addToDB('address', addrText, idxAddr)) newCount++;
+                             // 【新增判断】如果本地库没有，才添加
+                             if (!state.db.addrs.includes(addrText)) {
+                                 if (addToDB('address', addrText, idxAddr)) newCount++;
+                             }
                         }
                     }
                 }
@@ -244,6 +254,9 @@
     // ==============================================
     //        核心存储函数：强制实时保存 (含置顶逻辑)
     // ==============================================
+    // 注意：这个函数不仅负责新增，也负责“置顶”。
+    // 自动抓取时我们通过 scanOrderPage 里的判断避免调用它。
+    // 剪贴板/手动调用时我们依然调用它，从而实现手动置顶。
     const addToDB = (type, value, sourceIdx = null) => {
         if (!value) return false;
         const storageKey = type === 'address' ? 'dbAddrs' : 'dbPhones';
@@ -301,30 +314,25 @@
         setSliderValue(targetKm);
     };
 
-    // 【关键修复】清洗数据库，去除不合理的长度限制，并记录日志
     const cleanDBWithBlacklist = () => {
         let currentAddrs = safeParse('dbAddrs', '[]');
         if (!currentAddrs || currentAddrs.length === 0) return;
         
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
-        const originalCount = currentAddrs.length;
         
         const keptAddrs = [];
         const removedAddrs = [];
 
         currentAddrs.forEach(addr => {
-            // 1. 黑名单检查
             const hit = blockers.find(keyword => addr.includes(keyword));
             if (hit) {
                 removedAddrs.push({addr: addr, reason: `黑名单: ${hit}`});
             } else {
                 keptAddrs.push(addr);
             }
-            // 2. 【已移除】原先的汉字>6检查已彻底删除
         });
 
         if (removedAddrs.length > 0) {
-            // 打印前5条被删的，防止控制台刷屏
             console.groupCollapsed(`🗑️ [自动清洗] 移除了 ${removedAddrs.length} 条无效地址`);
             removedAddrs.forEach(item => console.log(`❌ 删除: "${item.addr}" (原因: ${item.reason})`));
             console.groupEnd();
@@ -389,7 +397,6 @@
         });
     };
 
-    // 【修改点】下载覆盖：明确显示清洗前后的数量对比
     const pullFromCloud = (isAuto = false) => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
@@ -413,7 +420,6 @@
                     let rawAddrsCount = 0;
                     let importedPhones = 0;
                     
-                    // 1. 先保存原始数据
                     if (text.includes('[BLACKLIST]') || text.includes('[ADDRS]') || text.includes('[PHONES]')) {
                         const sections = text.split(/\[(BLACKLIST|ADDRS|PHONES)\]/);
                         for(let i=1; i<sections.length; i+=2) {
@@ -440,17 +446,14 @@
                         rawAddrsCount = lines.length;
                     }
 
-                    // 2. 执行清洗
                     cleanDBWithBlacklist();
                     
-                    // 3. 获取清洗后的最终数量
                     const finalAddrsCount = state.db.addrs.length;
                     const diff = rawAddrsCount - finalAddrsCount;
 
                     updateListsUI();
                     
                     if (!isAuto) {
-                        // 弹窗显示差异，解开误会
                         alert(`☁️ 覆盖完成！\n\n=== 📊 统计报表 ===\n` + 
                               `- 地址库 (原始): ${rawAddrsCount} 条\n` + 
                               `- 有效地址 (清洗后): ${finalAddrsCount} 条 (过滤垃圾: ${diff}条)\n` + 
