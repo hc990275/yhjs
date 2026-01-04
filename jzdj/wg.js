@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.1 智能抓取修复版)
+// @name          代驾调度系统助手 (v15.2 来源追踪版)
 // @namespace     http://tampermonkey.net/
-// @version       15.1
-// @description   【v15.1修复】修复无法抓取电话问题(改为全行智能扫描)；派单页手动同步；订单页集成云端控制。
+// @version       15.2
+// @description   【v15.2】新增抓取来源列日志显示；支持强制指定抓取列配置。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -22,6 +22,14 @@
 
     // --------------- 1. 配置中心 ---------------
     const CONFIG = {
+        // 【新增】抓取配置
+        // index 从 0 开始 (第1列是0，第2列是1...)
+        // 如果设置为 null，则使用原来的自动扫描模式
+        SCRAPE: {
+            PHONE_COL_INDEX: null,  // 示例: 设为 3 则强制只抓第4列
+            ADDR_COL_INDEX: null    // 示例: 设为 4 则强制只抓第5列
+        },
+
         ORDER: {
             HASH: '#/substituteDrivingOrder',
             TITLE: '订单管理',
@@ -57,7 +65,6 @@
         try { return JSON.parse(GM_getValue(key, def));
         } catch (e) { return JSON.parse(def); }
     };
-
     let state = {
         currentHash: window.location.hash,
         isCollapsed: GM_getValue('uiCollapsed', false),
@@ -79,7 +86,7 @@
             addrs: safeParse('dbAddrs', '[]'),
             phones: safeParse('dbPhones', '[]')
         },
-        
+         
         blacklist: GM_getValue('blacklist', '位置，电话，司机，请您，收到，偏远地区，已派单，代驾，师傅，安全，感谢，马上，联系，好的'),
         
         viewTab: GM_getValue('viewTab', 'address'),
@@ -124,8 +131,7 @@
             setTimeout(applyDistanceByTime, 1500);
         }
 
-        updateUI(); 
-        
+        updateUI();
         if (isDispatchPage()) {
              if (!state.manualPause) startRapidRefresh();
         } else {
@@ -141,7 +147,7 @@
     const isOrderPage = () => state.currentHash.includes(CONFIG.ORDER.HASH);
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
-
+    
     // ==============================================
     //        核心修正：列定位 + 过滤 + 本地存储
     // ==============================================
@@ -157,7 +163,7 @@
             for(let mutation of mutationsList) {
                 if (mutation.target.classList && 
                    (mutation.target.classList.contains('el-table__row') || 
-                   mutation.target.nodeName === 'TBODY')) {
+                    mutation.target.nodeName === 'TBODY')) {
                     hasTableChange = true;
                     break;
                 }
@@ -175,24 +181,30 @@
         }
     };
 
+    // 【修改点】核心扫描函数重写
     const scanOrderPage = () => {
         if (!isOrderPage() || !state.isScrapingEnabled) return;
         
-        // 【修正】辅助列：状态在第2列(索引1)，渠道在第3列(索引2)
-        // 如果列序变了，这里的过滤可能也会失效，但通常状态和渠道列比较固定
+        // 辅助列：状态通常在第2列(索引1)，渠道在第3列(索引2)
         const IDX_STATUS = 1;
         const IDX_CHANNEL = 2;
 
-        // 地址列：尝试自动识别
+        // --- 1. 确定地址列索引 ---
         let addrIndex = -1;
-        const headerThs = document.querySelectorAll('.el-table__header-wrapper th');
-        if (headerThs && headerThs.length > 0) {
-            headerThs.forEach((th, index) => {
-                const text = th.innerText.trim();
-                if (text.includes('起点') || text.includes('地址') || text.includes('出发')) {
-                    addrIndex = index;
-                }
-            });
+        
+        // 逻辑：如果配置了固定列，直接使用；否则尝试自动识别
+        if (CONFIG.SCRAPE.ADDR_COL_INDEX !== null) {
+            addrIndex = CONFIG.SCRAPE.ADDR_COL_INDEX;
+        } else {
+            const headerThs = document.querySelectorAll('.el-table__header-wrapper th');
+            if (headerThs && headerThs.length > 0) {
+                headerThs.forEach((th, index) => {
+                    const text = th.innerText.trim();
+                    if (text.includes('起点') || text.includes('地址') || text.includes('出发')) {
+                        addrIndex = index;
+                    }
+                });
+            }
         }
 
         // --- 2. 遍历内容行 ---
@@ -201,7 +213,7 @@
 
         rows.forEach(row => {
             const cells = row.querySelectorAll('td');
-            if (cells.length < 3) return; // 单元格不足，跳过
+            if (cells.length < 3) return; 
 
             // === 过滤逻辑 ===
             const statusText = cells[IDX_STATUS]?.innerText.trim() || '';
@@ -211,34 +223,48 @@
             const channelText = cells[IDX_CHANNEL]?.innerText.trim() || '';
             if (channelText.includes('新腾讯出行') || channelText.includes('盛大')) return;
 
-            // --- 抓取电话 (智能全行扫描) ---
-            // 【修改点 v15.1】不再死板取第4列，而是遍历该行所有格子寻找手机号
+            // --- 3. 抓取电话 ---
             let phoneFound = false;
-            cells.forEach(cell => {
-                if (phoneFound) return; // 一行只抓一个
-                const rawText = cell.innerText.trim();
-                if (!rawText) return;
-                
-                // 强力清洗，只留数字
-                const cleanNum = rawText.replace(/\D/g, ''); 
-                
-                // 校验：1开头，11位纯数字
-                if (/^1\d{10}$/.test(cleanNum)) {
-                    if (processPhone(cleanNum)) {
-                        newCount++;
-                        phoneFound = true; 
+            
+            // 逻辑：如果配置了固定列
+            if (CONFIG.SCRAPE.PHONE_COL_INDEX !== null) {
+                const targetIdx = CONFIG.SCRAPE.PHONE_COL_INDEX;
+                if (cells[targetIdx]) {
+                    const rawText = cells[targetIdx].innerText.trim();
+                    const cleanNum = rawText.replace(/\D/g, '');
+                    if (/^1\d{10}$/.test(cleanNum)) {
+                        // 传入列号用于日志
+                        if (processPhone(cleanNum, targetIdx)) {
+                            newCount++;
+                            phoneFound = true;
+                        }
                     }
                 }
-            });
+            } else {
+                // 逻辑：没有配置，全行智能扫描 (原逻辑)
+                cells.forEach((cell, idx) => {
+                    if (phoneFound) return; 
+                    const rawText = cell.innerText.trim();
+                    if (!rawText) return;
+                    const cleanNum = rawText.replace(/\D/g, ''); 
+                    if (/^1\d{10}$/.test(cleanNum)) {
+                        if (processPhone(cleanNum, idx)) { // 传入当前列号 idx
+                            newCount++;
+                            phoneFound = true; 
+                        }
+                    }
+                });
+            }
 
-            // --- 抓取地址 ---
+            // --- 4. 抓取地址 ---
             if (addrIndex !== -1 && cells[addrIndex]) {
                 const addrText = cells[addrIndex].innerText.trim();
                 if (addrText && addrText.length > 1) {
                     const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                     if (!blockers.some(b => addrText.includes(b))) {
-                        if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) { // 排除日期
-                             if (processAddr(addrText)) newCount++;
+                        if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) { 
+                             // 传入列号用于日志
+                             if (processAddr(addrText, addrIndex)) newCount++;
                         }
                     }
                 }
@@ -250,19 +276,21 @@
         }
     };
 
-    const processPhone = (num) => {
+    // 【修改点】增加 sourceIdx 参数并修改日志
+    const processPhone = (num, sourceIdx) => {
         if (!state.db.phones.includes(num)) {
             addToDB('phone', num);
-            log(`🆕 [本地] 抓取电话: ${num}`, 'success');
+            log(`🆕 [本地] 抓取电话: ${num} (来源: 第${sourceIdx}列)`, 'success');
             return true;
         }
         return false;
     };
 
-    const processAddr = (addr) => {
+    // 【修改点】增加 sourceIdx 参数并修改日志
+    const processAddr = (addr, sourceIdx) => {
         if (!state.db.addrs.includes(addr)) {
             addToDB('address', addr);
-            log(`🆕 [本地] 抓取地址: ${addr}`, 'success');
+            log(`🆕 [本地] 抓取地址: ${addr} (来源: 第${sourceIdx}列)`, 'success');
             return true;
         }
         return false;
@@ -288,7 +316,6 @@
         }
         setSliderValue(targetKm);
     };
-
     const addToDB = (type, value) => {
         if (!value) return;
         const list = type === 'address' ? state.db.addrs : state.db.phones;
@@ -303,7 +330,6 @@
         if (type === 'address') GM_setValue('dbAddrs', JSON.stringify(list));
         else GM_setValue('dbPhones', JSON.stringify(list));
     };
-
     const cleanDBWithBlacklist = () => {
         if (!state.db.addrs || state.db.addrs.length === 0) return;
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
@@ -436,14 +462,15 @@
                     if (!isAuto) alert('❌ 拉取失败: ' + response.statusText);
                 }
             },
-            onerror: function(e) { if (!isAuto) alert('❌ 网络错误'); }
+            onerror: function(e) { if (!isAuto) alert('❌ 网络错误');
+            }
         });
     };
-
     const pushToCloud = () => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
-        if (!url || !token) { alert('请先设置云端'); setupCloudConfig(); return; }
+        if (!url || !token) { alert('请先设置云端'); setupCloudConfig(); return;
+        }
 
         if (!confirm('⚠️ 流量警告：\n\n这会将所有本地数据（新旧汇总）一次性上传覆盖到云端。\n请确保在一天工作结束后点击，以节省Cloudflare写入额度。\n\n确定上传吗？')) return;
 
@@ -484,7 +511,6 @@
             }
         }
     };
-
     // ==============================================
     //               其他辅助功能
     // ==============================================
@@ -498,7 +524,6 @@
         }, CONFIG.DISPATCH.RAPID_INTERVAL);
     };
     const stopRapidRefresh = () => { if (state.rapidTimer) { clearInterval(state.rapidTimer); state.rapidTimer = null; } };
-
     const performAction = () => {
         if (state.manualPause) return;
         let selector = null;
@@ -528,7 +553,6 @@
         }, 1000);
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
-
     // 处理剪贴板文本
     const parseTextToDB = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
@@ -570,7 +594,6 @@
             }
         } catch (e) {}
     };
-
     const handleFileImport = (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -602,7 +625,8 @@
                  for (let i = 0; i < inputs.length; i++) {
                      const el = inputs[i];
                      if (el.closest('.gj-window')) continue;
-                     if (!el.closest('.el-form-item') && el.type === 'text') { input = el; break; }
+                     if (!el.closest('.el-form-item') && el.type === 'text') { input = el; break;
+                     }
                  }
              }
              if (!input) {
@@ -612,7 +636,8 @@
                      const el = allInputs[i];
                      if (el.closest('.gj-window')) continue; 
                      const ph = (el.placeholder || '').toLowerCase();
-                     if (keywords.some(k => ph.includes(k))) { input = el; break; }
+                     if (keywords.some(k => ph.includes(k))) { input = el; break;
+                     }
                  }
              }
         } else if (type === 'phone') {
@@ -621,7 +646,8 @@
                  const el = inputs[i];
                  if (el.closest('.gj-window')) continue; 
                  const ph = (el.placeholder || '').toLowerCase();
-                 if (ph.includes('用户电话') || ph.includes('电话') || el.type === 'tel') { input = el; break; }
+                 if (ph.includes('用户电话') || ph.includes('电话') || el.type === 'tel') { input = el;
+                 break; }
              }
         }
         if (input) {
@@ -659,7 +685,6 @@
             } catch (e) { }
         }
     };
-
     const isMatch = (dbItem, inputKey, type) => {
         if (!inputKey) return true;
         const cleanKey = inputKey.trim();
@@ -676,7 +701,6 @@
         const keywords = cleanKey.split(/\s+/);
         return keywords.every(k => dbItem.includes(k));
     };
-
     const applyLayout = () => {
         const addrWidget = document.getElementById('gj-widget-addr');
         const listBody = document.getElementById('list-addr-body');
@@ -686,7 +710,6 @@
             listBody.style.setProperty('--gj-col-width', state.colWidth + 'px');
         }
     };
-
     const toggleTheme = () => {
         state.theme = state.theme === 'light' ? 'dark' : 'light';
         GM_setValue('theme', state.theme);
@@ -701,11 +724,9 @@
             doc.classList.remove('gj-global-dark');
         }
     };
-
     const createMainWidget = () => {
         let widget = document.getElementById('gj-widget-main');
         if (widget) widget.remove();
-
         widget = document.createElement('div');
         widget.id = 'gj-widget-main';
         widget.className = state.theme === 'dark' ? 'gj-dark gj-window' : 'gj-light gj-window';
@@ -727,7 +748,6 @@
                      <span class="gj-toggle" title="折叠/展开">${toggleIcon}</span>
                 </div>
             </div>
-            
             <div id="gj-main-content" style="display: ${state.isCollapsed ? 'none' : 'block'}"></div>
             <div id="gj-scale-handle" class="gj-resize-handle" title="拖拽缩放"></div>
         `;
@@ -760,9 +780,7 @@
         widget.style.transform = `scale(${state.uiScale})`;
         widget.style.transformOrigin = 'top left';
         widget.style.width = state.layout.width + 'px';
-
         const activeTabClass = (tab) => state.viewTab === tab ? 'active-tab' : '';
-
         // 【修改点 v15.0】 派单页面不再显示上传下载按钮，已移动至订单页面
         widget.innerHTML = `
             <div class="gj-header gj-drag-header">
@@ -774,7 +792,6 @@
                     <span class="btn-icon-circle" id="btn-refresh-addr" title="刷新并自动填入最新地址">↻</span>
                 </div>
             </div>
-            
             <div class="gj-toolbar">
                 <input type="text" id="gj-search-input" placeholder="输入搜索..." value="${state.searchText}">
                 <span id="gj-btn-clear" class="btn-clear" title="清空搜索" style="display:${state.searchText ? 'block' : 'none'}">✕</span>
@@ -819,7 +836,6 @@
             updateListsUI();
             searchInput.focus();
         });
-
         const slider = widget.querySelector('#gj-col-slider');
         slider.addEventListener('input', (e) => {
             state.colWidth = parseInt(e.target.value);
@@ -828,7 +844,6 @@
         slider.addEventListener('change', (e) => {
              GM_setValue('addrColWidth', state.colWidth);
         });
-
         return widget;
     };
 
@@ -871,7 +886,6 @@
         const scaleHandle = document.getElementById('gj-scale-handle');
         if (mainContent) mainContent.style.display = state.isCollapsed ? 'none' : 'block';
         if (scaleHandle) scaleHandle.style.display = state.isCollapsed ? 'none' : 'block';
-
         if (mainContent) renderMainContent(mainContent);
         updateStatusText();
     };
@@ -940,7 +954,6 @@
         container.innerHTML = html;
         bindEvents();
     };
-
     const updateListsUI = () => {
         const addrBody = document.getElementById('list-addr-body');
         if (!addrBody) return;
@@ -970,7 +983,6 @@
         document.getElementById('btn-cloud-pull')?.addEventListener('click', () => pullFromCloud(false)); // 手动点击，显示弹窗
         document.getElementById('btn-cloud-push')?.addEventListener('click', pushToCloud);
         document.getElementById('gj-file-import')?.addEventListener('change', handleFileImport);
-
         if (isDispatchPage()) {
             document.querySelectorAll('.btn-preset').forEach(btn => 
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
@@ -1029,9 +1041,7 @@
             }
         }
     };
-
     const log = (text, type) => { console.log(`[助手] ${text}`); };
-
     const applyPos = (el, pos) => {
         if (pos.left) { el.style.left = pos.left;
         el.style.right = 'auto'; }
@@ -1192,7 +1202,8 @@
                 overflow: hidden;
             }
 
-            #gj-widget-main { width: 250px; }
+            #gj-widget-main { width: 250px;
+            }
             #gj-widget-addr { /* width dynamic */ }
 
             .gj-header {
@@ -1361,7 +1372,6 @@
             }
         `);
     };
-
     const init = () => {
         migrateOldData(); 
         addStyles();
