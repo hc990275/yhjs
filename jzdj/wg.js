@@ -26,11 +26,11 @@
         // index 从 0 开始计数 (即：第1列是0，第6列是5，第7列是6，第13列是12)
         SCRAPE: {
             // 1. 抓取目标列 (您指定的列)
-            PHONE_COL_INDEX: 12,  // 您的要求：第13列
-            ADDR_COL_INDEX: 6,    // 您的要求：第7列
+            PHONE_COL_INDEX: 13,  // 您的要求：第13列
+            ADDR_COL_INDEX: 7,    // 您的要求：第7列
 
             // 2. 排除过滤配置
-            EXCLUDE_COL_INDEX: 5, // 您的要求：第6列
+            EXCLUDE_COL_INDEX: 6, // 您的要求：第6列
             
             // 3. 排除关键词 (只要排除列包含以下任意一个词，整行不抓取)
             EXCLUDE_NAMES: [
