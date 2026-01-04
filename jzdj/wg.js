@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.6.4 反馈调试版)
+// @name          代驾调度系统助手 (v15.6.5 强力置顶版)
 // @namespace     http://tampermonkey.net/
-// @version       15.6.4
-// @description   【v15.6.4】调试增强：在派单页点击“填最新地址/电话”时，控制台会输出详细的读取和填入日志，方便排查问题。
+// @version       15.6.5
+// @description   【v15.6.5】核心修正：剪贴板读取已存在的数据时，强制移动到第一位(置顶)；控制台增加本地库数量统计显示。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -112,7 +112,7 @@
         }
     };
     
-    // --------------- 3. 日志工具 (增强版) ---------------
+    // --------------- 3. 日志工具 ---------------
     const log = (text, type = 'info') => {
         const styles = {
             'info': 'color: #409EFF; font-weight: bold;',
@@ -142,7 +142,7 @@
         
         if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
-            log('进入派单界面 (剪贴板强力模式)', 'info');
+            log('进入派单界面 (剪贴板置顶模式)', 'info');
             setTimeout(applyDistanceByTime, 1500);
         }
 
@@ -243,7 +243,7 @@
     };
 
     // ==============================================
-    //        核心存储函数：强制实时保存
+    //        核心存储函数：强制实时保存 (含置顶逻辑)
     // ==============================================
     const addToDB = (type, value, sourceIdx = null) => {
         if (!value) return false;
@@ -255,9 +255,17 @@
             currentList = JSON.parse(raw);
         } catch(e) { currentList = []; }
 
-        if (currentList.includes(value)) return false;
+        // 【新逻辑】如果已存在，先删除（为了后面添加到头部）
+        const existingIndex = currentList.indexOf(value);
+        let isReorder = false;
+        if (existingIndex > -1) {
+            currentList.splice(existingIndex, 1);
+            isReorder = true;
+        }
         
+        // 插入头部 (如果是新的则插入，如果是旧的则等于移动到头部)
         currentList.unshift(value);
+        
         if (currentList.length > CONFIG.STORAGE.MAX_ITEMS) {
             currentList.length = CONFIG.STORAGE.MAX_ITEMS;
         }
@@ -268,8 +276,12 @@
 
         if (sourceIdx !== null) {
             log(`💾 [已保存] ${type==='address'?'地址':'电话'}: ${value} (来源: 第${sourceIdx+1}列)`, 'success');
+        } else if (isReorder) {
+            log(`🔄 [已置顶] ${type==='address'?'地址':'电话'}: ${value}`, 'warning');
+        } else {
+            log(`🆕 [新录入] ${type==='address'?'地址':'电话'}: ${value}`, 'success');
         }
-        return true;
+        return true; // 只要列表变动了（新增或顺序变化），都返回true
     };
 
     // ==============================================
@@ -555,20 +567,21 @@
             const text = await navigator.clipboard.readText();
             log(`📋 剪贴板读取成功: "${text.substring(0, 50)}${text.length>50?'...':''}"`, 'success');
 
-            // 2. 解析并入库
+            // 2. 解析并入库 (此时addToDB会自动处理置顶逻辑)
             const hasUpdate = parseTextToDB(text);
-            if (hasUpdate) {
-                updateListsUI();
-                log('💾 数据已解析并更新到本地库', 'success');
-            } else {
-                log('⚠️ 剪贴板内容未包含有效的新地址/电话，或已存在', 'warning');
-            }
+            
+            // 3. 无论是否有更新，都重新刷新UI
+            updateListsUI();
+            
+            // 4. 【新功能】显示本地库数量
+            log(`📊 [本地库统计] 📍地址: ${state.db.addrs.length} | 📞电话: ${state.db.phones.length}`, 'info');
+
         } catch (e) {
             log(`❌ 剪贴板读取失败 (可能是权限问题): ${e.message}`, 'error');
             log('🔄 将尝试使用本地库中已有的最新数据进行填充...', 'info');
         }
 
-        // 3. 执行填充（优先用刚读到的，没有就用旧的）
+        // 5. 执行填充（优先用刚读到的，因为已经置顶了）
         if (fillTarget === 'address' && state.db.addrs && state.db.addrs.length > 0) {
             fillInput('address', state.db.addrs[0]);
         } else if (fillTarget === 'phone' && state.db.phones && state.db.phones.length > 0) {
