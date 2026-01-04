@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.2 来源追踪版)
+// @name          代驾调度系统助手 (v15.3 排除列增强版)
 // @namespace     http://tampermonkey.net/
-// @version       15.2
-// @description   【v15.2】新增抓取来源列日志显示；支持强制指定抓取列配置。
+// @version       15.3
+// @description   【v15.3】新增自定义排除列功能(默认第6列)，支持关键词过滤；保留来源追踪日志。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -22,12 +22,23 @@
 
     // --------------- 1. 配置中心 ---------------
     const CONFIG = {
-        // 【新增】抓取配置
-        // index 从 0 开始 (第1列是0，第2列是1...)
-        // 如果设置为 null，则使用原来的自动扫描模式
+        // 【新增/修改】抓取与排除配置
+        // index 从 0 开始 (第1列是0，第2列是1... 第6列是5)
         SCRAPE: {
-            PHONE_COL_INDEX: 13,  // 示例: 设为 3 则强制只抓第4列
-            ADDR_COL_INDEX: 7    // 示例: 设为 4 则强制只抓第5列
+            // 1. 抓取目标列 (设为 null 则自动智能扫描)
+            PHONE_COL_INDEX: 13,  // 示例: 3 (只抓第4列)
+            ADDR_COL_INDEX: 7,   // 示例: 4 (只抓第5列)
+
+            // 2. 排除过滤配置 (优先读取配置，否则默认第6列)
+            EXCLUDE_COL_INDEX: 6, // 示例: 5 (第6列)。如果不填，默认为 5
+            
+            // 3. 排除关键词 (只要排除列包含以下任意一个词，整行不抓取)
+            // 请在单引号内填写关键词，用逗号分隔
+            EXCLUDE_NAMES: [
+                '盛大大地模式', 
+                '腾讯出行', 
+                // 你可以在这里继续添加...
+            ]
         },
 
         ORDER: {
@@ -181,21 +192,28 @@
         }
     };
 
-    // 【修改点】核心扫描函数重写
+    // 【修改点】核心扫描函数：增加自定义排除列逻辑
     const scanOrderPage = () => {
         if (!isOrderPage() || !state.isScrapingEnabled) return;
         
-        // 辅助列：状态通常在第2列(索引1)，渠道在第3列(索引2)
+        // 1. 硬编码的基础过滤 (状态/渠道)
         const IDX_STATUS = 1;
         const IDX_CHANNEL = 2;
 
-        // --- 1. 确定地址列索引 ---
+        // 2. 确定【排除列】索引
+        // 逻辑：如果配置了 EXCLUDE_COL_INDEX 则使用，否则默认 5 (第6列)
+        let excludeColIdx = 5;
+        if (CONFIG.SCRAPE.EXCLUDE_COL_INDEX !== null) {
+            excludeColIdx = CONFIG.SCRAPE.EXCLUDE_COL_INDEX;
+        }
+        const excludeKeywords = CONFIG.SCRAPE.EXCLUDE_NAMES || [];
+
+        // 3. 确定【地址列】索引
         let addrIndex = -1;
-        
-        // 逻辑：如果配置了固定列，直接使用；否则尝试自动识别
         if (CONFIG.SCRAPE.ADDR_COL_INDEX !== null) {
             addrIndex = CONFIG.SCRAPE.ADDR_COL_INDEX;
         } else {
+            // 自动识别
             const headerThs = document.querySelectorAll('.el-table__header-wrapper th');
             if (headerThs && headerThs.length > 0) {
                 headerThs.forEach((th, index) => {
@@ -207,7 +225,7 @@
             }
         }
 
-        // --- 2. 遍历内容行 ---
+        // --- 4. 遍历内容行 ---
         const rows = document.querySelectorAll('.el-table__body-wrapper .el-table__row');
         let newCount = 0;
 
@@ -215,7 +233,7 @@
             const cells = row.querySelectorAll('td');
             if (cells.length < 3) return; 
 
-            // === 过滤逻辑 ===
+            // === A. 基础过滤 ===
             const statusText = cells[IDX_STATUS]?.innerText.trim() || '';
             if (statusText.includes('后台销单') || statusText.includes('后台消单') || 
                 statusText.includes('乘客取消')) return;
@@ -223,7 +241,19 @@
             const channelText = cells[IDX_CHANNEL]?.innerText.trim() || '';
             if (channelText.includes('新腾讯出行') || channelText.includes('盛大')) return;
 
-            // --- 3. 抓取电话 ---
+            // === B. 自定义列排除逻辑 (新增) ===
+            if (cells[excludeColIdx]) {
+                const checkText = cells[excludeColIdx].innerText.trim();
+                // 检查是否包含任一排除词
+                const hit = excludeKeywords.find(kw => checkText.includes(kw));
+                if (hit) {
+                    // 命中排除词，跳过此行
+                    // log(`⛔ [跳过] 发现排除词 "${hit}" (位于第${excludeColIdx}列: ${checkText})`, 'info');
+                    return; 
+                }
+            }
+
+            // === C. 抓取电话 ===
             let phoneFound = false;
             
             // 逻辑：如果配置了固定列
@@ -233,7 +263,6 @@
                     const rawText = cells[targetIdx].innerText.trim();
                     const cleanNum = rawText.replace(/\D/g, '');
                     if (/^1\d{10}$/.test(cleanNum)) {
-                        // 传入列号用于日志
                         if (processPhone(cleanNum, targetIdx)) {
                             newCount++;
                             phoneFound = true;
@@ -241,14 +270,14 @@
                     }
                 }
             } else {
-                // 逻辑：没有配置，全行智能扫描 (原逻辑)
+                // 逻辑：自动全行扫描
                 cells.forEach((cell, idx) => {
                     if (phoneFound) return; 
                     const rawText = cell.innerText.trim();
                     if (!rawText) return;
                     const cleanNum = rawText.replace(/\D/g, ''); 
                     if (/^1\d{10}$/.test(cleanNum)) {
-                        if (processPhone(cleanNum, idx)) { // 传入当前列号 idx
+                        if (processPhone(cleanNum, idx)) {
                             newCount++;
                             phoneFound = true; 
                         }
@@ -256,14 +285,13 @@
                 });
             }
 
-            // --- 4. 抓取地址 ---
+            // === D. 抓取地址 ===
             if (addrIndex !== -1 && cells[addrIndex]) {
                 const addrText = cells[addrIndex].innerText.trim();
                 if (addrText && addrText.length > 1) {
                     const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                     if (!blockers.some(b => addrText.includes(b))) {
                         if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) { 
-                             // 传入列号用于日志
                              if (processAddr(addrText, addrIndex)) newCount++;
                         }
                     }
@@ -276,7 +304,6 @@
         }
     };
 
-    // 【修改点】增加 sourceIdx 参数并修改日志
     const processPhone = (num, sourceIdx) => {
         if (!state.db.phones.includes(num)) {
             addToDB('phone', num);
@@ -286,7 +313,6 @@
         return false;
     };
 
-    // 【修改点】增加 sourceIdx 参数并修改日志
     const processAddr = (addr, sourceIdx) => {
         if (!state.db.addrs.includes(addr)) {
             addToDB('address', addr);
