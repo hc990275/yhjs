@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.6.3 剪贴板修正版)
+// @name          代驾调度系统助手 (v15.6.4 反馈调试版)
 // @namespace     http://tampermonkey.net/
-// @version       15.6.3
-// @description   【v15.6.3】修正：派单页点击“填最新地址/电话”时强制读取剪贴板内容；自动识别并填入对应输入框。
+// @version       15.6.4
+// @description   【v15.6.4】调试增强：在派单页点击“填最新地址/电话”时，控制台会输出详细的读取和填入日志，方便排查问题。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -111,7 +111,19 @@
             GM_setValue('clipHistory', ''); 
         }
     };
-    // --------------- 3. 核心逻辑 ---------------
+    
+    // --------------- 3. 日志工具 (增强版) ---------------
+    const log = (text, type = 'info') => {
+        const styles = {
+            'info': 'color: #409EFF; font-weight: bold;',
+            'success': 'color: #67C23A; font-weight: bold;',
+            'warning': 'color: #E6A23C; font-weight: bold;',
+            'error': 'color: #F56C6C; font-weight: bold;'
+        };
+        console.log(`%c[助手] ${text}`, styles[type] || styles['info']);
+    };
+
+    // --------------- 4. 核心逻辑 ---------------
 
     const checkPage = () => {
         state.currentHash = window.location.hash;
@@ -130,7 +142,7 @@
         
         if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
-            log('进入派单界面 (剪贴板模式)', 'info');
+            log('进入派单界面 (剪贴板强力模式)', 'info');
             setTimeout(applyDistanceByTime, 1500);
         }
 
@@ -537,14 +549,23 @@
 
     // 【关键修改】处理剪贴板并填充指定类型
     const processClipboard = async (fillTarget = null) => {
+        log(`[流程开始] 准备从剪贴板填充: ${fillTarget === 'address' ? '地址' : '电话'}`, 'info');
         try {
             // 1. 尝试读取剪贴板
             const text = await navigator.clipboard.readText();
+            log(`📋 剪贴板读取成功: "${text.substring(0, 50)}${text.length>50?'...':''}"`, 'success');
+
             // 2. 解析并入库
             const hasUpdate = parseTextToDB(text);
-            if (hasUpdate) updateListsUI();
+            if (hasUpdate) {
+                updateListsUI();
+                log('💾 数据已解析并更新到本地库', 'success');
+            } else {
+                log('⚠️ 剪贴板内容未包含有效的新地址/电话，或已存在', 'warning');
+            }
         } catch (e) {
-            // 读取失败（权限或空），不报错，直接尝试用现有库存填充
+            log(`❌ 剪贴板读取失败 (可能是权限问题): ${e.message}`, 'error');
+            log('🔄 将尝试使用本地库中已有的最新数据进行填充...', 'info');
         }
 
         // 3. 执行填充（优先用刚读到的，没有就用旧的）
@@ -578,6 +599,7 @@
     };
 
     const fillInput = (type, value) => {
+        log(`✍️ 准备填入 ${type==='address'?'地址':'电话'}: "${value}"`, 'info');
         let input = null;
         if (type === 'address') {
              input = document.getElementById('tipinput');
@@ -612,6 +634,7 @@
              }
         }
         if (input) {
+            log(`✅ 找到输入框 (类型:${input.type}, Placeholder:${input.placeholder})`, 'success');
             input.value = value;
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
@@ -620,6 +643,9 @@
             input.style.transition = 'all 0.3s';
             input.style.boxShadow = '0 0 0 2px rgba(103, 194, 58, 0.3)';
             setTimeout(() => input.style.boxShadow = '', 800);
+            log(`🚀 已触发输入事件`, 'success');
+        } else {
+            log(`❌ 未找到目标输入框! 请检查页面状态`, 'error');
         }
     };
 
@@ -1002,7 +1028,6 @@
             }
         }
     };
-    const log = (text, type) => { console.log(`[助手] ${text}`); };
     const applyPos = (el, pos) => {
         if (pos.left) { el.style.left = pos.left;
         el.style.right = 'auto'; }
