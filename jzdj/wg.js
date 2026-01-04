@@ -26,8 +26,8 @@
         // index 从 0 开始 (第1列是0，第2列是1...)
         // 如果设置为 null，则使用原来的自动扫描模式
         SCRAPE: {
-            PHONE_COL_INDEX: null,  // 示例: 设为 3 则强制只抓第4列
-            ADDR_COL_INDEX: null    // 示例: 设为 4 则强制只抓第5列
+            PHONE_COL_INDEX: 13,  // 示例: 设为 3 则强制只抓第4列
+            ADDR_COL_INDEX: 6    // 示例: 设为 4 则强制只抓第5列
         },
 
         ORDER: {
