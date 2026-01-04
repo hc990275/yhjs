@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.6 专版定制)
+// @name          代驾调度系统助手 (v15.6 混合修正版)
 // @namespace     http://tampermonkey.net/
-// @version       15.6
-// @description   【v15.6】定制版：排除列6/电话列13/地址列7；排除腾讯出行/盛大大地；强制实时保存；云端下载绝对覆盖。
+// @version       15.6.1
+// @description   【v15.6修正】保留自定义列抓取/排除逻辑；恢复旧版“填最新地址/电话”逻辑（直接填入库中最新一条，而非读取剪贴板）。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -20,7 +20,7 @@
 (function() {
     'use strict';
 
-    // --------------- 1. 配置中心 (已根据您的要求配置) ---------------
+    // --------------- 1. 配置中心 (保持 v15.6 配置) ---------------
     const CONFIG = {
         // 【抓取与排除配置】
         // index 从 0 开始计数 (即：第1列是0，第6列是5，第7列是6，第13列是12)
@@ -95,7 +95,7 @@
             addrs: safeParse('dbAddrs', '[]'),
             phones: safeParse('dbPhones', '[]')
         },
-         
+        
         blacklist: GM_getValue('blacklist', '位置，电话，司机，请您，收到，偏远地区，已派单，代驾，师傅，安全，感谢，马上，联系，好的'),
         
         viewTab: GM_getValue('viewTab', 'address'),
@@ -104,7 +104,6 @@
         timeConfig: safeParse('timeConfig', '{"start":"20:00", "end":"22:00"}'),
         theme: GM_getValue('theme', 'light') 
     };
-
     const migrateOldData = () => {
         const oldHistory = safeParse('clipHistory', null);
         if (oldHistory) {
@@ -113,7 +112,6 @@
             GM_setValue('clipHistory', ''); 
         }
     };
-
     // --------------- 3. 核心逻辑 ---------------
 
     const checkPage = () => {
@@ -153,7 +151,6 @@
     const isOrderPage = () => state.currentHash.includes(CONFIG.ORDER.HASH);
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
-    
     // ==============================================
     //        核心修正：列定位 + 过滤 + 本地存储
     // ==============================================
@@ -169,7 +166,7 @@
             for(let mutation of mutationsList) {
                 if (mutation.target.classList && 
                    (mutation.target.classList.contains('el-table__row') || 
-                    mutation.target.nodeName === 'TBODY')) {
+                   mutation.target.nodeName === 'TBODY')) {
                     hasTableChange = true;
                     break;
                 }
@@ -190,7 +187,6 @@
     // 核心扫描函数 (严格按照您的列配置)
     const scanOrderPage = () => {
         if (!isOrderPage() || !state.isScrapingEnabled) return;
-        
         // 1. 获取配置的索引
         const idxExclude = CONFIG.SCRAPE.EXCLUDE_COL_INDEX; // 5 (第6列)
         const idxPhone = CONFIG.SCRAPE.PHONE_COL_INDEX;     // 12 (第13列)
@@ -201,7 +197,6 @@
         // 2. 遍历内容行
         const rows = document.querySelectorAll('.el-table__body-wrapper .el-table__row');
         let newCount = 0;
-
         rows.forEach(row => {
             const cells = row.querySelectorAll('td');
             // 如果列数不够，直接跳过，防止报错
@@ -213,7 +208,6 @@
                 const checkText = cells[idxExclude].innerText.trim();
                 const hit = excludeKeywords.find(kw => checkText.includes(kw));
                 if (hit) {
-                    // log(`⛔ [排除] 发现 "${hit}" (第${idxExclude+1}列: ${checkText})`, 'info');
                     return; // 跳过此行
                 }
             }
@@ -240,14 +234,13 @@
                         // 简单排除日期格式
                         if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) { 
                              if (addToDB('address', addrText, idxAddr)) {
-                                 newCount++;
+                                  newCount++;
                              }
                         }
                     }
                 }
             }
         });
-
         if (newCount > 0) {
             updateListsUI();
         }
@@ -258,9 +251,7 @@
     // ==============================================
     const addToDB = (type, value, sourceIdx = null) => {
         if (!value) return false;
-        
         const storageKey = type === 'address' ? 'dbAddrs' : 'dbPhones';
-        
         // 1. 【关键】每次写入前，强制重新从存储读取最新列表
         // 这样即使其他标签页更新了数据，这里也能获取到，不会覆盖丢失
         let currentList = [];
@@ -271,10 +262,8 @@
 
         // 2. 查重
         if (currentList.includes(value)) return false;
-
         // 3. 插入头部
         currentList.unshift(value);
-
         // 4. 限制长度
         if (currentList.length > CONFIG.STORAGE.MAX_ITEMS) {
             currentList.length = CONFIG.STORAGE.MAX_ITEMS;
@@ -282,7 +271,6 @@
 
         // 5. 【关键】立即写入存储
         GM_setValue(storageKey, JSON.stringify(currentList));
-
         // 6. 同步内存状态
         if (type === 'address') state.db.addrs = currentList;
         else state.db.phones = currentList;
@@ -294,7 +282,6 @@
         
         return true;
     };
-
     // ==============================================
     //               云端同步 / 数据库
     // ==============================================
@@ -315,21 +302,18 @@
         }
         setSliderValue(targetKm);
     };
-
     const cleanDBWithBlacklist = () => {
         let currentAddrs = safeParse('dbAddrs', '[]');
         if (!currentAddrs || currentAddrs.length === 0) return;
         
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
         const originalCount = currentAddrs.length;
-        
         currentAddrs = currentAddrs.filter(addr => {
             if (blockers.length > 0 && blockers.some(keyword => addr.includes(keyword))) return false;
             const hanziMatches = addr.match(/[\u4e00-\u9fa5]/g);
             if ((hanziMatches ? hanziMatches.length : 0) > 6) return false;
             return true;
         });
-
         if (originalCount !== currentAddrs.length) {
             GM_setValue('dbAddrs', JSON.stringify(currentAddrs));
             state.db.addrs = currentAddrs;
@@ -772,7 +756,6 @@
         widget.style.transformOrigin = 'top left';
         widget.style.width = state.layout.width + 'px';
         const activeTabClass = (tab) => state.viewTab === tab ? 'active-tab' : '';
-        
         widget.innerHTML = `
             <div class="gj-header gj-drag-header">
                 <div class="gj-tabs">
@@ -790,7 +773,8 @@
 
             <div class="gj-list-body" id="list-addr-body" style="height:${state.layout.height}px;"></div>
             
-            <div style="padding:5px 8px; font-size:11px; display:flex; align-items:center; gap:5px; border-top:1px dashed var(--gj-border);">
+            <div style="padding:5px 8px;
+            font-size:11px; display:flex; align-items:center; gap:5px; border-top:1px dashed var(--gj-border);">
                 <span style="color:var(--gj-text-mute);white-space:nowrap;">列宽:</span>
                 <input type="range" id="gj-col-slider" min="50" max="250" value="${state.colWidth}" style="flex:1;" title="拖动改变显示字数">
             </div>
@@ -891,7 +875,6 @@
             const scrapeClass = state.isScrapingEnabled ? 'btn-resume' : 'btn-preset';
             const scrapeText = state.isScrapingEnabled ? '👁️ 自动抓取: 开启' : '🙈 自动抓取: 关闭';
             const scrapeStyle = state.isScrapingEnabled ? 'border:1px solid #e1f3d8;background:#f0f9eb;color:#67c23a;' : 'border:1px solid var(--gj-border);background:var(--gj-bg-sec);color:var(--gj-text-mute);';
-
             html = `
                 <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
                     <span class="gj-timer-text" style="color:${statusColor}">${state.manualPause ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
@@ -943,6 +926,7 @@
         container.innerHTML = html;
         bindEvents();
     };
+
     const updateListsUI = () => {
         const addrBody = document.getElementById('list-addr-body');
         if (!addrBody) return;
@@ -957,7 +941,8 @@
         };
 
         if (filteredList.length === 0) {
-            addrBody.innerHTML = `<div class="gj-empty">${state.searchText ? '无匹配结果' : '库为空<br>请导入文件或复制文本'}</div>`;
+            addrBody.innerHTML = `<div class="gj-empty">${state.searchText ?
+            '无匹配结果' : '库为空<br>请导入文件或复制文本'}</div>`;
         } else {
             addrBody.innerHTML = filteredList.map(i => renderItem(i)).join('');
             addrBody.querySelectorAll('.gj-list-item').forEach(el => 
@@ -975,12 +960,15 @@
             document.querySelectorAll('.btn-preset').forEach(btn => 
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
             );
+            
+            // 【关键修改点】恢复旧逻辑：直接使用本地数据库中最新的一条，而不是读取剪贴板
             document.getElementById('btn-auto-addr')?.addEventListener('click', () => {
-                processClipboard(true);
+                if(state.db.addrs && state.db.addrs[0]) fillInput('address', state.db.addrs[0]);
             });
             document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
-                processClipboard(true);
+                if(state.db.phones && state.db.phones[0]) fillInput('phone', state.db.phones[0]);
             });
+            
             document.getElementById('btn-sync-cloud')?.addEventListener('click', () => {
                 fetchOnlineBlacklist(false);
             });
@@ -998,6 +986,7 @@
                     state.isScrapingEnabled = !state.isScrapingEnabled;
                     GM_setValue('scrapeEnabled', state.isScrapingEnabled);
                     updateUI();
+            
                     if (state.isScrapingEnabled) {
                         scanOrderPage();
                     }
@@ -1184,7 +1173,8 @@
                 border-radius: 12px; 
                 overflow: hidden;
             }
-            #gj-widget-main { width: 250px; }
+            #gj-widget-main { width: 250px;
+            }
             .gj-header {
                 padding: 10px 12px;
                 background: var(--gj-header-bg);
@@ -1193,10 +1183,14 @@
                 cursor: grab; font-weight: 600; font-size: 14px;
                 box-shadow: 0 2px 4px rgba(0,0,0,0.1);
             }
-            .gj-toggle, #gj-theme-toggle { cursor: pointer; opacity:0.8; transition:opacity 0.2s; font-size:14px; }
-            .gj-toggle:hover, #gj-theme-toggle:hover { opacity:1; }
-            #gj-main-content { padding: 16px; background:var(--gj-bg-main); position: relative;}
-            .gj-timer-text { font-size: 38px; font-weight: 700; line-height:1; letter-spacing: -1px; }
+            .gj-toggle, #gj-theme-toggle { cursor: pointer;
+            opacity:0.8; transition:opacity 0.2s; font-size:14px; }
+            .gj-toggle:hover, #gj-theme-toggle:hover { opacity:1;
+            }
+            #gj-main-content { padding: 16px; background:var(--gj-bg-main);
+            position: relative;}
+            .gj-timer-text { font-size: 38px; font-weight: 700; line-height:1;
+            letter-spacing: -1px; }
             .gj-btn {
                 width: 100%;
                 border: none; padding: 10px; border-radius: 8px; 
@@ -1204,78 +1198,119 @@
                 transition: all 0.2s; box-shadow: 0 2px 6px rgba(0,0,0,0.1);
                 display:flex; justify-content:center; align-items:center; gap:5px;
             }
-            .gj-btn:active { transform: scale(0.98); }
-            .btn-pause { background: #fff1f0; color: #f56c6c; border:1px solid #fde2e2; }
-            .gj-dark .btn-pause { background: #4a1b1b; color: #ff6b6b; border:1px solid #632b2b; }
-            .btn-resume { background: #f0f9eb; color: #67c23a; border:1px solid #e1f3d8; }
-            .gj-dark .btn-resume { background: #1b4a24; color: #67c23a; border:1px solid #2b6339; }
+            .gj-btn:active { transform: scale(0.98);
+            }
+            .btn-pause { background: #fff1f0; color: #f56c6c;
+            border:1px solid #fde2e2; }
+            .gj-dark .btn-pause { background: #4a1b1b;
+            color: #ff6b6b; border:1px solid #632b2b; }
+            .btn-resume { background: #f0f9eb;
+            color: #67c23a; border:1px solid #e1f3d8; }
+            .gj-dark .btn-resume { background: #1b4a24;
+            color: #67c23a; border:1px solid #2b6339; }
             .btn-preset { 
                 background: var(--gj-bg-sec);
                 border: 1px solid var(--gj-border); color: var(--gj-text-sec); 
                 padding: 6px 0; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight:600;
             }
-            .btn-preset:hover { background: var(--gj-hover); border-color: #b3d8ff; color: #409EFF; }
-            .btn-green { background: linear-gradient(135deg, #42e695 0%, #3bb2b8 100%); color: white; }
-            .btn-blue { background: linear-gradient(135deg, #f56c6c 0%, #f78989 100%); color: white; } 
-            .gj-control-row { display: flex; justify-content: space-between; align-items: center; margin-top: 15px; padding: 0 2px;}
+            .btn-preset:hover { background: var(--gj-hover); border-color: #b3d8ff; color: #409EFF;
+            }
+            .btn-green { background: linear-gradient(135deg, #42e695 0%, #3bb2b8 100%);
+            color: white; }
+            .btn-blue { background: linear-gradient(135deg, #f56c6c 0%, #f78989 100%);
+            color: white; } 
+            .gj-control-row { display: flex;
+            justify-content: space-between; align-items: center; margin-top: 15px; padding: 0 2px;}
             .gj-input-mini { 
-                width: 45px; border: 1px solid var(--gj-border); border-radius: 6px; 
+                width: 45px;
+                border: 1px solid var(--gj-border); border-radius: 6px; 
                 text-align: center; padding: 4px; font-size:13px; outline:none;
                 background: var(--gj-bg-input); color: var(--gj-text-main); transition: all 0.2s;
             }
-            .gj-input-mini:focus { border-color: #409EFF; }
-            .gj-btn-icon { border:none; background:transparent; cursor:pointer; font-size:16px; padding:0 5px; }
-            .gj-btn-text { border:none; background:transparent; cursor:pointer; font-size:11px; color:var(--gj-text-mute); }
-            .gj-btn-text:hover { color:#409EFF; }
-            .gj-group { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; }
-            .gj-divider { display:flex; align-items:center; margin: 10px 0 6px 0; }
-            .gj-divider::before, .gj-divider::after { content:''; flex:1; height:1px; background:var(--gj-border); }
-            .gj-label-sm { font-size: 11px; color: var(--gj-text-mute); margin: 0 8px; white-space:nowrap;}
-            .gj-grid-btns { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
-            .gj-bottom-controls { display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding-top:10px; border-top:1px dashed var(--gj-border); }
+            .gj-input-mini:focus { border-color: #409EFF;
+            }
+            .gj-btn-icon { border:none; background:transparent; cursor:pointer; font-size:16px; padding:0 5px;
+            }
+            .gj-btn-text { border:none; background:transparent; cursor:pointer; font-size:11px; color:var(--gj-text-mute);
+            }
+            .gj-btn-text:hover { color:#409EFF;
+            }
+            .gj-group { display:flex; flex-direction:column; gap:8px; margin-bottom:12px;
+            }
+            .gj-divider { display:flex; align-items:center;
+            margin: 10px 0 6px 0; }
+            .gj-divider::before, .gj-divider::after { content:'';
+            flex:1; height:1px; background:var(--gj-border); }
+            .gj-label-sm { font-size: 11px;
+            color: var(--gj-text-mute); margin: 0 8px; white-space:nowrap;}
+            .gj-grid-btns { display: grid;
+            grid-template-columns: repeat(5, 1fr); gap: 5px; }
+            .gj-bottom-controls { display:flex;
+            justify-content:space-between; align-items:center; margin-top:12px; padding-top:10px; border-top:1px dashed var(--gj-border); }
             .btn-icon-circle { 
-                width:22px; height:22px; border-radius:50%; background:rgba(255,255,255,0.2); 
+                width:22px;
+                height:22px; border-radius:50%; background:rgba(255,255,255,0.2); 
                 display:flex; align-items:center; justify-content:center; 
                 cursor:pointer; color:#fff; font-size:12px; transition:0.2s;
             }
-            .btn-icon-circle:hover { background:rgba(255,255,255,0.4); transform:scale(1.1); }
-            .gj-tabs { display:flex; gap:10px; align-items:center; }
-            .gj-tab { cursor:pointer; padding:2px 0; opacity:0.6; border-bottom:2px solid transparent; transition:0.2s; }
-            .gj-tab:hover { opacity:0.9; }
-            .gj-tab.active-tab { opacity:1; font-weight:bold; border-bottom-color:#fff; }
+            .btn-icon-circle:hover { background:rgba(255,255,255,0.4); transform:scale(1.1);
+            }
+            .gj-tabs { display:flex; gap:10px; align-items:center;
+            }
+            .gj-tab { cursor:pointer; padding:2px 0; opacity:0.6;
+            border-bottom:2px solid transparent; transition:0.2s; }
+            .gj-tab:hover { opacity:0.9;
+            }
+            .gj-tab.active-tab { opacity:1; font-weight:bold; border-bottom-color:#fff;
+            }
             .gj-toolbar { 
-                padding: 8px; background: var(--gj-bg-sec); 
+                padding: 8px;
+                background: var(--gj-bg-sec); 
                 border-bottom: 1px solid var(--gj-border); 
                 display: flex; align-items: center; gap: 5px;
             }
             #gj-search-input {
-                flex: 1; border: 1px solid var(--gj-border);
+                flex: 1;
+                border: 1px solid var(--gj-border);
                 border-radius: 4px; padding: 5px 8px; font-size: 14px; outline: none;
                 background: var(--gj-bg-input); color: var(--gj-text-main);
-                font-family: monospace; letter-spacing: 1px;
+                font-family: monospace;
+                letter-spacing: 1px;
             }
-            #gj-search-input:focus { border-color: #409EFF; }
-            .btn-clear { cursor: pointer; color: var(--gj-text-mute); font-size: 18px; line-height: 1; padding: 0 4px; transition: color 0.2s; }
-            .btn-clear:hover { color: #F56C6C; }
+            #gj-search-input:focus { border-color: #409EFF;
+            }
+            .btn-clear { cursor: pointer; color: var(--gj-text-mute); font-size: 18px;
+            line-height: 1; padding: 0 4px; transition: color 0.2s; }
+            .btn-clear:hover { color: #F56C6C;
+            }
             .gj-list-body { 
-                overflow-y: auto; display: grid;
+                overflow-y: auto;
+                display: grid;
                 grid-template-columns: repeat(auto-fill, minmax(var(--gj-col-width, 80px), 1fr));
                 gap: 1px; background: var(--gj-bg-sec); padding: 1px;
                 transition: height 0.05s;
             }
-            .gj-list-body::-webkit-scrollbar { width: 4px; }
-            .gj-list-body::-webkit-scrollbar-thumb { background: var(--gj-border); border-radius: 2px; }
+            .gj-list-body::-webkit-scrollbar { width: 4px;
+            }
+            .gj-list-body::-webkit-scrollbar-thumb { background: var(--gj-border); border-radius: 2px;
+            }
             .gj-list-item {
-                background: var(--gj-bg-main); padding: 6px 4px; 
+                background: var(--gj-bg-main);
+                padding: 6px 4px; 
                 cursor: pointer; font-size: 13px; font-weight: 500;
                 color: var(--gj-text-main); display: flex; align-items: center; justify-content: center;
-                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
+                white-space: nowrap;
+                overflow: hidden; text-overflow: ellipsis; 
             }
-            .gj-list-item:hover { background: var(--gj-hover); color: var(--gj-hover-text); }
-            .gj-item-text { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
-            .gj-empty { grid-column: 1 / -1; text-align: center; color: var(--gj-text-mute); padding: 30px 10px; font-size: 12px; background: var(--gj-bg-main);}
+            .gj-list-item:hover { background: var(--gj-hover);
+            color: var(--gj-hover-text); }
+            .gj-item-text { overflow: hidden; text-overflow: ellipsis;
+            max-width: 100%; }
+            .gj-empty { grid-column: 1 / -1;
+            text-align: center; color: var(--gj-text-mute); padding: 30px 10px; font-size: 12px; background: var(--gj-bg-main);}
             .gj-resize-handle {
-                position: absolute; bottom: 1px; right: 1px;
+                position: absolute;
+                bottom: 1px; right: 1px;
                 width: 12px; height: 12px; cursor: nwse-resize;
                 background: linear-gradient(135deg, transparent 50%, var(--gj-text-mute) 50%);
                 opacity: 0.5; z-index: 10;
