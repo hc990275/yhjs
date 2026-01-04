@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.6 混合修正版)
+// @name          代驾调度系统助手 (v15.6.3 剪贴板修正版)
 // @namespace     http://tampermonkey.net/
-// @version       15.6.1
-// @description   【v15.6修正】保留自定义列抓取/排除逻辑；恢复旧版“填最新地址/电话”逻辑（直接填入库中最新一条，而非读取剪贴板）。
+// @version       15.6.3
+// @description   【v15.6.3】修正：派单页点击“填最新地址/电话”时强制读取剪贴板内容；自动识别并填入对应输入框。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -20,19 +20,18 @@
 (function() {
     'use strict';
 
-    // --------------- 1. 配置中心 (保持 v15.6 配置) ---------------
+    // --------------- 1. 配置中心 ---------------
     const CONFIG = {
         // 【抓取与排除配置】
-        // index 从 0 开始计数 (即：第1列是0，第6列是5，第7列是6，第13列是12)
         SCRAPE: {
-            // 1. 抓取目标列 (您指定的列)
-            PHONE_COL_INDEX: 13,  // 您的要求：第13列
-            ADDR_COL_INDEX: 7,    // 您的要求：第7列
+            // 抓取目标列 (index 从 0 开始)
+            PHONE_COL_INDEX: 13,  // 第13列
+            ADDR_COL_INDEX: 7,    // 第7列
 
-            // 2. 排除过滤配置
-            EXCLUDE_COL_INDEX: 6, // 您的要求：第6列
+            // 排除过滤配置
+            EXCLUDE_COL_INDEX: 6, // 第6列
             
-            // 3. 排除关键词 (只要排除列包含以下任意一个词，整行不抓取)
+            // 排除关键词
             EXCLUDE_NAMES: [
                 '腾讯出行', 
                 '盛大大地模式'
@@ -131,7 +130,7 @@
         
         if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
-            log('进入派单界面 (纯手动模式)', 'info');
+            log('进入派单界面 (剪贴板模式)', 'info');
             setTimeout(applyDistanceByTime, 1500);
         }
 
@@ -151,6 +150,7 @@
     const isOrderPage = () => state.currentHash.includes(CONFIG.ORDER.HASH);
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
+    
     // ==============================================
     //        核心修正：列定位 + 过滤 + 本地存储
     // ==============================================
@@ -184,66 +184,50 @@
         }
     };
 
-    // 核心扫描函数 (严格按照您的列配置)
+    // 核心扫描函数
     const scanOrderPage = () => {
         if (!isOrderPage() || !state.isScrapingEnabled) return;
-        // 1. 获取配置的索引
-        const idxExclude = CONFIG.SCRAPE.EXCLUDE_COL_INDEX; // 5 (第6列)
-        const idxPhone = CONFIG.SCRAPE.PHONE_COL_INDEX;     // 12 (第13列)
-        const idxAddr = CONFIG.SCRAPE.ADDR_COL_INDEX;       // 6 (第7列)
-        
+        const idxExclude = CONFIG.SCRAPE.EXCLUDE_COL_INDEX;
+        const idxPhone = CONFIG.SCRAPE.PHONE_COL_INDEX;
+        const idxAddr = CONFIG.SCRAPE.ADDR_COL_INDEX;
         const excludeKeywords = CONFIG.SCRAPE.EXCLUDE_NAMES || [];
 
-        // 2. 遍历内容行
         const rows = document.querySelectorAll('.el-table__body-wrapper .el-table__row');
         let newCount = 0;
         rows.forEach(row => {
             const cells = row.querySelectorAll('td');
-            // 如果列数不够，直接跳过，防止报错
             if (cells.length <= Math.max(idxExclude, idxPhone, idxAddr)) return;
 
-            // === A. 排除逻辑 (第6列) ===
-            // 注意：这里不再使用硬编码的第2/3列过滤，完全依赖您的配置
+            // 排除逻辑
             if (idxExclude !== null && cells[idxExclude]) {
                 const checkText = cells[idxExclude].innerText.trim();
                 const hit = excludeKeywords.find(kw => checkText.includes(kw));
-                if (hit) {
-                    return; // 跳过此行
-                }
+                if (hit) return; 
             }
 
-            // === B. 抓取电话 (第13列) ===
+            // 抓取电话
             if (idxPhone !== null && cells[idxPhone]) {
                 const rawText = cells[idxPhone].innerText.trim();
                 const cleanNum = rawText.replace(/\D/g, '');
-                // 必须是11位手机号
                 if (/^1\d{10}$/.test(cleanNum)) {
-                    if (addToDB('phone', cleanNum, idxPhone)) {
-                        newCount++;
-                    }
+                    if (addToDB('phone', cleanNum, idxPhone)) newCount++;
                 }
             }
 
-            // === C. 抓取地址 (第7列) ===
+            // 抓取地址
             if (idxAddr !== null && cells[idxAddr]) {
                 const addrText = cells[idxAddr].innerText.trim();
                 if (addrText && addrText.length > 1) {
-                    // 黑名单过滤
                     const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                     if (!blockers.some(b => addrText.includes(b))) {
-                        // 简单排除日期格式
                         if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) { 
-                             if (addToDB('address', addrText, idxAddr)) {
-                                  newCount++;
-                             }
+                             if (addToDB('address', addrText, idxAddr)) newCount++;
                         }
                     }
                 }
             }
         });
-        if (newCount > 0) {
-            updateListsUI();
-        }
+        if (newCount > 0) updateListsUI();
     };
 
     // ==============================================
@@ -252,40 +236,33 @@
     const addToDB = (type, value, sourceIdx = null) => {
         if (!value) return false;
         const storageKey = type === 'address' ? 'dbAddrs' : 'dbPhones';
-        // 1. 【关键】每次写入前，强制重新从存储读取最新列表
-        // 这样即使其他标签页更新了数据，这里也能获取到，不会覆盖丢失
+        
         let currentList = [];
         try {
             const raw = GM_getValue(storageKey, '[]');
             currentList = JSON.parse(raw);
         } catch(e) { currentList = []; }
 
-        // 2. 查重
         if (currentList.includes(value)) return false;
-        // 3. 插入头部
+        
         currentList.unshift(value);
-        // 4. 限制长度
         if (currentList.length > CONFIG.STORAGE.MAX_ITEMS) {
             currentList.length = CONFIG.STORAGE.MAX_ITEMS;
         }
 
-        // 5. 【关键】立即写入存储
         GM_setValue(storageKey, JSON.stringify(currentList));
-        // 6. 同步内存状态
         if (type === 'address') state.db.addrs = currentList;
         else state.db.phones = currentList;
 
-        // 7. 日志
         if (sourceIdx !== null) {
             log(`💾 [已保存] ${type==='address'?'地址':'电话'}: ${value} (来源: 第${sourceIdx+1}列)`, 'success');
         }
-        
         return true;
     };
+
     // ==============================================
     //               云端同步 / 数据库
     // ==============================================
-    
     const applyDistanceByTime = () => {
         if (!isDispatchPage()) return;
         const now = new Date();
@@ -375,7 +352,6 @@
         });
     };
 
-    // 【修改点】下载覆盖：确保GM_setValue被执行，彻底覆盖本地
     const pullFromCloud = (isAuto = false) => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
@@ -410,18 +386,18 @@
                                 GM_setValue('blacklist', state.blacklist);
                             } else if (type === 'ADDRS') {
                                 state.db.addrs = lines;
-                                GM_setValue('dbAddrs', JSON.stringify(state.db.addrs)); // 强制保存
+                                GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
                                 importedAddrs = lines.length;
                             } else if (type === 'PHONES') {
                                 state.db.phones = lines;
-                                GM_setValue('dbPhones', JSON.stringify(state.db.phones)); // 强制保存
+                                GM_setValue('dbPhones', JSON.stringify(state.db.phones));
                                 importedPhones = lines.length;
                             }
                         }
                     } else {
                         const lines = text.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
                         state.db.addrs = lines;
-                        GM_setValue('dbAddrs', JSON.stringify(state.db.addrs)); // 强制保存
+                        GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
                         importedAddrs = lines.length;
                     }
 
@@ -451,7 +427,6 @@
         const targetUrl = `${url.replace(/\/$/, '')}/api/sync?token=${token}`;
         const blData = state.blacklist.split(/[,，]/).map(s=>s.trim()).filter(s=>s).join('\n');
         
-        // 读取最新的上传
         const latestAddrs = safeParse('dbAddrs', '[]');
         const latestPhones = safeParse('dbPhones', '[]');
         const addrData = (latestAddrs || []).join('\n');
@@ -532,7 +507,8 @@
         }, 1000);
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
-    // 处理剪贴板文本
+    
+    // 处理剪贴板文本 (核心逻辑)
     const parseTextToDB = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
         let hasUpdate = false;
@@ -559,16 +535,26 @@
         return hasUpdate;
     };
 
-    const processClipboard = async (autoFill = false) => {
+    // 【关键修改】处理剪贴板并填充指定类型
+    const processClipboard = async (fillTarget = null) => {
         try {
+            // 1. 尝试读取剪贴板
             const text = await navigator.clipboard.readText();
+            // 2. 解析并入库
             const hasUpdate = parseTextToDB(text);
             if (hasUpdate) updateListsUI();
-            if (autoFill && state.db.addrs && state.db.addrs.length > 0) {
-                fillInput('address', state.db.addrs[0]);
-            }
-        } catch (e) {}
+        } catch (e) {
+            // 读取失败（权限或空），不报错，直接尝试用现有库存填充
+        }
+
+        // 3. 执行填充（优先用刚读到的，没有就用旧的）
+        if (fillTarget === 'address' && state.db.addrs && state.db.addrs.length > 0) {
+            fillInput('address', state.db.addrs[0]);
+        } else if (fillTarget === 'phone' && state.db.phones && state.db.phones.length > 0) {
+            fillInput('phone', state.db.phones[0]);
+        }
     };
+    
     const handleFileImport = (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -786,7 +772,7 @@
         setupDrag(widget, 'posAddr');
         setupResizeDrag(widget);
 
-        widget.querySelector('#btn-refresh-addr').addEventListener('click', () => processClipboard(true));
+        widget.querySelector('#btn-refresh-addr').addEventListener('click', () => processClipboard(null));
         
         widget.querySelectorAll('.gj-tab').forEach(tab => {
             tab.addEventListener('click', (e) => {
@@ -961,12 +947,12 @@
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
             );
             
-            // 【关键修改点】恢复旧逻辑：直接使用本地数据库中最新的一条，而不是读取剪贴板
+            // 【关键修改点】恢复剪贴板读取逻辑，并指定填充目标
             document.getElementById('btn-auto-addr')?.addEventListener('click', () => {
-                if(state.db.addrs && state.db.addrs[0]) fillInput('address', state.db.addrs[0]);
+                processClipboard('address');
             });
             document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
-                if(state.db.phones && state.db.phones[0]) fillInput('phone', state.db.phones[0]);
+                processClipboard('phone');
             });
             
             document.getElementById('btn-sync-cloud')?.addEventListener('click', () => {
