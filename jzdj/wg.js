@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.6.6 完美同步版)
+// @name          代驾调度系统助手 (v15.6.7 透明同步版)
 // @namespace     http://tampermonkey.net/
-// @version       15.6.6
-// @description   【v15.6.6】修复数据库数量不一致问题（移除长地址过滤限制）；增加多标签页自动同步机制；保留剪贴板置顶与详细日志。
+// @version       15.6.7
+// @description   【v15.6.7】修复：彻底移除地址长度限制(防止误删长地址)；下载弹窗增加“清洗前后”对比显示；控制台输出被过滤的垃圾数据明细。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -24,20 +24,11 @@
     const CONFIG = {
         // 【抓取与排除配置】
         SCRAPE: {
-            // 抓取目标列 (index 从 0 开始)
             PHONE_COL_INDEX: 13,  // 第13列
             ADDR_COL_INDEX: 7,    // 第7列
-
-            // 排除过滤配置
             EXCLUDE_COL_INDEX: 6, // 第6列
-            
-            // 排除关键词
-            EXCLUDE_NAMES: [
-                '腾讯出行', 
-                '盛大大地模式'
-            ]
+            EXCLUDE_NAMES: ['腾讯出行', '盛大大地模式']
         },
-
         ORDER: {
             HASH: '#/substituteDrivingOrder',
             TITLE: '订单管理',
@@ -99,10 +90,10 @@
         
         viewTab: GM_getValue('viewTab', 'address'),
         searchText: '',
-        currentVersion: GM_info.script.version,
         timeConfig: safeParse('timeConfig', '{"start":"20:00", "end":"22:00"}'),
         theme: GM_getValue('theme', 'light') 
     };
+
     const migrateOldData = () => {
         const oldHistory = safeParse('clipHistory', null);
         if (oldHistory) {
@@ -125,22 +116,19 @@
 
     // --------------- 4. 核心逻辑 ---------------
 
-    // 【新增】强制从存储重新加载数据到内存（解决跨标签页不同步问题）
     const reloadDB = () => {
         const oldLenAddr = state.db.addrs.length;
         state.db.addrs = safeParse('dbAddrs', '[]');
         state.db.phones = safeParse('dbPhones', '[]');
-        if (oldLenAddr !== state.db.addrs.length) {
+        if (oldLenAddr !== state.db.addrs.length && isDispatchPage()) {
             updateListsUI();
-            if (isDispatchPage()) {
-                log(`🔄 数据库已同步更新 | 地址: ${state.db.addrs.length} | 电话: ${state.db.phones.length}`, 'info');
-            }
+            log(`🔄 数据库已同步 | 地址: ${state.db.addrs.length} | 电话: ${state.db.phones.length}`, 'info');
         }
     };
 
     const checkPage = () => {
         state.currentHash = window.location.hash;
-        reloadDB(); // 每次切换页面检查一下数据库更新
+        reloadDB(); 
 
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
@@ -157,7 +145,7 @@
         
         if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
-            log('进入派单界面 (同步增强版)', 'info');
+            log('进入派单界面 (透明同步版)', 'info');
             setTimeout(applyDistanceByTime, 1500);
         }
 
@@ -224,14 +212,12 @@
             const cells = row.querySelectorAll('td');
             if (cells.length <= Math.max(idxExclude, idxPhone, idxAddr)) return;
 
-            // 排除逻辑
             if (idxExclude !== null && cells[idxExclude]) {
                 const checkText = cells[idxExclude].innerText.trim();
                 const hit = excludeKeywords.find(kw => checkText.includes(kw));
                 if (hit) return; 
             }
 
-            // 抓取电话
             if (idxPhone !== null && cells[idxPhone]) {
                 const rawText = cells[idxPhone].innerText.trim();
                 const cleanNum = rawText.replace(/\D/g, '');
@@ -240,7 +226,6 @@
                 }
             }
 
-            // 抓取地址
             if (idxAddr !== null && cells[idxAddr]) {
                 const addrText = cells[idxAddr].innerText.trim();
                 if (addrText && addrText.length > 1) {
@@ -263,14 +248,12 @@
         if (!value) return false;
         const storageKey = type === 'address' ? 'dbAddrs' : 'dbPhones';
         
-        // 每次写入前强制读取一次最新状态，防止覆盖
         let currentList = [];
         try {
             const raw = GM_getValue(storageKey, '[]');
             currentList = JSON.parse(raw);
         } catch(e) { currentList = []; }
 
-        // 如果已存在，先删除（为了后面添加到头部）
         const existingIndex = currentList.indexOf(value);
         let isReorder = false;
         if (existingIndex > -1) {
@@ -278,7 +261,6 @@
             isReorder = true;
         }
         
-        // 插入头部 (如果是新的则插入，如果是旧的则等于移动到头部)
         currentList.unshift(value);
         
         if (currentList.length > CONFIG.STORAGE.MAX_ITEMS) {
@@ -319,29 +301,36 @@
         setSliderValue(targetKm);
     };
 
-    // 【关键修复】清洗数据库，去除不合理的长度限制
+    // 【关键修复】清洗数据库，去除不合理的长度限制，并记录日志
     const cleanDBWithBlacklist = () => {
-        // 从本地存储读取最新数据
         let currentAddrs = safeParse('dbAddrs', '[]');
         if (!currentAddrs || currentAddrs.length === 0) return;
         
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
         const originalCount = currentAddrs.length;
         
-        currentAddrs = currentAddrs.filter(addr => {
+        const keptAddrs = [];
+        const removedAddrs = [];
+
+        currentAddrs.forEach(addr => {
             // 1. 黑名单检查
-            if (blockers.length > 0 && blockers.some(keyword => addr.includes(keyword))) return false;
-            
-            // 2. 【已删除】原先的长度检查 (汉字>6就删) 已移除，防止误删长地址
-            // const hanziMatches = addr.match(/[\u4e00-\u9fa5]/g);
-            // if ((hanziMatches ? hanziMatches.length : 0) > 6) return false; 
-            
-            return true;
+            const hit = blockers.find(keyword => addr.includes(keyword));
+            if (hit) {
+                removedAddrs.push({addr: addr, reason: `黑名单: ${hit}`});
+            } else {
+                keptAddrs.push(addr);
+            }
+            // 2. 【已移除】原先的汉字>6检查已彻底删除
         });
 
-        if (originalCount !== currentAddrs.length) {
-            GM_setValue('dbAddrs', JSON.stringify(currentAddrs));
-            state.db.addrs = currentAddrs;
+        if (removedAddrs.length > 0) {
+            // 打印前5条被删的，防止控制台刷屏
+            console.groupCollapsed(`🗑️ [自动清洗] 移除了 ${removedAddrs.length} 条无效地址`);
+            removedAddrs.forEach(item => console.log(`❌ 删除: "${item.addr}" (原因: ${item.reason})`));
+            console.groupEnd();
+            
+            GM_setValue('dbAddrs', JSON.stringify(keptAddrs));
+            state.db.addrs = keptAddrs;
             updateListsUI();
         }
     };
@@ -400,6 +389,7 @@
         });
     };
 
+    // 【修改点】下载覆盖：明确显示清洗前后的数量对比
     const pullFromCloud = (isAuto = false) => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
@@ -420,9 +410,10 @@
                     const text = response.responseText;
                     if (!text) return;
                     
-                    let importedAddrs = 0;
+                    let rawAddrsCount = 0;
                     let importedPhones = 0;
                     
+                    // 1. 先保存原始数据
                     if (text.includes('[BLACKLIST]') || text.includes('[ADDRS]') || text.includes('[PHONES]')) {
                         const sections = text.split(/\[(BLACKLIST|ADDRS|PHONES)\]/);
                         for(let i=1; i<sections.length; i+=2) {
@@ -435,7 +426,7 @@
                             } else if (type === 'ADDRS') {
                                 state.db.addrs = lines;
                                 GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
-                                importedAddrs = lines.length;
+                                rawAddrsCount = lines.length;
                             } else if (type === 'PHONES') {
                                 state.db.phones = lines;
                                 GM_setValue('dbPhones', JSON.stringify(state.db.phones));
@@ -446,15 +437,27 @@
                         const lines = text.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
                         state.db.addrs = lines;
                         GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
-                        importedAddrs = lines.length;
+                        rawAddrsCount = lines.length;
                     }
 
+                    // 2. 执行清洗
                     cleanDBWithBlacklist();
+                    
+                    // 3. 获取清洗后的最终数量
+                    const finalAddrsCount = state.db.addrs.length;
+                    const diff = rawAddrsCount - finalAddrsCount;
+
                     updateListsUI();
+                    
                     if (!isAuto) {
-                        alert(`☁️ 覆盖成功！本地数据库已更新。\n\n- 地址库: ${importedAddrs} 条\n- 电话库: ${importedPhones} 条`);
+                        // 弹窗显示差异，解开误会
+                        alert(`☁️ 覆盖完成！\n\n=== 📊 统计报表 ===\n` + 
+                              `- 地址库 (原始): ${rawAddrsCount} 条\n` + 
+                              `- 有效地址 (清洗后): ${finalAddrsCount} 条 (过滤垃圾: ${diff}条)\n` + 
+                              `- 电话库: ${importedPhones} 条\n\n` +
+                              `被过滤的垃圾数据请按 F12 查看详情。`);
                     } else {
-                        log(`[自动同步] 完成: 覆盖地址${importedAddrs}条 / 电话${importedPhones}条`, 'success');
+                        log(`[自动同步] 地址: ${finalAddrsCount} (原始${rawAddrsCount}) / 电话: ${importedPhones}`, 'success');
                     }
                 } else {
                     if (!isAuto) alert('❌ 拉取失败: ' + response.statusText);
@@ -556,7 +559,7 @@
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
     
-    // 处理剪贴板文本 (核心逻辑)
+    // 处理剪贴板文本
     const parseTextToDB = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
         let hasUpdate = false;
@@ -585,8 +588,6 @@
 
     const processClipboard = async (fillTarget = null) => {
         log(`[流程开始] 准备从剪贴板填充: ${fillTarget === 'address' ? '地址' : '电话'}`, 'info');
-        
-        // 操作前先强制同步一次数据库，确保是基于最新数据操作
         reloadDB();
 
         try {
@@ -595,7 +596,6 @@
 
             const hasUpdate = parseTextToDB(text);
             updateListsUI();
-            
             log(`📊 [本地库统计] 📍地址: ${state.db.addrs.length} | 📞电话: ${state.db.phones.length}`, 'info');
 
         } catch (e) {
@@ -603,7 +603,6 @@
             log('🔄 将尝试使用本地库中已有的最新数据进行填充...', 'info');
         }
 
-        // 执行填充（此时内存中state.db已经是包含剪贴板新内容的最新状态）
         if (fillTarget === 'address' && state.db.addrs && state.db.addrs.length > 0) {
             fillInput('address', state.db.addrs[0]);
         } else if (fillTarget === 'phone' && state.db.phones && state.db.phones.length > 0) {
@@ -1377,14 +1376,12 @@
 
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) {
-                // 每次页面可见时，强制同步一次数据库
                 reloadDB();
                 if ((isOrderPage() || isDriverPage()) && !state.manualPause) performAction();
                 if (isDispatchPage()) processClipboard();
             }
         });
         window.addEventListener('focus', () => { 
-            // 窗口获得焦点时，也强制同步
             reloadDB();
             if (isDispatchPage()) processClipboard(); 
         });
