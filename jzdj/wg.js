@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.6 专版定制)
+// @name          代驾调度系统助手 (v15.7 修复增强版)
 // @namespace     http://tampermonkey.net/
-// @version       15.6
-// @description   【v15.6】定制版：排除列6/电话列13/地址列7；排除腾讯出行/盛大大地；强制实时保存；云端下载绝对覆盖。
+// @version       15.7
+// @description   【v15.7】修复：订单指派页实时读取最新数据库；修复填最新电话按钮失效问题；区分地址/电话自动填充逻辑。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -20,19 +20,18 @@
 (function() {
     'use strict';
 
-    // --------------- 1. 配置中心 (已根据您的要求配置) ---------------
+    // --------------- 1. 配置中心 ---------------
     const CONFIG = {
         // 【抓取与排除配置】
-        // index 从 0 开始计数 (即：第1列是0，第6列是5，第7列是6，第13列是12)
         SCRAPE: {
-            // 1. 抓取目标列 (您指定的列)
-            PHONE_COL_INDEX: 13,  // 您的要求：第13列
-            ADDR_COL_INDEX: 7,    // 您的要求：第7列
+            // 1. 抓取目标列 (index 从 0 开始)
+            PHONE_COL_INDEX: 13,  // 第13列
+            ADDR_COL_INDEX: 7,    // 第7列
 
             // 2. 排除过滤配置
-            EXCLUDE_COL_INDEX: 6, // 您的要求：第6列
+            EXCLUDE_COL_INDEX: 6, // 第6列
             
-            // 3. 排除关键词 (只要排除列包含以下任意一个词，整行不抓取)
+            // 3. 排除关键词
             EXCLUDE_NAMES: [
                 '腾讯出行', 
                 '盛大大地模式'
@@ -74,6 +73,7 @@
         try { return JSON.parse(GM_getValue(key, def));
         } catch (e) { return JSON.parse(def); }
     };
+
     let state = {
         currentHash: window.location.hash,
         isCollapsed: GM_getValue('uiCollapsed', false),
@@ -95,7 +95,7 @@
             addrs: safeParse('dbAddrs', '[]'),
             phones: safeParse('dbPhones', '[]')
         },
-         
+        
         blacklist: GM_getValue('blacklist', '位置，电话，司机，请您，收到，偏远地区，已派单，代驾，师傅，安全，感谢，马上，联系，好的'),
         
         viewTab: GM_getValue('viewTab', 'address'),
@@ -118,6 +118,11 @@
 
     const checkPage = () => {
         state.currentHash = window.location.hash;
+        
+        // 任何页面切换都强制刷新一次内存数据
+        state.db.addrs = safeParse('dbAddrs', '[]');
+        state.db.phones = safeParse('dbPhones', '[]');
+
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
             setupTableObserver();
@@ -134,10 +139,15 @@
         if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
             log('进入派单界面 (纯手动模式)', 'info');
-            setTimeout(applyDistanceByTime, 1500);
+            // 进入派单页，强制刷新列表UI，确保显示最新数据
+            setTimeout(() => {
+                updateListsUI();
+                applyDistanceByTime();
+            }, 500);
         }
 
         updateUI();
+
         if (isDispatchPage()) {
              if (!state.manualPause) startRapidRefresh();
         } else {
@@ -153,7 +163,7 @@
     const isOrderPage = () => state.currentHash.includes(CONFIG.ORDER.HASH);
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
-    
+
     // ==============================================
     //        核心修正：列定位 + 过滤 + 本地存储
     // ==============================================
@@ -187,42 +197,32 @@
         }
     };
 
-    // 核心扫描函数 (严格按照您的列配置)
     const scanOrderPage = () => {
         if (!isOrderPage() || !state.isScrapingEnabled) return;
-        
-        // 1. 获取配置的索引
-        const idxExclude = CONFIG.SCRAPE.EXCLUDE_COL_INDEX; // 5 (第6列)
-        const idxPhone = CONFIG.SCRAPE.PHONE_COL_INDEX;     // 12 (第13列)
-        const idxAddr = CONFIG.SCRAPE.ADDR_COL_INDEX;       // 6 (第7列)
-        
+
+        const idxExclude = CONFIG.SCRAPE.EXCLUDE_COL_INDEX;
+        const idxPhone = CONFIG.SCRAPE.PHONE_COL_INDEX;
+        const idxAddr = CONFIG.SCRAPE.ADDR_COL_INDEX;
         const excludeKeywords = CONFIG.SCRAPE.EXCLUDE_NAMES || [];
 
-        // 2. 遍历内容行
         const rows = document.querySelectorAll('.el-table__body-wrapper .el-table__row');
         let newCount = 0;
 
         rows.forEach(row => {
             const cells = row.querySelectorAll('td');
-            // 如果列数不够，直接跳过，防止报错
             if (cells.length <= Math.max(idxExclude, idxPhone, idxAddr)) return;
 
-            // === A. 排除逻辑 (第6列) ===
-            // 注意：这里不再使用硬编码的第2/3列过滤，完全依赖您的配置
+            // === A. 排除逻辑 ===
             if (idxExclude !== null && cells[idxExclude]) {
                 const checkText = cells[idxExclude].innerText.trim();
                 const hit = excludeKeywords.find(kw => checkText.includes(kw));
-                if (hit) {
-                    // log(`⛔ [排除] 发现 "${hit}" (第${idxExclude+1}列: ${checkText})`, 'info');
-                    return; // 跳过此行
-                }
+                if (hit) return; 
             }
 
-            // === B. 抓取电话 (第13列) ===
+            // === B. 抓取电话 ===
             if (idxPhone !== null && cells[idxPhone]) {
                 const rawText = cells[idxPhone].innerText.trim();
                 const cleanNum = rawText.replace(/\D/g, '');
-                // 必须是11位手机号
                 if (/^1\d{10}$/.test(cleanNum)) {
                     if (addToDB('phone', cleanNum, idxPhone)) {
                         newCount++;
@@ -230,17 +230,15 @@
                 }
             }
 
-            // === C. 抓取地址 (第7列) ===
+            // === C. 抓取地址 ===
             if (idxAddr !== null && cells[idxAddr]) {
                 const addrText = cells[idxAddr].innerText.trim();
                 if (addrText && addrText.length > 1) {
-                    // 黑名单过滤
                     const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                     if (!blockers.some(b => addrText.includes(b))) {
-                        // 简单排除日期格式
                         if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) { 
                              if (addToDB('address', addrText, idxAddr)) {
-                                 newCount++;
+                                  newCount++;
                              }
                         }
                     }
@@ -258,38 +256,30 @@
     // ==============================================
     const addToDB = (type, value, sourceIdx = null) => {
         if (!value) return false;
-        
         const storageKey = type === 'address' ? 'dbAddrs' : 'dbPhones';
         
-        // 1. 【关键】每次写入前，强制重新从存储读取最新列表
-        // 这样即使其他标签页更新了数据，这里也能获取到，不会覆盖丢失
         let currentList = [];
         try {
             const raw = GM_getValue(storageKey, '[]');
             currentList = JSON.parse(raw);
         } catch(e) { currentList = []; }
 
-        // 2. 查重
         if (currentList.includes(value)) return false;
-
-        // 3. 插入头部
+        
         currentList.unshift(value);
-
-        // 4. 限制长度
+        
         if (currentList.length > CONFIG.STORAGE.MAX_ITEMS) {
             currentList.length = CONFIG.STORAGE.MAX_ITEMS;
         }
 
-        // 5. 【关键】立即写入存储
         GM_setValue(storageKey, JSON.stringify(currentList));
-
-        // 6. 同步内存状态
+        
+        // 同步内存
         if (type === 'address') state.db.addrs = currentList;
         else state.db.phones = currentList;
 
-        // 7. 日志
         if (sourceIdx !== null) {
-            log(`💾 [已保存] ${type==='address'?'地址':'电话'}: ${value} (来源: 第${sourceIdx+1}列)`, 'success');
+            log(`💾 [已保存] ${type==='address'?'地址':'电话'}: ${value}`, 'success');
         }
         
         return true;
@@ -329,7 +319,7 @@
             if ((hanziMatches ? hanziMatches.length : 0) > 6) return false;
             return true;
         });
-
+        
         if (originalCount !== currentAddrs.length) {
             GM_setValue('dbAddrs', JSON.stringify(currentAddrs));
             state.db.addrs = currentAddrs;
@@ -391,19 +381,18 @@
         });
     };
 
-    // 【修改点】下载覆盖：确保GM_setValue被执行，彻底覆盖本地
     const pullFromCloud = (isAuto = false) => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
         
         if (!url || !token) { 
-            if (!isAuto) { alert('请先点击 ⚙️ 设置 Worker 域名和 Token');
-            setupCloudConfig(); }
+            if (!isAuto) { alert('请先点击 ⚙️ 设置 Worker 域名和 Token'); setupCloudConfig(); }
             return;
         }
 
         const targetUrl = `${url.replace(/\/$/, '')}/txt?token=${token}`;
         if (!isAuto) log('正在全量拉取(覆盖模式)...', 'info');
+
         GM_xmlhttpRequest({
             method: "GET",
             url: targetUrl + '&t=' + new Date().getTime(),
@@ -426,18 +415,18 @@
                                 GM_setValue('blacklist', state.blacklist);
                             } else if (type === 'ADDRS') {
                                 state.db.addrs = lines;
-                                GM_setValue('dbAddrs', JSON.stringify(state.db.addrs)); // 强制保存
+                                GM_setValue('dbAddrs', JSON.stringify(state.db.addrs)); 
                                 importedAddrs = lines.length;
                             } else if (type === 'PHONES') {
                                 state.db.phones = lines;
-                                GM_setValue('dbPhones', JSON.stringify(state.db.phones)); // 强制保存
+                                GM_setValue('dbPhones', JSON.stringify(state.db.phones));
                                 importedPhones = lines.length;
                             }
                         }
                     } else {
                         const lines = text.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
                         state.db.addrs = lines;
-                        GM_setValue('dbAddrs', JSON.stringify(state.db.addrs)); // 强制保存
+                        GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
                         importedAddrs = lines.length;
                     }
 
@@ -452,22 +441,19 @@
                     if (!isAuto) alert('❌ 拉取失败: ' + response.statusText);
                 }
             },
-            onerror: function(e) { if (!isAuto) alert('❌ 网络错误');
-            }
+            onerror: function(e) { if (!isAuto) alert('❌ 网络错误'); }
         });
     };
+
     const pushToCloud = () => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
-        if (!url || !token) { alert('请先设置云端'); setupCloudConfig(); return;
-        }
+        if (!url || !token) { alert('请先设置云端'); setupCloudConfig(); return; }
 
         if (!confirm('⚠️ 流量警告：\n\n这会将所有本地数据（新旧汇总）一次性上传覆盖到云端。\n请确保在一天工作结束后点击，以节省Cloudflare写入额度。\n\n确定上传吗？')) return;
 
         const targetUrl = `${url.replace(/\/$/, '')}/api/sync?token=${token}`;
         const blData = state.blacklist.split(/[,，]/).map(s=>s.trim()).filter(s=>s).join('\n');
-        
-        // 读取最新的上传
         const latestAddrs = safeParse('dbAddrs', '[]');
         const latestPhones = safeParse('dbPhones', '[]');
         const addrData = (latestAddrs || []).join('\n');
@@ -506,6 +492,7 @@
             }
         }
     };
+
     // ==============================================
     //               其他辅助功能
     // ==============================================
@@ -519,6 +506,7 @@
         }, CONFIG.DISPATCH.RAPID_INTERVAL);
     };
     const stopRapidRefresh = () => { if (state.rapidTimer) { clearInterval(state.rapidTimer); state.rapidTimer = null; } };
+
     const performAction = () => {
         if (state.manualPause) return;
         let selector = null;
@@ -548,7 +536,8 @@
         }, 1000);
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
-    // 处理剪贴板文本
+
+    // 处理剪贴板文本 (支持返回是否更新)
     const parseTextToDB = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
         let hasUpdate = false;
@@ -575,16 +564,42 @@
         return hasUpdate;
     };
 
-    const processClipboard = async (autoFill = false) => {
+    // 【核心修复】剪贴板处理与自动填充
+    // autoFillType: 'address' | 'phone' | null
+    const processClipboard = async (autoFillType = null) => {
         try {
             const text = await navigator.clipboard.readText();
             const hasUpdate = parseTextToDB(text);
+            
+            // 无论是否有更新，都强制重新读取最新库（因为可能是从其他标签页更新的）
+            // 这一步至关重要，保证了点击按钮时填入的一定是最新数据
+            state.db.addrs = safeParse('dbAddrs', '[]');
+            state.db.phones = safeParse('dbPhones', '[]');
+            
             if (hasUpdate) updateListsUI();
-            if (autoFill && state.db.addrs && state.db.addrs.length > 0) {
-                fillInput('address', state.db.addrs[0]);
+            
+            if (autoFillType === 'address') {
+                if (state.db.addrs && state.db.addrs.length > 0) {
+                    fillInput('address', state.db.addrs[0]);
+                } else {
+                    alert('地址库为空，无法自动填充');
+                }
+            } else if (autoFillType === 'phone') {
+                if (state.db.phones && state.db.phones.length > 0) {
+                    fillInput('phone', state.db.phones[0]);
+                } else {
+                    alert('电话库为空，无法自动填充');
+                }
             }
-        } catch (e) {}
+
+        } catch (e) { 
+            console.error('剪贴板读取失败:', e);
+            // 如果读取剪贴板失败（如权限问题），尝试直接填入现有库的最新数据
+            if (autoFillType === 'address' && state.db.addrs.length > 0) fillInput('address', state.db.addrs[0]);
+            if (autoFillType === 'phone' && state.db.phones.length > 0) fillInput('phone', state.db.phones[0]);
+        }
     };
+
     const handleFileImport = (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -608,6 +623,7 @@
     };
 
     const fillInput = (type, value) => {
+        if (!value) return;
         let input = null;
         if (type === 'address') {
              input = document.getElementById('tipinput');
@@ -616,8 +632,7 @@
                  for (let i = 0; i < inputs.length; i++) {
                      const el = inputs[i];
                      if (el.closest('.gj-window')) continue;
-                     if (!el.closest('.el-form-item') && el.type === 'text') { input = el; break;
-                     }
+                     if (!el.closest('.el-form-item') && el.type === 'text') { input = el; break; }
                  }
              }
              if (!input) {
@@ -627,8 +642,7 @@
                      const el = allInputs[i];
                      if (el.closest('.gj-window')) continue; 
                      const ph = (el.placeholder || '').toLowerCase();
-                     if (keywords.some(k => ph.includes(k))) { input = el; break;
-                     }
+                     if (keywords.some(k => ph.includes(k))) { input = el; break; }
                  }
              }
         } else if (type === 'phone') {
@@ -637,19 +651,29 @@
                  const el = inputs[i];
                  if (el.closest('.gj-window')) continue; 
                  const ph = (el.placeholder || '').toLowerCase();
-                 if (ph.includes('用户电话') || ph.includes('电话') || el.type === 'tel') { input = el;
-                 break; }
+                 // 增加对 type="number" 的兼容
+                 if (ph.includes('用户电话') || ph.includes('电话') || el.type === 'tel' || (el.type === 'number' && ph.includes('话'))) { 
+                     input = el; 
+                     break; 
+                 }
              }
         }
+        
         if (input) {
             input.value = value;
+            // 模拟完整的输入事件链，确保Vue/React能监听到变化
             input.dispatchEvent(new Event('input', { bubbles: true }));
             input.dispatchEvent(new Event('change', { bubbles: true }));
-            input.click();
+            input.dispatchEvent(new Event('blur', { bubbles: true })); // 部分框架需要blur触发验证
+            
             input.focus();
             input.style.transition = 'all 0.3s';
             input.style.boxShadow = '0 0 0 2px rgba(103, 194, 58, 0.3)';
             setTimeout(() => input.style.boxShadow = '', 800);
+            
+            log(`已自动填入${type === 'address'?'地址':'电话'}: ${value}`, 'success');
+        } else {
+            log(`未找到${type === 'address'?'地址':'电话'}输入框`, 'info');
         }
     };
 
@@ -676,6 +700,7 @@
             } catch (e) { }
         }
     };
+
     const isMatch = (dbItem, inputKey, type) => {
         if (!inputKey) return true;
         const cleanKey = inputKey.trim();
@@ -692,6 +717,7 @@
         const keywords = cleanKey.split(/\s+/);
         return keywords.every(k => dbItem.includes(k));
     };
+
     const applyLayout = () => {
         const addrWidget = document.getElementById('gj-widget-addr');
         const listBody = document.getElementById('list-addr-body');
@@ -701,6 +727,7 @@
             listBody.style.setProperty('--gj-col-width', state.colWidth + 'px');
         }
     };
+
     const toggleTheme = () => {
         state.theme = state.theme === 'light' ? 'dark' : 'light';
         GM_setValue('theme', state.theme);
@@ -715,6 +742,7 @@
             doc.classList.remove('gj-global-dark');
         }
     };
+
     const createMainWidget = () => {
         let widget = document.getElementById('gj-widget-main');
         if (widget) widget.remove();
@@ -772,7 +800,6 @@
         widget.style.transformOrigin = 'top left';
         widget.style.width = state.layout.width + 'px';
         const activeTabClass = (tab) => state.viewTab === tab ? 'active-tab' : '';
-        
         widget.innerHTML = `
             <div class="gj-header gj-drag-header">
                 <div class="gj-tabs">
@@ -780,7 +807,7 @@
                     <span class="gj-tab ${activeTabClass('phone')}" data-tab="phone">📞 电话库</span>
                 </div>
                 <div style="display:flex; gap:4px;">
-                    <span class="btn-icon-circle" id="btn-refresh-addr" title="刷新并自动填入最新地址">↻</span>
+                    <span class="btn-icon-circle" id="btn-refresh-addr" title="刷新并读取剪贴板">↻</span>
                 </div>
             </div>
             <div class="gj-toolbar">
@@ -802,7 +829,14 @@
         setupDrag(widget, 'posAddr');
         setupResizeDrag(widget);
 
-        widget.querySelector('#btn-refresh-addr').addEventListener('click', () => processClipboard(true));
+        // 绑定刷新按钮 (默认为读取地址，可修改)
+        widget.querySelector('#btn-refresh-addr').addEventListener('click', () => {
+             // 手动刷新时，只刷新UI，不强制填入
+             state.db.addrs = safeParse('dbAddrs', '[]');
+             state.db.phones = safeParse('dbPhones', '[]');
+             updateListsUI();
+             processClipboard(null);
+        });
         
         widget.querySelectorAll('.gj-tab').forEach(tab => {
             tab.addEventListener('click', (e) => {
@@ -891,7 +925,6 @@
             const scrapeClass = state.isScrapingEnabled ? 'btn-resume' : 'btn-preset';
             const scrapeText = state.isScrapingEnabled ? '👁️ 自动抓取: 开启' : '🙈 自动抓取: 关闭';
             const scrapeStyle = state.isScrapingEnabled ? 'border:1px solid #e1f3d8;background:#f0f9eb;color:#67c23a;' : 'border:1px solid var(--gj-border);background:var(--gj-bg-sec);color:var(--gj-text-mute);';
-
             html = `
                 <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
                     <span class="gj-timer-text" style="color:${statusColor}">${state.manualPause ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
@@ -943,9 +976,16 @@
         container.innerHTML = html;
         bindEvents();
     };
+
     const updateListsUI = () => {
         const addrBody = document.getElementById('list-addr-body');
         if (!addrBody) return;
+        
+        // 【关键修复】渲染列表前，强制从 storage 读取最新数据
+        // 确保跨标签页的数据同步（例如：在订单管理页抓取，这里立即能看到）
+        state.db.addrs = safeParse('dbAddrs', '[]');
+        state.db.phones = safeParse('dbPhones', '[]');
+
         const isPhone = state.viewTab === 'phone';
         const sourceList = isPhone ? state.db.phones : state.db.addrs;
         const filteredList = (sourceList || []).filter(item => isMatch(item, state.searchText, isPhone ? 'phone' : 'address'));
@@ -975,11 +1015,12 @@
             document.querySelectorAll('.btn-preset').forEach(btn => 
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
             );
+            // 【修改】传入明确的类型参数
             document.getElementById('btn-auto-addr')?.addEventListener('click', () => {
-                processClipboard(true);
+                processClipboard('address');
             });
             document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
-                processClipboard(true);
+                processClipboard('phone');
             });
             document.getElementById('btn-sync-cloud')?.addEventListener('click', () => {
                 fetchOnlineBlacklist(false);
@@ -1019,24 +1060,21 @@
     const updateStatusText = () => {
         const text = document.querySelector('.gj-timer-text');
         if (text) {
-            if (state.manualPause) { text.textContent = "暂停";
-            text.style.color = "var(--gj-text-sec)"; }
+            if (state.manualPause) { text.textContent = "暂停"; text.style.color = "var(--gj-text-sec)"; }
             else { 
                 text.innerHTML = `${state.countdown}<span style="font-size:16px;margin-left:2px;opacity:0.6">s</span>`;
                 text.style.color = state.countdown <= 3 ? "#F56C6C" : "#409EFF"; 
             }
         }
     };
+
     const log = (text, type) => { console.log(`[助手] ${text}`); };
+
     const applyPos = (el, pos) => {
-        if (pos.left) { el.style.left = pos.left;
-        el.style.right = 'auto'; }
-        else { el.style.right = pos.right || '20px';
-        el.style.left = 'auto'; }
-        if (pos.top) { el.style.top = pos.top; el.style.bottom = 'auto';
-        }
-        else { el.style.bottom = pos.bottom || 'auto'; el.style.top = 'auto';
-        }
+        if (pos.left) { el.style.left = pos.left; el.style.right = 'auto'; }
+        else { el.style.right = pos.right || '20px'; el.style.left = 'auto'; }
+        if (pos.top) { el.style.top = pos.top; el.style.bottom = 'auto'; }
+        else { el.style.bottom = pos.bottom || 'auto'; el.style.top = 'auto'; }
     };
 
     const setupDrag = (el, posKey) => {
@@ -1219,7 +1257,8 @@
             .btn-blue { background: linear-gradient(135deg, #f56c6c 0%, #f78989 100%); color: white; } 
             .gj-control-row { display: flex; justify-content: space-between; align-items: center; margin-top: 15px; padding: 0 2px;}
             .gj-input-mini { 
-                width: 45px; border: 1px solid var(--gj-border); border-radius: 6px; 
+                width: 45px;
+                border: 1px solid var(--gj-border); border-radius: 6px; 
                 text-align: center; padding: 4px; font-size:13px; outline:none;
                 background: var(--gj-bg-input); color: var(--gj-text-main); transition: all 0.2s;
             }
@@ -1234,7 +1273,8 @@
             .gj-grid-btns { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
             .gj-bottom-controls { display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding-top:10px; border-top:1px dashed var(--gj-border); }
             .btn-icon-circle { 
-                width:22px; height:22px; border-radius:50%; background:rgba(255,255,255,0.2); 
+                width:22px;
+                height:22px; border-radius:50%; background:rgba(255,255,255,0.2); 
                 display:flex; align-items:center; justify-content:center; 
                 cursor:pointer; color:#fff; font-size:12px; transition:0.2s;
             }
@@ -1244,12 +1284,14 @@
             .gj-tab:hover { opacity:0.9; }
             .gj-tab.active-tab { opacity:1; font-weight:bold; border-bottom-color:#fff; }
             .gj-toolbar { 
-                padding: 8px; background: var(--gj-bg-sec); 
+                padding: 8px;
+                background: var(--gj-bg-sec); 
                 border-bottom: 1px solid var(--gj-border); 
                 display: flex; align-items: center; gap: 5px;
             }
             #gj-search-input {
-                flex: 1; border: 1px solid var(--gj-border);
+                flex: 1;
+                border: 1px solid var(--gj-border);
                 border-radius: 4px; padding: 5px 8px; font-size: 14px; outline: none;
                 background: var(--gj-bg-input); color: var(--gj-text-main);
                 font-family: monospace; letter-spacing: 1px;
@@ -1258,7 +1300,8 @@
             .btn-clear { cursor: pointer; color: var(--gj-text-mute); font-size: 18px; line-height: 1; padding: 0 4px; transition: color 0.2s; }
             .btn-clear:hover { color: #F56C6C; }
             .gj-list-body { 
-                overflow-y: auto; display: grid;
+                overflow-y: auto;
+                display: grid;
                 grid-template-columns: repeat(auto-fill, minmax(var(--gj-col-width, 80px), 1fr));
                 gap: 1px; background: var(--gj-bg-sec); padding: 1px;
                 transition: height 0.05s;
@@ -1266,7 +1309,8 @@
             .gj-list-body::-webkit-scrollbar { width: 4px; }
             .gj-list-body::-webkit-scrollbar-thumb { background: var(--gj-border); border-radius: 2px; }
             .gj-list-item {
-                background: var(--gj-bg-main); padding: 6px 4px; 
+                background: var(--gj-bg-main);
+                padding: 6px 4px; 
                 cursor: pointer; font-size: 13px; font-weight: 500;
                 color: var(--gj-text-main); display: flex; align-items: center; justify-content: center;
                 white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
@@ -1275,7 +1319,8 @@
             .gj-item-text { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
             .gj-empty { grid-column: 1 / -1; text-align: center; color: var(--gj-text-mute); padding: 30px 10px; font-size: 12px; background: var(--gj-bg-main);}
             .gj-resize-handle {
-                position: absolute; bottom: 1px; right: 1px;
+                position: absolute;
+                bottom: 1px; right: 1px;
                 width: 12px; height: 12px; cursor: nwse-resize;
                 background: linear-gradient(135deg, transparent 50%, var(--gj-text-mute) 50%);
                 opacity: 0.5; z-index: 10;
@@ -1287,6 +1332,7 @@
             }
         `);
     };
+
     const init = () => {
         migrateOldData(); 
         addStyles();
@@ -1297,11 +1343,19 @@
 
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) {
+                // 页面可见时，强制刷新一次内存，防止多标签页不同步
+                state.db.addrs = safeParse('dbAddrs', '[]');
+                state.db.phones = safeParse('dbPhones', '[]');
+                if (isDispatchPage()) updateListsUI();
+
                 if ((isOrderPage() || isDriverPage()) && !state.manualPause) performAction();
-                if (isDispatchPage()) processClipboard();
             }
         });
-        window.addEventListener('focus', () => { if (isDispatchPage()) processClipboard(); });
+        window.addEventListener('focus', () => { 
+             state.db.addrs = safeParse('dbAddrs', '[]');
+             state.db.phones = safeParse('dbPhones', '[]');
+             if (isDispatchPage()) updateListsUI();
+        });
         setTimeout(checkPage, 1000); 
     };
 
