@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.7 实时同步定制版)
+// @name          代驾调度系统助手 (v15.8 修复启动报错版)
 // @namespace     http://tampermonkey.net/
-// @version       15.7
-// @description   【v15.7】定制配置：电话列13/地址列7/排除列6；只排除腾讯/盛大；指派页强制实时读取浏览器存储；云端覆盖下载。
+// @version       15.8
+// @description   【v15.8】修复 updateUI 未定义报错；保留所有定制功能(电话13/地址7/排除6/实时同步/强制覆盖)。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -20,7 +20,7 @@
 (function() {
     'use strict';
 
-    // --------------- 1. 配置中心 (已根据您的要求配置) ---------------
+    // --------------- 1. 配置中心 (定制配置) ---------------
     const CONFIG = {
         // 【抓取与排除配置】
         // index 从 0 开始计数 (即：第1列是0，第7列是6，第8列是7，第14列是13)
@@ -138,7 +138,8 @@
             updateListsUI(); // 进入页面时立即刷新一次列表
         }
 
-        updateUI();
+        updateUI(); // 尝试调用UI更新
+        
         if (isDispatchPage()) {
              if (!state.manualPause) startRapidRefresh();
         } else {
@@ -192,9 +193,9 @@
     const scanOrderPage = () => {
         if (!isOrderPage() || !state.isScrapingEnabled) return;
         
-        const idxExclude = CONFIG.SCRAPE.EXCLUDE_COL_INDEX; // 6
-        const idxPhone = CONFIG.SCRAPE.PHONE_COL_INDEX;     // 13
-        const idxAddr = CONFIG.SCRAPE.ADDR_COL_INDEX;       // 7
+        const idxExclude = CONFIG.SCRAPE.EXCLUDE_COL_INDEX; 
+        const idxPhone = CONFIG.SCRAPE.PHONE_COL_INDEX;     
+        const idxAddr = CONFIG.SCRAPE.ADDR_COL_INDEX;       
         
         const excludeKeywords = CONFIG.SCRAPE.EXCLUDE_NAMES || [];
 
@@ -203,20 +204,16 @@
 
         rows.forEach(row => {
             const cells = row.querySelectorAll('td');
-            // 确保列数足够
             if (cells.length <= Math.max(idxExclude, idxPhone, idxAddr)) return;
 
-            // === A. 排除逻辑 (第6列) ===
+            // === A. 排除逻辑 ===
             if (idxExclude !== null && cells[idxExclude]) {
                 const checkText = cells[idxExclude].innerText.trim();
                 const hit = excludeKeywords.find(kw => checkText.includes(kw));
-                if (hit) {
-                    // 命中排除词，跳过此行
-                    return; 
-                }
+                if (hit) return; 
             }
 
-            // === B. 抓取电话 (第13列) ===
+            // === B. 抓取电话 ===
             if (idxPhone !== null && cells[idxPhone]) {
                 const rawText = cells[idxPhone].innerText.trim();
                 const cleanNum = rawText.replace(/\D/g, '');
@@ -227,7 +224,7 @@
                 }
             }
 
-            // === C. 抓取地址 (第7列) ===
+            // === C. 抓取地址 ===
             if (idxAddr !== null && cells[idxAddr]) {
                 const addrText = cells[idxAddr].innerText.trim();
                 if (addrText && addrText.length > 1) {
@@ -384,7 +381,6 @@
         });
     };
 
-    // 【核心】下载覆盖逻辑
     const pullFromCloud = (isAuto = false) => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
@@ -435,7 +431,7 @@
                     }
 
                     cleanDBWithBlacklist();
-                    updateListsUI(); // 刷新界面
+                    updateListsUI(); 
                     if (!isAuto) {
                         alert(`☁️ 覆盖成功！本地数据库已更新。\n\n- 地址库: ${importedAddrs} 条\n- 电话库: ${importedPhones} 条`);
                     } else {
@@ -460,7 +456,6 @@
         const targetUrl = `${url.replace(/\/$/, '')}/api/sync?token=${token}`;
         const blData = state.blacklist.split(/[,，]/).map(s=>s.trim()).filter(s=>s).join('\n');
         
-        // 读取最新的上传
         const latestAddrs = safeParse('dbAddrs', '[]');
         const latestPhones = safeParse('dbPhones', '[]');
         const addrData = (latestAddrs || []).join('\n');
@@ -541,7 +536,7 @@
         }, 1000);
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
-    // 处理剪贴板文本
+    
     const parseTextToDB = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
         let hasUpdate = false;
@@ -572,7 +567,6 @@
         try {
             const text = await navigator.clipboard.readText();
             const hasUpdate = parseTextToDB(text);
-            // 无论是自动填还是手动，都要刷新UI
             updateListsUI(); 
             if (autoFill && state.db.addrs && state.db.addrs.length > 0) {
                 fillInput('address', state.db.addrs[0]);
@@ -695,21 +689,23 @@
             listBody.style.setProperty('--gj-col-width', state.colWidth + 'px');
         }
     };
-    const toggleTheme = () => {
+    function toggleTheme() {
         state.theme = state.theme === 'light' ? 'dark' : 'light';
         GM_setValue('theme', state.theme);
         updateUI();
         applyGlobalTheme(); 
-    };
-    const applyGlobalTheme = () => {
+    }
+    function applyGlobalTheme() {
         const doc = document.documentElement;
         if (state.theme === 'dark') {
             doc.classList.add('gj-global-dark');
         } else {
             doc.classList.remove('gj-global-dark');
         }
-    };
-    const createMainWidget = () => {
+    }
+    
+    // 【修改点】UI函数改用 function 定义以支持变量提升
+    function createMainWidget() {
         let widget = document.getElementById('gj-widget-main');
         if (widget) widget.remove();
         widget = document.createElement('div');
@@ -751,9 +747,9 @@
              toggleTheme();
         });
         return widget;
-    };
+    }
 
-    const createAddrWidget = () => {
+    function createAddrWidget() {
         let widget = document.getElementById('gj-widget-addr');
         if (widget) widget.remove();
         if (!isDispatchPage()) return null;
@@ -830,11 +826,115 @@
              GM_setValue('addrColWidth', state.colWidth);
         });
         return widget;
-    };
+    }
 
-    // 【关键修改】在更新UI列表前，强制从油猴存储读取最新数据
-    // 这解决了多页面/多标签页数据不同步的问题
-    const updateListsUI = () => {
+    function updateUI() {
+        let mainWidget = document.getElementById('gj-widget-main');
+        if (!mainWidget) mainWidget = createMainWidget();
+        
+        let addrWidget = document.getElementById('gj-widget-addr');
+        if (isDispatchPage()) {
+            if (!addrWidget) {
+                addrWidget = createAddrWidget();
+                updateListsUI();
+                applyLayout(); 
+            } else {
+                addrWidget.querySelectorAll('.gj-tab').forEach(el => {
+                    if(el.dataset.tab === state.viewTab) el.classList.add('active-tab');
+                    else el.classList.remove('active-tab');
+                });
+            }
+        } else if (!isDispatchPage() && addrWidget) {
+            addrWidget.remove();
+        }
+
+        const cls = state.theme === 'dark' ? 'gj-dark gj-window' : 'gj-light gj-window';
+        if(mainWidget) mainWidget.className = cls;
+        if(addrWidget) addrWidget.className = cls;
+
+        const themeIcon = document.getElementById('gj-theme-toggle');
+        if(themeIcon) themeIcon.textContent = state.theme === 'light' ? '🌙' : '🌞';
+
+        const titleSpan = document.getElementById('gj-title-text');
+        if (titleSpan) {
+            if (isOrderPage()) titleSpan.textContent = CONFIG.ORDER.TITLE;
+            else if (isDriverPage()) titleSpan.textContent = CONFIG.DRIVER.TITLE;
+            else if (isDispatchPage()) titleSpan.textContent = CONFIG.DISPATCH.TITLE;
+            else titleSpan.textContent = "助手待机";
+        }
+
+        const mainContent = document.getElementById('gj-main-content');
+        const scaleHandle = document.getElementById('gj-scale-handle');
+        if (mainContent) mainContent.style.display = state.isCollapsed ? 'none' : 'block';
+        if (scaleHandle) scaleHandle.style.display = state.isCollapsed ? 'none' : 'block';
+        if (mainContent) renderMainContent(mainContent);
+        updateStatusText();
+    }
+
+    function renderMainContent(container) {
+        let html = '';
+        if (isOrderPage() || isDriverPage()) {
+            const btnClass = state.manualPause ? 'btn-resume' : 'btn-pause';
+            const btnText = state.manualPause ? '▶ 恢复运行' : '⏸ 暂停刷新';
+            const statusColor = state.manualPause ? 'var(--gj-text-sec)' : '#409EFF';
+            
+            const scrapeClass = state.isScrapingEnabled ? 'btn-resume' : 'btn-preset';
+            const scrapeText = state.isScrapingEnabled ? '👁️ 自动抓取: 开启' : '🙈 自动抓取: 关闭';
+            const scrapeStyle = state.isScrapingEnabled ? 'border:1px solid #e1f3d8;background:#f0f9eb;color:#67c23a;' : 'border:1px solid var(--gj-border);background:var(--gj-bg-sec);color:var(--gj-text-mute);';
+
+            html = `
+                <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
+                    <span class="gj-timer-text" style="color:${statusColor}">${state.manualPause ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
+                </div>
+                
+                <button id="gj-btn-toggle" class="gj-btn ${btnClass}">${btnText}</button>
+                
+                <button id="gj-btn-scrape" class="gj-btn" style="margin-top:8px; ${scrapeStyle}">${scrapeText}</button>
+
+                <div class="gj-control-row">
+                    <span style="color:var(--gj-text-sec);font-size:12px;">刷新间隔</span>
+                    <div style="display:flex;align-items:center;">
+                        <input type="number" id="gj-input-interval" value="${state.refreshInterval}" class="gj-input-mini">
+                        <button id="gj-btn-set" class="gj-btn-icon">🆗</button>
+                    </div>
+                </div>
+
+                <div class="gj-control-row" style="margin-top:10px; border-top:1px dashed var(--gj-border); padding-top:10px; justify-content: space-around;">
+                    <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
+                    <span class="btn-icon-circle" id="btn-cloud-pull" title="⬇️ 覆盖下载(以云端为准)" style="background:rgba(230,162,60,0.6)">⬇</span>
+                    <span class="btn-icon-circle" id="btn-cloud-push" title="⬆️ 上传本地数据" style="background:rgba(245,108,108,0.6)">⬆</span>
+                    <label class="btn-icon-circle" title="导入本地文件(txt/csv)" style="background:rgba(103,194,58,0.6)">
+                        📂<input type="file" id="gj-file-import" style="display:none" accept=".txt,.csv">
+                    </label>
+                </div>
+            `;
+        } else if (isDispatchPage()) {
+            const buttonsHtml = CONFIG.DISPATCH.PRESETS.map(num => 
+                `<button class="btn-preset" data-val="${num}">${num}</button>`
+            ).join('');
+            html = `
+                <div class="gj-group">
+                    <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
+                    <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
+                </div>
+                <div class="gj-divider">
+                    <span class="gj-label-sm">AI 距离 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</span>
+                </div>
+                <div class="gj-grid-btns">${buttonsHtml}</div>
+                
+                <div class="gj-bottom-controls">
+                    <button id="btn-sync-cloud" class="gj-btn-text">☁️ 手动同步</button>
+                    <span style="font-size:10px;color:var(--gj-text-mute);">缩放: ${(state.uiScale*100).toFixed(0)}%</span>
+                </div>
+            `;
+        } else {
+            html = `<div style="padding:20px;color:var(--gj-text-mute);text-align:center;font-size:13px;">💤 非工作区域</div>`;
+        }
+        container.innerHTML = html;
+        bindEvents();
+    }
+
+    function updateListsUI() {
         const addrBody = document.getElementById('list-addr-body');
         if (!addrBody) return;
         
@@ -860,7 +960,7 @@
                 el.addEventListener('click', () => fillInput(el.dataset.type, el.dataset.val))
             );
         }
-    };
+    }
 
     const bindEvents = () => {
         document.getElementById('btn-cloud-setting')?.addEventListener('click', setupCloudConfig);
