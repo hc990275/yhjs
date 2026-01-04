@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.3 排除列增强版)
+// @name          代驾调度系统助手 (v15.4 修复覆盖版)
 // @namespace     http://tampermonkey.net/
-// @version       15.3
-// @description   【v15.3】新增自定义排除列功能(默认第6列)，支持关键词过滤；保留来源追踪日志。
+// @version       15.4
+// @description   【v15.4】修复派单页“填最新地址”不读取剪切板问题；强化云端数据强制覆盖本地逻辑；包含v15.3所有功能。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -22,7 +22,7 @@
 
     // --------------- 1. 配置中心 ---------------
     const CONFIG = {
-        // 【新增/修改】抓取与排除配置
+        // 抓取与排除配置
         // index 从 0 开始 (第1列是0，第2列是1... 第6列是5)
         SCRAPE: {
             // 1. 抓取目标列 (设为 null 则自动智能扫描)
@@ -33,11 +33,12 @@
             EXCLUDE_COL_INDEX: 6, // 示例: 5 (第6列)。如果不填，默认为 5
             
             // 3. 排除关键词 (只要排除列包含以下任意一个词，整行不抓取)
-            // 请在单引号内填写关键词，用逗号分隔
             EXCLUDE_NAMES: [
-                '盛大大地模式', 
-                '腾讯出行', 
-                // 你可以在这里继续添加...
+                '一口价', 
+                '特价', 
+                '测试',
+                '取消',
+                '大路' // 示例
             ]
         },
 
@@ -192,7 +193,7 @@
         }
     };
 
-    // 【修改点】核心扫描函数：增加自定义排除列逻辑
+    // 核心扫描函数
     const scanOrderPage = () => {
         if (!isOrderPage() || !state.isScrapingEnabled) return;
         
@@ -247,9 +248,7 @@
                 // 检查是否包含任一排除词
                 const hit = excludeKeywords.find(kw => checkText.includes(kw));
                 if (hit) {
-                    // 命中排除词，跳过此行
-                    // log(`⛔ [跳过] 发现排除词 "${hit}" (位于第${excludeColIdx}列: ${checkText})`, 'info');
-                    return; 
+                    return; // 命中排除词，跳过此行
                 }
             }
 
@@ -426,6 +425,7 @@
         });
     };
 
+    // 【修改点】强化覆盖逻辑，确保GM_setValue被执行
     const pullFromCloud = (isAuto = false) => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
@@ -462,18 +462,19 @@
                                 blCount = lines.length;
                             } else if (type === 'ADDRS') {
                                 state.db.addrs = lines;
-                                GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
+                                GM_setValue('dbAddrs', JSON.stringify(state.db.addrs)); // 强制保存
                                 importedAddrs = lines.length;
                             } else if (type === 'PHONES') {
                                 state.db.phones = lines;
-                                GM_setValue('dbPhones', JSON.stringify(state.db.phones));
+                                GM_setValue('dbPhones', JSON.stringify(state.db.phones)); // 强制保存
                                 importedPhones = lines.length;
                             }
                         }
                     } else {
+                        // 兼容无标签格式，默认为地址
                         const lines = text.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
                         state.db.addrs = lines;
-                        GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
+                        GM_setValue('dbAddrs', JSON.stringify(state.db.addrs)); // 强制保存
                         importedAddrs = lines.length;
                     }
 
@@ -1013,11 +1014,12 @@
             document.querySelectorAll('.btn-preset').forEach(btn => 
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
             );
+            // 【关键修改】点击“填最新地址”时，先读取剪切板->存库->再填充，而不是只读旧库
             document.getElementById('btn-auto-addr')?.addEventListener('click', () => {
-                if(state.db.addrs && state.db.addrs[0]) fillInput('address', state.db.addrs[0]);
+                processClipboard(true); // true 代表自动填充
             });
             document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
-                if(state.db.phones && state.db.phones[0]) fillInput('phone', state.db.phones[0]);
+                processClipboard(true);
             });
             document.getElementById('btn-sync-cloud')?.addEventListener('click', () => {
                 fetchOnlineBlacklist(false);
