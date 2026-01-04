@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.6.5 强力置顶版)
+// @name          代驾调度系统助手 (v15.6.6 完美同步版)
 // @namespace     http://tampermonkey.net/
-// @version       15.6.5
-// @description   【v15.6.5】核心修正：剪贴板读取已存在的数据时，强制移动到第一位(置顶)；控制台增加本地库数量统计显示。
+// @version       15.6.6
+// @description   【v15.6.6】修复数据库数量不一致问题（移除长地址过滤限制）；增加多标签页自动同步机制；保留剪贴板置顶与详细日志。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -125,8 +125,23 @@
 
     // --------------- 4. 核心逻辑 ---------------
 
+    // 【新增】强制从存储重新加载数据到内存（解决跨标签页不同步问题）
+    const reloadDB = () => {
+        const oldLenAddr = state.db.addrs.length;
+        state.db.addrs = safeParse('dbAddrs', '[]');
+        state.db.phones = safeParse('dbPhones', '[]');
+        if (oldLenAddr !== state.db.addrs.length) {
+            updateListsUI();
+            if (isDispatchPage()) {
+                log(`🔄 数据库已同步更新 | 地址: ${state.db.addrs.length} | 电话: ${state.db.phones.length}`, 'info');
+            }
+        }
+    };
+
     const checkPage = () => {
         state.currentHash = window.location.hash;
+        reloadDB(); // 每次切换页面检查一下数据库更新
+
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
             setupTableObserver();
@@ -142,7 +157,7 @@
         
         if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
-            log('进入派单界面 (剪贴板置顶模式)', 'info');
+            log('进入派单界面 (同步增强版)', 'info');
             setTimeout(applyDistanceByTime, 1500);
         }
 
@@ -196,7 +211,6 @@
         }
     };
 
-    // 核心扫描函数
     const scanOrderPage = () => {
         if (!isOrderPage() || !state.isScrapingEnabled) return;
         const idxExclude = CONFIG.SCRAPE.EXCLUDE_COL_INDEX;
@@ -249,13 +263,14 @@
         if (!value) return false;
         const storageKey = type === 'address' ? 'dbAddrs' : 'dbPhones';
         
+        // 每次写入前强制读取一次最新状态，防止覆盖
         let currentList = [];
         try {
             const raw = GM_getValue(storageKey, '[]');
             currentList = JSON.parse(raw);
         } catch(e) { currentList = []; }
 
-        // 【新逻辑】如果已存在，先删除（为了后面添加到头部）
+        // 如果已存在，先删除（为了后面添加到头部）
         const existingIndex = currentList.indexOf(value);
         let isReorder = false;
         if (existingIndex > -1) {
@@ -281,7 +296,7 @@
         } else {
             log(`🆕 [新录入] ${type==='address'?'地址':'电话'}: ${value}`, 'success');
         }
-        return true; // 只要列表变动了（新增或顺序变化），都返回true
+        return true;
     };
 
     // ==============================================
@@ -303,18 +318,27 @@
         }
         setSliderValue(targetKm);
     };
+
+    // 【关键修复】清洗数据库，去除不合理的长度限制
     const cleanDBWithBlacklist = () => {
+        // 从本地存储读取最新数据
         let currentAddrs = safeParse('dbAddrs', '[]');
         if (!currentAddrs || currentAddrs.length === 0) return;
         
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
         const originalCount = currentAddrs.length;
+        
         currentAddrs = currentAddrs.filter(addr => {
+            // 1. 黑名单检查
             if (blockers.length > 0 && blockers.some(keyword => addr.includes(keyword))) return false;
-            const hanziMatches = addr.match(/[\u4e00-\u9fa5]/g);
-            if ((hanziMatches ? hanziMatches.length : 0) > 6) return false;
+            
+            // 2. 【已删除】原先的长度检查 (汉字>6就删) 已移除，防止误删长地址
+            // const hanziMatches = addr.match(/[\u4e00-\u9fa5]/g);
+            // if ((hanziMatches ? hanziMatches.length : 0) > 6) return false; 
+            
             return true;
         });
+
         if (originalCount !== currentAddrs.length) {
             GM_setValue('dbAddrs', JSON.stringify(currentAddrs));
             state.db.addrs = currentAddrs;
@@ -559,21 +583,19 @@
         return hasUpdate;
     };
 
-    // 【关键修改】处理剪贴板并填充指定类型
     const processClipboard = async (fillTarget = null) => {
         log(`[流程开始] 准备从剪贴板填充: ${fillTarget === 'address' ? '地址' : '电话'}`, 'info');
+        
+        // 操作前先强制同步一次数据库，确保是基于最新数据操作
+        reloadDB();
+
         try {
-            // 1. 尝试读取剪贴板
             const text = await navigator.clipboard.readText();
             log(`📋 剪贴板读取成功: "${text.substring(0, 50)}${text.length>50?'...':''}"`, 'success');
 
-            // 2. 解析并入库 (此时addToDB会自动处理置顶逻辑)
             const hasUpdate = parseTextToDB(text);
-            
-            // 3. 无论是否有更新，都重新刷新UI
             updateListsUI();
             
-            // 4. 【新功能】显示本地库数量
             log(`📊 [本地库统计] 📍地址: ${state.db.addrs.length} | 📞电话: ${state.db.phones.length}`, 'info');
 
         } catch (e) {
@@ -581,7 +603,7 @@
             log('🔄 将尝试使用本地库中已有的最新数据进行填充...', 'info');
         }
 
-        // 5. 执行填充（优先用刚读到的，因为已经置顶了）
+        // 执行填充（此时内存中state.db已经是包含剪贴板新内容的最新状态）
         if (fillTarget === 'address' && state.db.addrs && state.db.addrs.length > 0) {
             fillInput('address', state.db.addrs[0]);
         } else if (fillTarget === 'phone' && state.db.phones && state.db.phones.length > 0) {
@@ -592,7 +614,7 @@
     const handleFileImport = (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        if(!confirm(`确认导入文件 "${file.name}" 到本地库吗？\n将会自动清洗（汉字>7或含违禁词）。`)) {
+        if(!confirm(`确认导入文件 "${file.name}" 到本地库吗？\n将会自动清洗（含违禁词）。`)) {
             e.target.value = '';
             return;
         }
@@ -986,7 +1008,6 @@
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
             );
             
-            // 【关键修改点】恢复剪贴板读取逻辑，并指定填充目标
             document.getElementById('btn-auto-addr')?.addEventListener('click', () => {
                 processClipboard('address');
             });
@@ -1356,11 +1377,17 @@
 
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) {
+                // 每次页面可见时，强制同步一次数据库
+                reloadDB();
                 if ((isOrderPage() || isDriverPage()) && !state.manualPause) performAction();
                 if (isDispatchPage()) processClipboard();
             }
         });
-        window.addEventListener('focus', () => { if (isDispatchPage()) processClipboard(); });
+        window.addEventListener('focus', () => { 
+            // 窗口获得焦点时，也强制同步
+            reloadDB();
+            if (isDispatchPage()) processClipboard(); 
+        });
         setTimeout(checkPage, 1000); 
     };
 
