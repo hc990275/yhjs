@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.9 修复电话填充版)
+// @name          代驾调度系统助手 (v15.6 专版定制)
 // @namespace     http://tampermonkey.net/
-// @version       15.9
-// @description   【v15.9】修复“填最新电话”无效的问题；修复读取剪切板电话逻辑；保留所有定制功能。
+// @version       15.6
+// @description   【v15.6】定制版：排除列6/电话列13/地址列7；排除腾讯出行/盛大大地；强制实时保存；云端下载绝对覆盖。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -20,21 +20,26 @@
 (function() {
     'use strict';
 
-    // --------------- 1. 配置中心 (定制配置) ---------------
+    // --------------- 1. 配置中心 (已根据您的要求配置) ---------------
     const CONFIG = {
         // 【抓取与排除配置】
+        // index 从 0 开始计数 (即：第1列是0，第6列是5，第7列是6，第13列是12)
         SCRAPE: {
-            // 1. 抓取目标列
-            PHONE_COL_INDEX: 13,  // 您的要求：13 (第14列)
-            ADDR_COL_INDEX: 7,    // 您的要求：7  (第8列)
+            // 1. 抓取目标列 (您指定的列)
+            PHONE_COL_INDEX: 12,  // 您的要求：第13列
+            ADDR_COL_INDEX: 6,    // 您的要求：第7列
 
             // 2. 排除过滤配置
-            EXCLUDE_COL_INDEX: 6, // 您的要求：6  (第7列)
+            EXCLUDE_COL_INDEX: 5, // 您的要求：第6列
             
-            // 3. 排除关键词
+            // 3. 排除关键词 (只要排除列包含以下任意一个词，整行不抓取)
             EXCLUDE_NAMES: [
                 '腾讯出行', 
-                '盛大大地模式'
+                '盛大大地模式',
+                '一口价', 
+                '特价', 
+                '测试',
+                '取消'
             ]
         },
 
@@ -134,11 +139,9 @@
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
             log('进入派单界面 (纯手动模式)', 'info');
             setTimeout(applyDistanceByTime, 1500);
-            updateListsUI(); // 进入页面时立即刷新一次列表
         }
 
-        updateUI(); // 尝试调用UI更新
-        
+        updateUI();
         if (isDispatchPage()) {
              if (!state.manualPause) startRapidRefresh();
         } else {
@@ -188,34 +191,42 @@
         }
     };
 
-    // 核心扫描函数
+    // 核心扫描函数 (严格按照您的列配置)
     const scanOrderPage = () => {
         if (!isOrderPage() || !state.isScrapingEnabled) return;
         
-        const idxExclude = CONFIG.SCRAPE.EXCLUDE_COL_INDEX; 
-        const idxPhone = CONFIG.SCRAPE.PHONE_COL_INDEX;     
-        const idxAddr = CONFIG.SCRAPE.ADDR_COL_INDEX;       
+        // 1. 获取配置的索引
+        const idxExclude = CONFIG.SCRAPE.EXCLUDE_COL_INDEX; // 5 (第6列)
+        const idxPhone = CONFIG.SCRAPE.PHONE_COL_INDEX;     // 12 (第13列)
+        const idxAddr = CONFIG.SCRAPE.ADDR_COL_INDEX;       // 6 (第7列)
         
         const excludeKeywords = CONFIG.SCRAPE.EXCLUDE_NAMES || [];
 
+        // 2. 遍历内容行
         const rows = document.querySelectorAll('.el-table__body-wrapper .el-table__row');
         let newCount = 0;
 
         rows.forEach(row => {
             const cells = row.querySelectorAll('td');
+            // 如果列数不够，直接跳过，防止报错
             if (cells.length <= Math.max(idxExclude, idxPhone, idxAddr)) return;
 
-            // === A. 排除逻辑 ===
+            // === A. 排除逻辑 (第6列) ===
+            // 注意：这里不再使用硬编码的第2/3列过滤，完全依赖您的配置
             if (idxExclude !== null && cells[idxExclude]) {
                 const checkText = cells[idxExclude].innerText.trim();
                 const hit = excludeKeywords.find(kw => checkText.includes(kw));
-                if (hit) return; 
+                if (hit) {
+                    // log(`⛔ [排除] 发现 "${hit}" (第${idxExclude+1}列: ${checkText})`, 'info');
+                    return; // 跳过此行
+                }
             }
 
-            // === B. 抓取电话 ===
+            // === B. 抓取电话 (第13列) ===
             if (idxPhone !== null && cells[idxPhone]) {
                 const rawText = cells[idxPhone].innerText.trim();
                 const cleanNum = rawText.replace(/\D/g, '');
+                // 必须是11位手机号
                 if (/^1\d{10}$/.test(cleanNum)) {
                     if (addToDB('phone', cleanNum, idxPhone)) {
                         newCount++;
@@ -223,12 +234,14 @@
                 }
             }
 
-            // === C. 抓取地址 ===
+            // === C. 抓取地址 (第7列) ===
             if (idxAddr !== null && cells[idxAddr]) {
                 const addrText = cells[idxAddr].innerText.trim();
                 if (addrText && addrText.length > 1) {
+                    // 黑名单过滤
                     const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                     if (!blockers.some(b => addrText.includes(b))) {
+                        // 简单排除日期格式
                         if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) { 
                              if (addToDB('address', addrText, idxAddr)) {
                                  newCount++;
@@ -252,7 +265,8 @@
         
         const storageKey = type === 'address' ? 'dbAddrs' : 'dbPhones';
         
-        // 1. 强制读取最新
+        // 1. 【关键】每次写入前，强制重新从存储读取最新列表
+        // 这样即使其他标签页更新了数据，这里也能获取到，不会覆盖丢失
         let currentList = [];
         try {
             const raw = GM_getValue(storageKey, '[]');
@@ -262,23 +276,24 @@
         // 2. 查重
         if (currentList.includes(value)) return false;
 
-        // 3. 插入
+        // 3. 插入头部
         currentList.unshift(value);
 
-        // 4. 限制
+        // 4. 限制长度
         if (currentList.length > CONFIG.STORAGE.MAX_ITEMS) {
             currentList.length = CONFIG.STORAGE.MAX_ITEMS;
         }
 
-        // 5. 保存
+        // 5. 【关键】立即写入存储
         GM_setValue(storageKey, JSON.stringify(currentList));
 
-        // 6. 同步内存
+        // 6. 同步内存状态
         if (type === 'address') state.db.addrs = currentList;
         else state.db.phones = currentList;
 
+        // 7. 日志
         if (sourceIdx !== null) {
-            log(`💾 [已保存] ${type==='address'?'地址':'电话'}: ${value} (来源: 第${sourceIdx}列)`, 'success');
+            log(`💾 [已保存] ${type==='address'?'地址':'电话'}: ${value} (来源: 第${sourceIdx+1}列)`, 'success');
         }
         
         return true;
@@ -380,7 +395,7 @@
         });
     };
 
-    // 【核心】下载覆盖逻辑
+    // 【修改点】下载覆盖：确保GM_setValue被执行，彻底覆盖本地
     const pullFromCloud = (isAuto = false) => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
@@ -415,23 +430,23 @@
                                 GM_setValue('blacklist', state.blacklist);
                             } else if (type === 'ADDRS') {
                                 state.db.addrs = lines;
-                                GM_setValue('dbAddrs', JSON.stringify(state.db.addrs)); // 强制覆盖
+                                GM_setValue('dbAddrs', JSON.stringify(state.db.addrs)); // 强制保存
                                 importedAddrs = lines.length;
                             } else if (type === 'PHONES') {
                                 state.db.phones = lines;
-                                GM_setValue('dbPhones', JSON.stringify(state.db.phones)); // 强制覆盖
+                                GM_setValue('dbPhones', JSON.stringify(state.db.phones)); // 强制保存
                                 importedPhones = lines.length;
                             }
                         }
                     } else {
                         const lines = text.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
                         state.db.addrs = lines;
-                        GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
+                        GM_setValue('dbAddrs', JSON.stringify(state.db.addrs)); // 强制保存
                         importedAddrs = lines.length;
                     }
 
                     cleanDBWithBlacklist();
-                    updateListsUI(); 
+                    updateListsUI();
                     if (!isAuto) {
                         alert(`☁️ 覆盖成功！本地数据库已更新。\n\n- 地址库: ${importedAddrs} 条\n- 电话库: ${importedPhones} 条`);
                     } else {
@@ -456,6 +471,7 @@
         const targetUrl = `${url.replace(/\/$/, '')}/api/sync?token=${token}`;
         const blData = state.blacklist.split(/[,，]/).map(s=>s.trim()).filter(s=>s).join('\n');
         
+        // 读取最新的上传
         const latestAddrs = safeParse('dbAddrs', '[]');
         const latestPhones = safeParse('dbPhones', '[]');
         const addrData = (latestAddrs || []).join('\n');
@@ -536,7 +552,7 @@
         }, 1000);
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
-    
+    // 处理剪贴板文本
     const parseTextToDB = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
         let hasUpdate = false;
@@ -563,27 +579,16 @@
         return hasUpdate;
     };
 
-    // 【修改点】修复 填电话 逻辑
-    const processClipboard = async (autoFill = false, fillType = 'address') => {
+    const processClipboard = async (autoFill = false) => {
         try {
             const text = await navigator.clipboard.readText();
-            parseTextToDB(text); // 解析入库
-            updateListsUI(); // 刷新UI
-            
-            // 重新读取最新数据进行填充
-            const currentAddrs = safeParse('dbAddrs', '[]');
-            const currentPhones = safeParse('dbPhones', '[]');
-            
-            if (autoFill) {
-                if (fillType === 'phone' && currentPhones.length > 0) {
-                    fillInput('phone', currentPhones[0]);
-                } else if (fillType === 'address' && currentAddrs.length > 0) {
-                    fillInput('address', currentAddrs[0]);
-                }
+            const hasUpdate = parseTextToDB(text);
+            if (hasUpdate) updateListsUI();
+            if (autoFill && state.db.addrs && state.db.addrs.length > 0) {
+                fillInput('address', state.db.addrs[0]);
             }
         } catch (e) {}
     };
-
     const handleFileImport = (e) => {
         const file = e.target.files[0];
         if (!file) return;
@@ -700,23 +705,21 @@
             listBody.style.setProperty('--gj-col-width', state.colWidth + 'px');
         }
     };
-    
-    // 【修改点】UI函数声明提升
-    function toggleTheme() {
+    const toggleTheme = () => {
         state.theme = state.theme === 'light' ? 'dark' : 'light';
         GM_setValue('theme', state.theme);
         updateUI();
         applyGlobalTheme(); 
-    }
-    function applyGlobalTheme() {
+    };
+    const applyGlobalTheme = () => {
         const doc = document.documentElement;
         if (state.theme === 'dark') {
             doc.classList.add('gj-global-dark');
         } else {
             doc.classList.remove('gj-global-dark');
         }
-    }
-    function createMainWidget() {
+    };
+    const createMainWidget = () => {
         let widget = document.getElementById('gj-widget-main');
         if (widget) widget.remove();
         widget = document.createElement('div');
@@ -758,9 +761,9 @@
              toggleTheme();
         });
         return widget;
-    }
+    };
 
-    function createAddrWidget() {
+    const createAddrWidget = () => {
         let widget = document.getElementById('gj-widget-addr');
         if (widget) widget.remove();
         if (!isDispatchPage()) return null;
@@ -837,9 +840,9 @@
              GM_setValue('addrColWidth', state.colWidth);
         });
         return widget;
-    }
+    };
 
-    function updateUI() {
+    const updateUI = () => {
         let mainWidget = document.getElementById('gj-widget-main');
         if (!mainWidget) mainWidget = createMainWidget();
         
@@ -880,9 +883,9 @@
         if (scaleHandle) scaleHandle.style.display = state.isCollapsed ? 'none' : 'block';
         if (mainContent) renderMainContent(mainContent);
         updateStatusText();
-    }
+    };
 
-    function renderMainContent(container) {
+    const renderMainContent = (container) => {
         let html = '';
         if (isOrderPage() || isDriverPage()) {
             const btnClass = state.manualPause ? 'btn-resume' : 'btn-pause';
@@ -943,16 +946,10 @@
         }
         container.innerHTML = html;
         bindEvents();
-    }
-
-    function updateListsUI() {
+    };
+    const updateListsUI = () => {
         const addrBody = document.getElementById('list-addr-body');
         if (!addrBody) return;
-        
-        // 强制刷新内存数据
-        state.db.addrs = safeParse('dbAddrs', '[]');
-        state.db.phones = safeParse('dbPhones', '[]');
-
         const isPhone = state.viewTab === 'phone';
         const sourceList = isPhone ? state.db.phones : state.db.addrs;
         const filteredList = (sourceList || []).filter(item => isMatch(item, state.searchText, isPhone ? 'phone' : 'address'));
@@ -971,7 +968,346 @@
                 el.addEventListener('click', () => fillInput(el.dataset.type, el.dataset.val))
             );
         }
-    }
+    };
+
+    const bindEvents = () => {
+        document.getElementById('btn-cloud-setting')?.addEventListener('click', setupCloudConfig);
+        document.getElementById('btn-cloud-pull')?.addEventListener('click', () => pullFromCloud(false)); 
+        document.getElementById('btn-cloud-push')?.addEventListener('click', pushToCloud);
+        document.getElementById('gj-file-import')?.addEventListener('change', handleFileImport);
+        if (isDispatchPage()) {
+            document.querySelectorAll('.btn-preset').forEach(btn => 
+                btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
+            );
+            document.getElementById('btn-auto-addr')?.addEventListener('click', () => {
+                processClipboard(true);
+            });
+            document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
+                processClipboard(true);
+            });
+            document.getElementById('btn-sync-cloud')?.addEventListener('click', () => {
+                fetchOnlineBlacklist(false);
+            });
+        }
+        
+        if (document.getElementById('gj-btn-toggle')) {
+            document.getElementById('gj-btn-toggle').addEventListener('click', () => {
+                state.manualPause = !state.manualPause;
+                GM_setValue('manualPause', state.manualPause);
+                updateUI();
+            });
+            const scrapeBtn = document.getElementById('gj-btn-scrape');
+            if (scrapeBtn) {
+                scrapeBtn.addEventListener('click', () => {
+                    state.isScrapingEnabled = !state.isScrapingEnabled;
+                    GM_setValue('scrapeEnabled', state.isScrapingEnabled);
+                    updateUI();
+                    if (state.isScrapingEnabled) {
+                        scanOrderPage();
+                    }
+                });
+            }
+
+            document.getElementById('gj-btn-set').addEventListener('click', () => {
+                const val = parseInt(document.getElementById('gj-input-interval').value);
+                if (val > 0) {
+                    state.refreshInterval = val;
+                    if(isOrderPage()) GM_setValue('orderInterval', val);
+                    if(isDriverPage()) GM_setValue('driverInterval', val);
+                    performAction(); startCountdown();
+                }
+            });
+        }
+    };
+
+    const updateStatusText = () => {
+        const text = document.querySelector('.gj-timer-text');
+        if (text) {
+            if (state.manualPause) { text.textContent = "暂停";
+            text.style.color = "var(--gj-text-sec)"; }
+            else { 
+                text.innerHTML = `${state.countdown}<span style="font-size:16px;margin-left:2px;opacity:0.6">s</span>`;
+                text.style.color = state.countdown <= 3 ? "#F56C6C" : "#409EFF"; 
+            }
+        }
+    };
+    const log = (text, type) => { console.log(`[助手] ${text}`); };
+    const applyPos = (el, pos) => {
+        if (pos.left) { el.style.left = pos.left;
+        el.style.right = 'auto'; }
+        else { el.style.right = pos.right || '20px';
+        el.style.left = 'auto'; }
+        if (pos.top) { el.style.top = pos.top; el.style.bottom = 'auto';
+        }
+        else { el.style.bottom = pos.bottom || 'auto'; el.style.top = 'auto';
+        }
+    };
+
+    const setupDrag = (el, posKey) => {
+        const header = el.querySelector('.gj-header');
+        let isDragging = false, startX, startY, rect;
+        header.addEventListener('mousedown', e => {
+            if(e.target.closest('.gj-toggle') || e.target.closest('#gj-theme-toggle') || e.target.closest('.gj-tab') || e.target.closest('input') || e.target.closest('label') || e.target.closest('.btn-icon-circle')) return;
+            isDragging = true; startX = e.clientX; startY = e.clientY;
+            rect = el.getBoundingClientRect();
+            header.style.cursor = 'grabbing';
+            el.style.transition = 'none';
+        });
+        document.addEventListener('mousemove', e => {
+            if (!isDragging) return;
+            const dx = (e.clientX - startX) / state.uiScale;
+            const dy = (e.clientY - startY) / state.uiScale;
+            el.style.left = (rect.left + dx) + 'px';
+            el.style.top = (rect.top + dy) + 'px';
+            el.style.right = 'auto'; el.style.bottom = 'auto';
+        });
+        document.addEventListener('mouseup', () => {
+            if(isDragging) {
+                isDragging = false; header.style.cursor = 'grab';
+                el.style.transition = 'transform 0.1s';
+                const newPos = {left: el.style.left, top: el.style.top};
+                state[posKey] = newPos;
+                GM_setValue(posKey, JSON.stringify(newPos));
+            }
+        });
+    };
+
+    const setupScaleDrag = (el) => {
+        const handle = el.querySelector('#gj-scale-handle');
+        if(!handle) return;
+        let isResizing = false, startY, startScale;
+        handle.addEventListener('mousedown', e => {
+            e.stopPropagation(); e.preventDefault();
+            isResizing = true; startY = e.clientY; startScale = state.uiScale;
+            document.body.style.cursor = 'nwse-resize';
+        });
+        document.addEventListener('mousemove', e => {
+            if (!isResizing) return;
+            const dy = e.clientY - startY;
+            let newScale = startScale + (dy * 0.005);
+            if(newScale < 0.5) newScale = 0.5;
+            if(newScale > 3.0) newScale = 3.0;
+            state.uiScale = newScale;
+            const mainW = document.getElementById('gj-widget-main');
+            const addrW = document.getElementById('gj-widget-addr');
+            if(mainW) mainW.style.transform = `scale(${newScale})`;
+            if(addrW) addrW.style.transform = `scale(${newScale})`;
+            const label = document.querySelector('.gj-bottom-controls span');
+            if(label) label.textContent = `缩放: ${(newScale*100).toFixed(0)}%`;
+        });
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false; document.body.style.cursor = 'default';
+                GM_setValue('uiScale', state.uiScale);
+            }
+        });
+    };
+
+    const setupResizeDrag = (el) => {
+        const handle = el.querySelector('#gj-size-handle');
+        if(!handle) return;
+        let isResizing = false, startX, startY, startW, startH;
+        handle.addEventListener('mousedown', e => {
+            e.stopPropagation(); e.preventDefault();
+            isResizing = true; 
+            startX = e.clientX; startY = e.clientY;
+            startW = state.layout.width; startH = state.layout.height;
+            document.body.style.cursor = 'nwse-resize';
+        });
+        document.addEventListener('mousemove', e => {
+            if (!isResizing) return;
+            const dx = (e.clientX - startX) / state.uiScale;
+            const dy = (e.clientY - startY) / state.uiScale;
+            
+            let newW = startW + dx;
+            let newH = startH + dy;
+            
+            if(newW < 200) newW = 200;
+            if(newH < 150) newH = 150;
+            
+            state.layout.width = newW;
+            state.layout.height = newH;
+            applyLayout();
+        });
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false; document.body.style.cursor = 'default';
+                GM_setValue('uiLayout', JSON.stringify(state.layout));
+            }
+        });
+    };
+
+    const addStyles = () => {
+        GM_addStyle(`
+            html.gj-global-dark {
+                filter: invert(0.92) hue-rotate(180deg) !important;
+                background-color: #111 !important;
+            }
+            html.gj-global-dark img,
+            html.gj-global-dark video,
+            html.gj-global-dark iframe,
+            html.gj-global-dark .el-image,
+            html.gj-global-dark .gj-window {
+                filter: invert(1) hue-rotate(180deg) !important;
+            }
+            :root {
+                --gj-bg-main: #ffffff;
+                --gj-bg-sec: #f0f2f5;
+                --gj-bg-input: #f8f9fa;
+                --gj-text-main: #303133;
+                --gj-text-sec: #606266;
+                --gj-text-mute: #909399;
+                --gj-border: #dcdfe6;
+                --gj-hover: #ecf5ff;
+                --gj-hover-text: #409EFF;
+                --gj-shadow: rgba(0,0,0,0.1);
+                --gj-header-bg: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            }
+            .gj-dark {
+                --gj-bg-main: #1a1a1a;
+                --gj-bg-sec: #2d2d2d;
+                --gj-bg-input: #333333;
+                --gj-text-main: #e0e0e0;
+                --gj-text-sec: #b0b0b0;
+                --gj-text-mute: #666666;
+                --gj-border: #444444;
+                --gj-hover: #404040;
+                --gj-hover-text: #66b1ff;
+                --gj-shadow: rgba(0,0,0,0.5);
+                --gj-header-bg: linear-gradient(135deg, #3a4b8a 0%, #4a2b6e 100%);
+            }
+            .gj-window {
+                position: fixed;
+                z-index: 99999;
+                display: flex; flex-direction: column;
+                font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+                font-size: 14px; user-select: none;
+                filter: drop-shadow(0 4px 12px var(--gj-shadow));
+                color: var(--gj-text-main);
+                background: var(--gj-bg-main); 
+                border-radius: 12px; 
+                overflow: hidden;
+            }
+            #gj-widget-main { width: 250px; }
+            .gj-header {
+                padding: 10px 12px;
+                background: var(--gj-header-bg);
+                color: #fff;
+                display: flex; justify-content: space-between; align-items: center;
+                cursor: grab; font-weight: 600; font-size: 14px;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            }
+            .gj-toggle, #gj-theme-toggle { cursor: pointer; opacity:0.8; transition:opacity 0.2s; font-size:14px; }
+            .gj-toggle:hover, #gj-theme-toggle:hover { opacity:1; }
+            #gj-main-content { padding: 16px; background:var(--gj-bg-main); position: relative;}
+            .gj-timer-text { font-size: 38px; font-weight: 700; line-height:1; letter-spacing: -1px; }
+            .gj-btn {
+                width: 100%;
+                border: none; padding: 10px; border-radius: 8px; 
+                cursor: pointer; font-weight: 600; font-size: 14px;
+                transition: all 0.2s; box-shadow: 0 2px 6px rgba(0,0,0,0.1);
+                display:flex; justify-content:center; align-items:center; gap:5px;
+            }
+            .gj-btn:active { transform: scale(0.98); }
+            .btn-pause { background: #fff1f0; color: #f56c6c; border:1px solid #fde2e2; }
+            .gj-dark .btn-pause { background: #4a1b1b; color: #ff6b6b; border:1px solid #632b2b; }
+            .btn-resume { background: #f0f9eb; color: #67c23a; border:1px solid #e1f3d8; }
+            .gj-dark .btn-resume { background: #1b4a24; color: #67c23a; border:1px solid #2b6339; }
+            .btn-preset { 
+                background: var(--gj-bg-sec);
+                border: 1px solid var(--gj-border); color: var(--gj-text-sec); 
+                padding: 6px 0; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight:600;
+            }
+            .btn-preset:hover { background: var(--gj-hover); border-color: #b3d8ff; color: #409EFF; }
+            .btn-green { background: linear-gradient(135deg, #42e695 0%, #3bb2b8 100%); color: white; }
+            .btn-blue { background: linear-gradient(135deg, #f56c6c 0%, #f78989 100%); color: white; } 
+            .gj-control-row { display: flex; justify-content: space-between; align-items: center; margin-top: 15px; padding: 0 2px;}
+            .gj-input-mini { 
+                width: 45px; border: 1px solid var(--gj-border); border-radius: 6px; 
+                text-align: center; padding: 4px; font-size:13px; outline:none;
+                background: var(--gj-bg-input); color: var(--gj-text-main); transition: all 0.2s;
+            }
+            .gj-input-mini:focus { border-color: #409EFF; }
+            .gj-btn-icon { border:none; background:transparent; cursor:pointer; font-size:16px; padding:0 5px; }
+            .gj-btn-text { border:none; background:transparent; cursor:pointer; font-size:11px; color:var(--gj-text-mute); }
+            .gj-btn-text:hover { color:#409EFF; }
+            .gj-group { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; }
+            .gj-divider { display:flex; align-items:center; margin: 10px 0 6px 0; }
+            .gj-divider::before, .gj-divider::after { content:''; flex:1; height:1px; background:var(--gj-border); }
+            .gj-label-sm { font-size: 11px; color: var(--gj-text-mute); margin: 0 8px; white-space:nowrap;}
+            .gj-grid-btns { display: grid; grid-template-columns: repeat(5, 1fr); gap: 5px; }
+            .gj-bottom-controls { display:flex; justify-content:space-between; align-items:center; margin-top:12px; padding-top:10px; border-top:1px dashed var(--gj-border); }
+            .btn-icon-circle { 
+                width:22px; height:22px; border-radius:50%; background:rgba(255,255,255,0.2); 
+                display:flex; align-items:center; justify-content:center; 
+                cursor:pointer; color:#fff; font-size:12px; transition:0.2s;
+            }
+            .btn-icon-circle:hover { background:rgba(255,255,255,0.4); transform:scale(1.1); }
+            .gj-tabs { display:flex; gap:10px; align-items:center; }
+            .gj-tab { cursor:pointer; padding:2px 0; opacity:0.6; border-bottom:2px solid transparent; transition:0.2s; }
+            .gj-tab:hover { opacity:0.9; }
+            .gj-tab.active-tab { opacity:1; font-weight:bold; border-bottom-color:#fff; }
+            .gj-toolbar { 
+                padding: 8px; background: var(--gj-bg-sec); 
+                border-bottom: 1px solid var(--gj-border); 
+                display: flex; align-items: center; gap: 5px;
+            }
+            #gj-search-input {
+                flex: 1; border: 1px solid var(--gj-border);
+                border-radius: 4px; padding: 5px 8px; font-size: 14px; outline: none;
+                background: var(--gj-bg-input); color: var(--gj-text-main);
+                font-family: monospace; letter-spacing: 1px;
+            }
+            #gj-search-input:focus { border-color: #409EFF; }
+            .btn-clear { cursor: pointer; color: var(--gj-text-mute); font-size: 18px; line-height: 1; padding: 0 4px; transition: color 0.2s; }
+            .btn-clear:hover { color: #F56C6C; }
+            .gj-list-body { 
+                overflow-y: auto; display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(var(--gj-col-width, 80px), 1fr));
+                gap: 1px; background: var(--gj-bg-sec); padding: 1px;
+                transition: height 0.05s;
+            }
+            .gj-list-body::-webkit-scrollbar { width: 4px; }
+            .gj-list-body::-webkit-scrollbar-thumb { background: var(--gj-border); border-radius: 2px; }
+            .gj-list-item {
+                background: var(--gj-bg-main); padding: 6px 4px; 
+                cursor: pointer; font-size: 13px; font-weight: 500;
+                color: var(--gj-text-main); display: flex; align-items: center; justify-content: center;
+                white-space: nowrap; overflow: hidden; text-overflow: ellipsis; 
+            }
+            .gj-list-item:hover { background: var(--gj-hover); color: var(--gj-hover-text); }
+            .gj-item-text { overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+            .gj-empty { grid-column: 1 / -1; text-align: center; color: var(--gj-text-mute); padding: 30px 10px; font-size: 12px; background: var(--gj-bg-main);}
+            .gj-resize-handle {
+                position: absolute; bottom: 1px; right: 1px;
+                width: 12px; height: 12px; cursor: nwse-resize;
+                background: linear-gradient(135deg, transparent 50%, var(--gj-text-mute) 50%);
+                opacity: 0.5; z-index: 10;
+                clip-path: polygon(100% 0, 100% 100%, 0 100%);
+            }
+            .gj-resize-handle:hover {
+                background: linear-gradient(135deg, transparent 50%, #409EFF 50%);
+                opacity: 1;
+            }
+        `);
+    };
+    const init = () => {
+        migrateOldData(); 
+        addStyles();
+        checkPage();
+        window.addEventListener('hashchange', checkPage);
+        if(isDispatchPage()) setTimeout(applyDistanceByTime, 2000);
+        applyGlobalTheme(); 
+
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                if ((isOrderPage() || isDriverPage()) && !state.manualPause) performAction();
+                if (isDispatchPage()) processClipboard();
+            }
+        });
+        window.addEventListener('focus', () => { if (isDispatchPage()) processClipboard(); });
+        setTimeout(checkPage, 1000); 
+    };
 
     if (document.readyState === 'complete' || document.readyState === 'interactive') init();
     else window.addEventListener('load', init);
