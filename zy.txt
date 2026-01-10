@@ -6,11 +6,5 @@ tuic://0e31ea6d-f109-4a20-9d01-6f4a87822f80:admin@147.135.213.72:20023?sni=www.b
 vless://0e31ea6d-f109-4a20-9d01-6f4a87822f80@147.135.213.72:20023?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.nazhumi.com&fp=firefox&pbk=rTEocyLohiJnrMbAKHbeKzlMwSnyvn6g3SlW_EUI4WI&type=tcp#vless%e6%b3%95%e5%9b%bd
 tuic://49e21b89-3297-4102-9d96-c952accd597e:admin@51.75.118.5:20301?sni=www.bing.com&alpn=h3&congestion_control=bbr&allowInsecure=1#tuic%e6%b3%95%e5%9b%bd
 vless://49e21b89-3297-4102-9d96-c952accd597e@51.75.118.5:20301?encryption=none&flow=xtls-rprx-vision&security=reality&sni=www.nazhumi.com&fp=firefox&pbk=_lN1Re2utQwHgsmxPKhG3EJlQYfU570kZAkoPed1_wE&type=tcp#vless%e6%b3%95%e5%9b%bd
-vless://749f1e1b-a018-4b31-974e-6bd502d6ea75@www.visa.cn:443?encryption=none&security=tls&sni=1.abcai.online&fp=chrome&type=ws&host=1.abcai.online&path=%2F749f1e1b-a018-4b31-974e-6bd502d6ea75#DirectAdmin-easyshare
-vless://749f1e1b-a018-4b31-974e-6bd502d6ea75@www.shopify.com:443?encryption=none&security=tls&sni=1.abcai.online&fp=chrome&type=ws&host=1.abcai.online&path=%2F749f1e1b-a018-4b31-974e-6bd502d6ea75#DirectAdmin-easyshare
-vless://749f1e1b-a018-4b31-974e-6bd502d6ea75@store.ubi.com:443?encryption=none&security=tls&sni=1.abcai.online&fp=chrome&type=ws&host=1.abcai.online&path=%2F749f1e1b-a018-4b31-974e-6bd502d6ea75#DirectAdmin-easyshare
-vless://749f1e1b-a018-4b31-974e-6bd502d6ea75@www.wto.org:443?encryption=none&security=tls&sni=1.abcai.online&fp=chrome&type=ws&host=1.abcai.online&path=%2F749f1e1b-a018-4b31-974e-6bd502d6ea75#DirectAdmin-easyshare
-vless://749f1e1b-a018-4b31-974e-6bd502d6ea75@time.is:443?encryption=none&security=tls&sni=1.abcai.online&fp=chrome&type=ws&host=1.abcai.online&path=%2F749f1e1b-a018-4b31-974e-6bd502d6ea75#DirectAdmin-easyshare
-vless://749f1e1b-a018-4b31-974e-6bd502d6ea75@www.udemy.com:443?encryption=none&security=tls&sni=1.abcai.online&fp=chrome&type=ws&host=1.abcai.online&path=%2F749f1e1b-a018-4b31-974e-6bd502d6ea75#DirectAdmin-easyshare
 vless://0a2490d1-6745-44f7-94eb-6504a3039029@bbl.abcai.online:443?encryption=none&security=tls&sni=bbl.abcai.online&fp=chrome&type=ws&host=bbl.abcai.online&path=%2F0a2490d1#bbl-US1
 trojan://0a2490d1-6745-44f7-94eb-6504a3039029@bbl.abcai.online:443?security=tls&sni=bbl.abcai.online&fp=chrome&type=ws&host=bbl.abcai.online&path=%2F0a2490d1#bbl-US2
