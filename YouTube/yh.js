@@ -1,10 +1,10 @@
 // ==UserScript==
-// @name         YouTube 整合助手 (V23.4 定制版 - 画质检测+代理开关)
-// @name:en      YouTube All-in-One (V23.4 Custom with Quality Detection & Proxy Toggle)
+// @name         YouTube 整合助手 (V23.5 定制版 - 画质检测+文件大小+代理开关)
+// @name:en      YouTube All-in-One (V23.5 Custom with Quality & Size Detection)
 // @namespace    http://tampermonkey.net/
-// @version      23.4.0
-// @description  1.自动检测视频最高画质；2.画质选择(最高/8K/4K/2K/1080p/720p)；3.两级菜单(画质→线程)；4.精简下载输出；5.断点续传+限速保护；6.代理开关。
-// @description:en  Ad blocker, Shorts filter, auto quality detection, quality selector, smart download menu, clean output, resume support, proxy toggle.
+// @version      23.5.0
+// @description  1.自动检测视频最高画质及文件大小；2.画质选择(最高/8K/4K/2K/1080p/720p)；3.两级菜单(画质→线程)；4.精简下载输出；5.断点续传+限速保护；6.代理开关。
+// @description:en  Ad blocker, Shorts filter, auto quality & size detection, quality selector, smart download menu, clean output, resume support, proxy toggle.
 // @author       郭
 // @match        *://www.youtube.com/*
 // @grant        GM_setClipboard
@@ -21,7 +21,7 @@
 (function () {
     'use strict';
 
-    console.log('YT助手 V23.4.0: 启动 (作者: 郭 | 画质检测+代理开关版)...');
+    console.log('YT助手 V23.5.0: 启动 (作者: 郭 | 画质检测+文件大小+代理开关版)...');
 
     // ==========================================
     // 1. 配置管理
@@ -48,7 +48,7 @@
     };
 
     // ==========================================
-    // 2. 画质档位定义（含 height 用于对比检测结果）
+    // 2. 画质档位定义
     // ==========================================
     const QUALITY_OPTIONS = [
         { key: 'best', height: Infinity, label: '🏆 最高画质', desc: '自动选择视频可用的最佳分辨率', color: '#ff6b6b', format: 'bestvideo+bestaudio/best' },
@@ -60,7 +60,7 @@
     ];
 
     // ==========================================
-    // 3. 画质检测（通过 YouTube 播放器 API）
+    // 3. 画质 & 文件大小检测
     // ==========================================
     const YT_QUALITY_MAP = {
         'highres': { label: '8K (4320p)', height: 4320 },
@@ -90,6 +90,79 @@
             console.log('YT助手: 检测画质失败', e);
         }
         return null;
+    }
+
+    // 文件大小格式化
+    function formatFileSize(bytes) {
+        if (!bytes || bytes <= 0) return null;
+        if (bytes >= 1024 * 1024 * 1024) return (bytes / (1024 * 1024 * 1024)).toFixed(1) + ' GB';
+        if (bytes >= 1024 * 1024) return (bytes / (1024 * 1024)).toFixed(0) + ' MB';
+        return (bytes / 1024).toFixed(0) + ' KB';
+    }
+
+    // 从 YouTube 播放器数据中获取各画质的文件大小
+    function getVideoSizeMap() {
+        try {
+            let streamingData = null;
+
+            // 方法1：ytInitialPlayerResponse（首次加载有效）
+            if (typeof unsafeWindow !== 'undefined') {
+                if (unsafeWindow.ytInitialPlayerResponse && unsafeWindow.ytInitialPlayerResponse.streamingData) {
+                    streamingData = unsafeWindow.ytInitialPlayerResponse.streamingData;
+                }
+                // 方法2：ytplayer bootstrapPlayerResponse
+                if (!streamingData && unsafeWindow.ytplayer && unsafeWindow.ytplayer.bootstrapPlayerResponse) {
+                    streamingData = unsafeWindow.ytplayer.bootstrapPlayerResponse.streamingData;
+                }
+            }
+
+            if (!streamingData) return null;
+
+            const adaptiveFormats = streamingData.adaptiveFormats || [];
+
+            // 按高度分组找最大码率的视频流
+            const videoByHeight = {};
+            const audioFormats = [];
+
+            adaptiveFormats.forEach(f => {
+                if (f.mimeType && f.mimeType.startsWith('video/') && f.height && f.contentLength) {
+                    const h = f.height;
+                    const size = parseInt(f.contentLength);
+                    if (!videoByHeight[h] || size > videoByHeight[h]) {
+                        videoByHeight[h] = size;
+                    }
+                }
+                if (f.mimeType && f.mimeType.startsWith('audio/') && f.contentLength) {
+                    audioFormats.push(parseInt(f.contentLength));
+                }
+            });
+
+            // 最佳音频流大小
+            const bestAudioSize = audioFormats.length > 0 ? Math.max(...audioFormats) : 0;
+
+            // 构建 height → totalSize 映射
+            const sizeMap = {};
+            for (const [height, videoSize] of Object.entries(videoByHeight)) {
+                sizeMap[parseInt(height)] = videoSize + bestAudioSize;
+            }
+
+            return Object.keys(sizeMap).length > 0 ? sizeMap : null;
+        } catch (e) {
+            console.log('YT助手: 获取文件大小失败', e);
+            return null;
+        }
+    }
+
+    // 根据目标高度查找对应的文件大小
+    function getSizeForQuality(sizeMap, targetHeight) {
+        if (!sizeMap) return null;
+        const heights = Object.keys(sizeMap).map(Number).sort((a, b) => b - a);
+        if (heights.length === 0) return null;
+
+        if (targetHeight === Infinity) return sizeMap[heights[0]]; // best = 最高
+
+        const matching = heights.filter(h => h <= targetHeight);
+        return matching.length > 0 ? sizeMap[matching[0]] : null;
     }
 
     // ==========================================
@@ -147,16 +220,30 @@
         item.onmouseenter = () => { item.style.background = '#333'; item.style.transform = 'translateX(-2px)'; };
         item.onmouseleave = () => { item.style.background = '#252525'; item.style.transform = 'translateX(0)'; };
 
-        const tDiv = document.createElement('div');
-        tDiv.style.cssText = 'font-weight: bold; font-size: 14px; display: flex; align-items: center; gap: 6px;';
-        tDiv.textContent = title;
+        // 标题行（左侧标题 + 右侧文件大小）
+        const titleRow = document.createElement('div');
+        titleRow.style.cssText = 'display: flex; align-items: center; justify-content: space-between; gap: 6px;';
 
-        // 如果有标签（如"视频最高"），添加彩色标签
+        const titleLeft = document.createElement('div');
+        titleLeft.style.cssText = 'font-weight: bold; font-size: 14px; display: flex; align-items: center; gap: 6px;';
+        titleLeft.textContent = title;
+
+        // 彩色标签
         if (opts.badge) {
             const badge = document.createElement('span');
             badge.style.cssText = `font-size: 10px; padding: 1px 6px; border-radius: 3px; background: ${opts.badgeColor || '#666'}; color: #fff; font-weight: normal;`;
             badge.textContent = opts.badge;
-            tDiv.appendChild(badge);
+            titleLeft.appendChild(badge);
+        }
+
+        titleRow.appendChild(titleLeft);
+
+        // 右侧文件大小标签
+        if (opts.fileSize) {
+            const sizeTag = document.createElement('span');
+            sizeTag.style.cssText = 'font-size: 12px; color: #4ade80; font-weight: bold; white-space: nowrap;';
+            sizeTag.textContent = opts.fileSize;
+            titleRow.appendChild(sizeTag);
         }
 
         const dDiv = document.createElement('div');
@@ -165,13 +252,13 @@
         dDiv.style.marginTop = '3px';
         dDiv.textContent = desc;
 
-        item.appendChild(tDiv);
+        item.appendChild(titleRow);
         item.appendChild(dDiv);
         item.onclick = (e) => { e.stopPropagation(); onClick(); };
         return item;
     }
 
-    // 构建 yt-dlp 命令（支持画质参数 + 精简输出）
+    // 构建 yt-dlp 命令
     function buildYtdlpCmd(threads, qualityKey) {
         const url = window.location.href.split('&')[0];
         const stableArgs = `--retries infinite --fragment-retries infinite --skip-unavailable-fragments --socket-timeout 60`;
@@ -179,7 +266,6 @@
         const throttleArgs = `--throttled-rate 100K`;
         const bufferArgs = `--buffer-size 16K --http-chunk-size 10M`;
         const metaArgs = `--write-info-json`;
-        // 精简输出：静默模式 + 仅显示进度条（隐藏重复的重试信息）
         const quietArgs = `-q --progress`;
         const threadArgs = threads > 1 ? `-N ${threads}` : '';
 
@@ -207,15 +293,13 @@
         btn.appendChild(createSVGIcon());
 
         const menu = document.createElement('div');
-        menu.style.cssText = 'display: none; background: #1a1a1a; border: 1px solid #333; border-radius: 8px 0 0 8px; padding: 12px; min-width: 300px; margin-top: 10px; box-shadow: -5px 5px 20px rgba(0,0,0,0.8); pointer-events: auto;';
+        menu.style.cssText = 'display: none; background: #1a1a1a; border: 1px solid #333; border-radius: 8px 0 0 8px; padding: 12px; min-width: 320px; margin-top: 10px; box-shadow: -5px 5px 20px rgba(0,0,0,0.8); pointer-events: auto;';
 
         const proxyTag = CONFIG.useProxy ? '代理:ON' : '直连:OFF';
 
-        // ---- 画质选择面板 ----
         const qualityPanel = document.createElement('div');
         qualityPanel.id = 'yt-dl-quality-panel';
 
-        // ---- 线程选择面板 ----
         const threadPanel = document.createElement('div');
         threadPanel.id = 'yt-dl-thread-panel';
         threadPanel.style.display = 'none';
@@ -223,13 +307,14 @@
         menu.appendChild(qualityPanel);
         menu.appendChild(threadPanel);
 
-        // 动态构建画质面板（每次打开菜单时刷新，确保获取最新画质检测结果）
+        // 每次打开菜单时重新构建画质面板
         function buildQualityPanel() {
             while (qualityPanel.firstChild) qualityPanel.removeChild(qualityPanel.firstChild);
 
             const maxQ = detectMaxQuality();
             const maxLabel = maxQ ? maxQ.label : '检测中...';
             const maxHeight = maxQ ? maxQ.height : 0;
+            const sizeMap = getVideoSizeMap();
 
             // 标题行
             const qTitle = document.createElement('div');
@@ -248,14 +333,16 @@
                 const isPreferred = q.key === CONFIG.preferQuality;
                 const exceedsMax = maxQ && q.height > maxHeight && q.key !== 'best';
 
-                // 构建描述信息
                 let desc = q.desc;
                 let itemLabel = q.label;
                 let badge = null;
                 let badgeColor = null;
 
+                // 获取该画质对应的文件大小
+                const sizeBytes = getSizeForQuality(sizeMap, q.height);
+                const sizeStr = formatFileSize(sizeBytes);
+
                 if (q.key === 'best') {
-                    // "最高画质"选项显示实际检测到的最高分辨率
                     itemLabel = maxQ ? `🏆 最高画质 → ${maxQ.label}` : '🏆 最高画质';
                     desc = maxQ ? `将以 ${maxQ.label} 下载（该视频的最高可用画质）` : '自动选择视频可用的最佳分辨率';
                     badge = '推荐';
@@ -276,9 +363,9 @@
                     () => {
                         CONFIG.preferQuality = q.key;
                         qualityPanel.style.display = 'none';
-                        showThreadPanel(q);
+                        showThreadPanel(q, sizeStr);
                     },
-                    { dimmed: exceedsMax, badge: badge, badgeColor: badgeColor }
+                    { dimmed: exceedsMax, badge: badge, badgeColor: badgeColor, fileSize: sizeStr ? `📦 ${sizeStr}` : null }
                 );
                 if (isPreferred && !exceedsMax) {
                     item.style.background = '#2a2a3a';
@@ -289,7 +376,7 @@
             });
         }
 
-        function showThreadPanel(quality) {
+        function showThreadPanel(quality, sizeStr) {
             while (threadPanel.firstChild) threadPanel.removeChild(threadPanel.firstChild);
             threadPanel.style.display = 'block';
 
@@ -311,9 +398,11 @@
             tTitle.appendChild(document.createTextNode(`选择线程 · ${quality.label}`));
             threadPanel.appendChild(tTitle);
 
+            // 画质+大小提示
             const qualityHint = document.createElement('div');
             qualityHint.style.cssText = `font-size: 11px; color: ${quality.color}; margin-bottom: 10px; padding: 6px 10px; background: ${quality.color}15; border-radius: 4px; font-family: sans-serif;`;
-            qualityHint.textContent = `画质: ${quality.desc}`;
+            const sizeInfo = sizeStr ? ` · 预估大小: ${sizeStr}` : '';
+            qualityHint.textContent = `画质: ${quality.desc}${sizeInfo}`;
             threadPanel.appendChild(qualityHint);
 
             const threadOptions = [
@@ -331,8 +420,9 @@
                         const cmd = buildYtdlpCmd(opt.threads, quality.key);
                         GM_setClipboard(cmd);
                         const qualityName = quality.key === 'best' ? '最高画质' : quality.label.replace(/📺\s*/, '');
+                        const sizeNote = sizeStr ? `\n📦 预估大小: ${sizeStr}` : '';
                         const warn = opt.threads > 1 ? '\n⚠️ 注意：多线程可能导致长视频下载失败，如遇问题请切换单线程' : '';
-                        alert(`已复制下载命令！\n\n📹 画质: ${qualityName}\n🔧 线程: ${opt.threads} 线程\n🌐 代理: ${proxyTag}\n\n✅ 断点续传 | ✅ 限速保护 | ✅ 精简输出${warn}\n\n请打开 PowerShell → 右键粘贴 → 回车执行`);
+                        alert(`已复制下载命令！\n\n📹 画质: ${qualityName}\n🔧 线程: ${opt.threads} 线程\n🌐 代理: ${proxyTag}${sizeNote}\n\n✅ 断点续传 | ✅ 限速保护 | ✅ 精简输出${warn}\n\n请打开 PowerShell → 右键粘贴 → 回车执行`);
                         menu.style.display = 'none';
                         threadPanel.style.display = 'none';
                         qualityPanel.style.display = 'block';
@@ -341,7 +431,6 @@
             });
         }
 
-        // 点击按钮：打开菜单时重新构建画质面板（刷新检测结果）
         btn.onclick = (e) => {
             e.stopPropagation();
             if (menu.style.display === 'none') {
