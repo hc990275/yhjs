@@ -17,7 +17,7 @@
 // @grant         unsafeWindow
 // ==/UserScript==
 
-(function() {
+(function () {
     'use strict';
 
     // --------------- 1. 配置中心 ---------------
@@ -39,7 +39,7 @@
         DRIVER: {
             HASH: '#/driverAll',
             TITLE: '司机调度',
-            DEFAULT_INTERVAL: 1, 
+            DEFAULT_INTERVAL: 1,
             BUTTON_SELECTOR: '.el-icon-refresh',
             ALT_SELECTOR: 'button i.el-icon-refresh'
         },
@@ -51,48 +51,49 @@
         },
         CLOUD: {
             FALLBACK_BLACKLIST_URL: "https://github.abcai.online/share/hc990275%2Fyhjs%2Fmain%2Fjzdj%2Fglk?sign=yf2kve&t=1767326208607",
-            SYNC_URL: GM_getValue('cloud_sync_url', 'https://txt.abcai.online'), 
-            SYNC_TOKEN: GM_getValue('cloud_sync_token', '990299') 
+            SYNC_URL: GM_getValue('cloud_sync_url', 'https://txt.abcai.online'),
+            SYNC_TOKEN: GM_getValue('cloud_sync_token', '990299')
         },
         STORAGE: {
-            MAX_ITEMS: 800000 
+            MAX_ITEMS: 800000
         }
     };
 
     // --------------- 2. 全局状态 ---------------
     const safeParse = (key, def) => {
-        try { return JSON.parse(GM_getValue(key, def));
+        try {
+            return JSON.parse(GM_getValue(key, def));
         } catch (e) { return JSON.parse(def); }
     };
     let state = {
         currentHash: window.location.hash,
         isCollapsed: GM_getValue('uiCollapsed', false),
         manualPause: GM_getValue('manualPause', false),
-        isScrapingEnabled: GM_getValue('scrapeEnabled', false), 
+        isScrapingEnabled: GM_getValue('scrapeEnabled', false),
 
-        refreshInterval: 20, 
+        refreshInterval: 20,
         countdown: 0,
         timerId: null,
         scrapeObserver: null,
-        
+
         posMain: safeParse('posMain', '{"top":"80px","left":"20px"}'),
         posAddr: safeParse('posAddr', '{"top":"80px","left":"300px"}'),
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
         layout: safeParse('uiLayout', '{"width": 280, "height": 350}'),
         colWidth: parseInt(GM_getValue('addrColWidth', 80)),
-        
+
         db: {
             addrs: safeParse('dbAddrs', '[]'),
             phones: safeParse('dbPhones', '[]')
         },
-        
+
         blacklist: GM_getValue('blacklist', '位置，电话，司机，请您，收到，偏远地区，已派单，代驾，师傅，安全，感谢，马上，联系，好的'),
-        
+
         viewTab: GM_getValue('viewTab', 'address'),
         searchText: '',
         currentVersion: GM_info.script.version,
         timeConfig: safeParse('timeConfig', '{"start":"20:00", "end":"22:00"}'),
-        theme: GM_getValue('theme', 'light') 
+        theme: GM_getValue('theme', 'light')
     };
 
     const migrateOldData = () => {
@@ -100,10 +101,10 @@
         if (oldHistory) {
             if (oldHistory.addrs) oldHistory.addrs.forEach(a => addToDB('address', a));
             if (oldHistory.phones) oldHistory.phones.forEach(p => addToDB('phone', p));
-            GM_setValue('clipHistory', ''); 
+            GM_setValue('clipHistory', '');
         }
     };
-    
+
     const log = (text, type = 'info') => {
         const styles = {
             'info': 'color: #409EFF; font-weight: bold;',
@@ -128,7 +129,7 @@
 
     const checkPage = () => {
         state.currentHash = window.location.hash;
-        reloadDB(); 
+        reloadDB();
 
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
@@ -141,8 +142,8 @@
             let saved = GM_getValue('driverInterval');
             if (!saved) saved = CONFIG.DRIVER.DEFAULT_INTERVAL;
             state.refreshInterval = saved;
-        } 
-        
+        }
+
         if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
             log('进入派单界面 (终极修正版)', 'info');
@@ -151,7 +152,7 @@
 
         updateUI();
         if (isDispatchPage()) {
-             if (!state.manualPause) startRapidRefresh();
+            if (!state.manualPause) startRapidRefresh();
         } else {
             stopRapidRefresh();
             if (isOrderPage() || isDriverPage()) {
@@ -165,11 +166,11 @@
     const isOrderPage = () => state.currentHash.includes(CONFIG.ORDER.HASH);
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
-    
+
     // ==============================================
     //        核心修正：防重复抓取 + 本地存储
     // ==============================================
-    
+
     const setupTableObserver = () => {
         if (state.scrapeObserver) return;
         const targetNode = document.body;
@@ -178,16 +179,16 @@
         state.scrapeObserver = new MutationObserver((mutationsList) => {
             if (!state.isScrapingEnabled) return;
             let hasTableChange = false;
-            for(let mutation of mutationsList) {
-                if (mutation.target.classList && 
-                   (mutation.target.classList.contains('el-table__row') || 
-                   mutation.target.nodeName === 'TBODY')) {
+            for (let mutation of mutationsList) {
+                if (mutation.target.classList &&
+                    (mutation.target.classList.contains('el-table__row') ||
+                        mutation.target.nodeName === 'TBODY')) {
                     hasTableChange = true;
                     break;
                 }
             }
             if (timeout) clearTimeout(timeout);
-            timeout = setTimeout(() => { scanOrderPage(); }, 800); 
+            timeout = setTimeout(() => { scanOrderPage(); }, 800);
         });
         state.scrapeObserver.observe(targetNode, config);
     };
@@ -217,7 +218,7 @@
             if (idxExclude !== null && cells[idxExclude]) {
                 const checkText = cells[idxExclude].innerText.trim();
                 const hit = excludeKeywords.find(kw => checkText.includes(kw));
-                if (hit) return; 
+                if (hit) return;
             }
 
             // 2. 抓取电话
@@ -238,11 +239,11 @@
                 if (addrText && addrText.length > 1) {
                     const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                     if (!blockers.some(b => addrText.includes(b))) {
-                        if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) { 
-                             // 【防重复核心】只有本地库不存在时才添加
-                             if (!state.db.addrs.includes(addrText)) {
-                                 if (addToDB('address', addrText, idxAddr)) newCount++;
-                             }
+                        if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) {
+                            // 【防重复核心】只有本地库不存在时才添加
+                            if (!state.db.addrs.includes(addrText)) {
+                                if (addToDB('address', addrText, idxAddr)) newCount++;
+                            }
                         }
                     }
                 }
@@ -257,24 +258,24 @@
     const addToDB = (type, value, sourceIdx = null) => {
         if (!value) return false;
         const storageKey = type === 'address' ? 'dbAddrs' : 'dbPhones';
-        
+
         let currentList = [];
         try {
             const raw = GM_getValue(storageKey, '[]');
             currentList = JSON.parse(raw);
-        } catch(e) { currentList = []; }
+        } catch (e) { currentList = []; }
 
         const existingIndex = currentList.indexOf(value);
         let isReorder = false;
-        
+
         // 如果存在，先删除（实现置顶）
         if (existingIndex > -1) {
             currentList.splice(existingIndex, 1);
             isReorder = true;
         }
-        
+
         currentList.unshift(value);
-        
+
         if (currentList.length > CONFIG.STORAGE.MAX_ITEMS) {
             currentList.length = CONFIG.STORAGE.MAX_ITEMS;
         }
@@ -284,12 +285,12 @@
         else state.db.phones = currentList;
 
         if (sourceIdx !== null) {
-            log(`💾 [已保存] ${type==='address'?'地址':'电话'}: ${value} (来源: 第${sourceIdx+1}列)`, 'success');
+            log(`💾 [已保存] ${type === 'address' ? '地址' : '电话'}: ${value} (来源: 第${sourceIdx + 1}列)`, 'success');
         } else if (isReorder) {
             // 手动填充时会触发置顶
-            log(`🔄 [已置顶] ${type==='address'?'地址':'电话'}: ${value}`, 'warning');
+            log(`🔄 [已置顶] ${type === 'address' ? '地址' : '电话'}: ${value}`, 'warning');
         } else {
-            log(`🆕 [新录入] ${type==='address'?'地址':'电话'}: ${value}`, 'success');
+            log(`🆕 [新录入] ${type === 'address' ? '地址' : '电话'}: ${value}`, 'success');
         }
         return true;
     };
@@ -297,15 +298,15 @@
     // ==============================================
     //               云端同步 / 数据库
     // ==============================================
-    
+
     // 【关键修复】清洗数据库，去除不合理的长度限制
     const cleanDBWithBlacklist = () => {
         let currentAddrs = safeParse('dbAddrs', '[]');
         if (!currentAddrs || currentAddrs.length === 0) return;
-        
+
         const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
         const originalCount = currentAddrs.length;
-        
+
         const keptAddrs = [];
         const removedAddrs = [];
 
@@ -313,7 +314,7 @@
             // 1. 黑名单检查
             const hit = blockers.find(keyword => addr.includes(keyword));
             if (hit) {
-                removedAddrs.push({addr: addr, reason: `黑名单: ${hit}`});
+                removedAddrs.push({ addr: addr, reason: `黑名单: ${hit}` });
             } else {
                 keptAddrs.push(addr);
             }
@@ -324,7 +325,7 @@
             console.groupCollapsed(`🗑️ [自动清洗] 移除了 ${removedAddrs.length} 条无效地址`);
             removedAddrs.forEach(item => console.log(`❌ 删除: "${item.addr}" (原因: ${item.reason})`));
             console.groupEnd();
-            
+
             GM_setValue('dbAddrs', JSON.stringify(keptAddrs));
             state.db.addrs = keptAddrs;
             updateListsUI();
@@ -334,10 +335,12 @@
     const pullFromCloud = (isAuto = false) => {
         const url = CONFIG.CLOUD.SYNC_URL;
         const token = CONFIG.CLOUD.SYNC_TOKEN;
-        
-        if (!url || !token) { 
-            if (!isAuto) { alert('请先点击 ⚙️ 设置 Worker 域名和 Token');
-            setupCloudConfig(); }
+
+        if (!url || !token) {
+            if (!isAuto) {
+                alert('请先点击 ⚙️ 设置 Worker 域名和 Token');
+                setupCloudConfig();
+            }
             return;
         }
 
@@ -346,21 +349,21 @@
         GM_xmlhttpRequest({
             method: "GET",
             url: targetUrl + '&t=' + new Date().getTime(),
-            onload: function(response) {
+            onload: function (response) {
                 if (response.status === 200) {
                     const text = response.responseText;
                     if (!text) return;
-                    
+
                     let rawAddrsCount = 0;
                     let importedPhones = 0;
-                    
+
                     // 1. 导入数据
                     if (text.includes('[BLACKLIST]') || text.includes('[ADDRS]') || text.includes('[PHONES]')) {
                         const sections = text.split(/\[(BLACKLIST|ADDRS|PHONES)\]/);
-                        for(let i=1; i<sections.length; i+=2) {
+                        for (let i = 1; i < sections.length; i += 2) {
                             const type = sections[i];
-                            const content = sections[i+1];
-                            const lines = content.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
+                            const content = sections[i + 1];
+                            const lines = content.split(/[\r\n]+/).map(s => s.trim()).filter(s => s);
                             if (type === 'BLACKLIST') {
                                 state.blacklist = lines.join(',');
                                 GM_setValue('blacklist', state.blacklist);
@@ -375,7 +378,7 @@
                             }
                         }
                     } else {
-                        const lines = text.split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s);
+                        const lines = text.split(/[\r\n]+/).map(s => s.trim()).filter(s => s);
                         state.db.addrs = lines;
                         GM_setValue('dbAddrs', JSON.stringify(state.db.addrs));
                         rawAddrsCount = lines.length;
@@ -387,7 +390,7 @@
                     const diff = rawAddrsCount - finalAddrsCount;
 
                     updateListsUI();
-                    
+
                     if (!isAuto) {
                         // 3. 弹窗并询问是否反向同步
                         let msg = `☁️ 拉取成功！\n\n- 云端原始地址: ${rawAddrsCount} 条\n- 本地有效地址: ${finalAddrsCount} 条\n- 过滤垃圾数据: ${diff} 条\n\n`;
@@ -406,7 +409,8 @@
                     if (!isAuto) alert('❌ 拉取失败: ' + response.statusText);
                 }
             },
-            onerror: function(e) { if (!isAuto) alert('❌ 网络错误');
+            onerror: function (e) {
+                if (!isAuto) alert('❌ 网络错误');
             }
         });
     };
@@ -419,18 +423,18 @@
         // 如果是自动调用(无参数)，则跳过确认，否则询问
         // 这里简化处理，直接上传
         const targetUrl = `${url.replace(/\/$/, '')}/api/sync?token=${token}`;
-        const blData = state.blacklist.split(/[,，]/).map(s=>s.trim()).filter(s=>s).join('\n');
+        const blData = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s).join('\n');
         const addrData = (state.db.addrs || []).join('\n');
         const phoneData = (state.db.phones || []).join('\n');
         const fileContent = `[BLACKLIST]\n${blData}\n\n[ADDRS]\n${addrData}\n\n[PHONES]\n${phoneData}`;
-        
+
         log('正在上传清洗后的数据...', 'info');
         GM_xmlhttpRequest({
             method: "POST",
             url: targetUrl,
             data: fileContent,
             headers: { "Content-Type": "text/plain" },
-            onload: function(response) {
+            onload: function (response) {
                 if (response.status === 200) {
                     log('✅ 上传成功！云端已更新为最新清洗版', 'success');
                     alert('✅ 上传成功！云端数据已清洗。');
@@ -438,13 +442,13 @@
                     alert('❌ 上传失败: ' + response.responseText);
                 }
             },
-            onerror: function(e) { alert('❌ 网络错误'); }
+            onerror: function (e) { alert('❌ 网络错误'); }
         });
     };
-    
+
     // ... (后续代码：setupCloudConfig, applyDistanceByTime, UI渲染, processClipboard 等保持 v15.6.8 逻辑不变，已包含在上方完整代码中) ...
     // 为节省篇幅，核心修正已在上方完整体现，请直接复制上方完整代码块。
-    
+
     const applyDistanceByTime = () => {
         if (!isDispatchPage()) return;
         const now = new Date();
@@ -469,19 +473,19 @@
             GM_xmlhttpRequest({
                 method: "GET",
                 url: cloudUrl + '&t=' + t,
-                onload: function(response) {
+                onload: function (response) {
                     if (response.status === 200) {
                         const text = response.responseText;
                         if (text && text.includes('[BLACKLIST]')) {
                             const sections = text.split(/\[(BLACKLIST|ADDRS|PHONES)\]/);
-                            for(let i=1; i<sections.length; i+=2) {
-                                if(sections[i] === 'BLACKLIST') {
-                                    const bl = sections[i+1].split(/[\r\n]+/).map(s=>s.trim()).filter(s=>s).join(',');
-                                    if(bl) {
+                            for (let i = 1; i < sections.length; i += 2) {
+                                if (sections[i] === 'BLACKLIST') {
+                                    const bl = sections[i + 1].split(/[\r\n]+/).map(s => s.trim()).filter(s => s).join(',');
+                                    if (bl) {
                                         state.blacklist = bl;
                                         GM_setValue('blacklist', bl);
                                         cleanDBWithBlacklist();
-                                        if(!silent) log('✅ 已从 Worker 覆盖黑名单', 'success');
+                                        if (!silent) log('✅ 已从 Worker 覆盖黑名单', 'success');
                                         return;
                                     }
                                 }
@@ -496,12 +500,12 @@
             fetchGithubFallback(silent, t);
         }
     };
-    
+
     const fetchGithubFallback = (silent, t) => {
         GM_xmlhttpRequest({
             method: "GET",
             url: CONFIG.CLOUD.FALLBACK_BLACKLIST_URL + '&_=' + t,
-            onload: function(response) {
+            onload: function (response) {
                 if (response.status === 200) {
                     const text = response.responseText;
                     if (text && text.length > 0) {
@@ -509,23 +513,23 @@
                         state.blacklist = cleanList;
                         GM_setValue('blacklist', cleanList);
                         cleanDBWithBlacklist();
-                        if(!silent) log('✅ 已从 GitHub 同步黑名单', 'success');
+                        if (!silent) log('✅ 已从 GitHub 同步黑名单', 'success');
                     }
                 }
             }
         });
     };
-    
+
     const setupCloudConfig = () => {
         const currentUrl = CONFIG.CLOUD.SYNC_URL || '';
         const currentToken = CONFIG.CLOUD.SYNC_TOKEN || '';
-        
+
         const url = prompt("请输入 Worker 域名 (不带末尾斜杠)\n例如: https://txt.abcai.online", currentUrl);
         if (url !== null) {
             const cleanUrl = url.trim().replace(/\/$/, '');
             GM_setValue('cloud_sync_url', cleanUrl);
             CONFIG.CLOUD.SYNC_URL = cleanUrl;
-            
+
             const token = prompt("请输入访客 Token", currentToken);
             if (token !== null) {
                 GM_setValue('cloud_sync_token', token.trim());
@@ -566,15 +570,15 @@
         state.timerId = setInterval(() => {
             if (state.manualPause) return;
             state.countdown--;
-            updateStatusText(); 
+            updateStatusText();
             if (state.countdown <= 0) {
                 performAction();
-                state.countdown = state.refreshInterval; 
+                state.countdown = state.refreshInterval;
             }
         }, 1000);
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
-    
+
     // 处理剪贴板文本
     const parseTextToDB = (fullText) => {
         if (!fullText || !fullText.trim()) return false;
@@ -585,18 +589,18 @@
         while ((phoneMatch = phoneRegex.exec(tempTextForPhone)) !== null) {
             const num = phoneMatch[1];
             if (/^1\d{10}$/.test(num)) {
-                if(addToDB('phone', num)) hasUpdate = true;
+                if (addToDB('phone', num)) hasUpdate = true;
             }
         }
         let addrText = fullText.replace(phoneRegex, ' ').trim();
-        const segments = addrText.split(/[\r\n,;，；]+/); 
+        const segments = addrText.split(/[\r\n,;，；]+/);
         const symbolRegex = /[!@#$%^&*()_+\-=\[\]{};':"\\|,.<>\/?~`·！@#￥%……&*（）—+={}|【】；：‘’“”、，。《》？]/;
         segments.reverse().forEach(seg => {
             const cleanSeg = seg.trim();
             if (!cleanSeg || cleanSeg.length < 2) return;
             const firstChar = cleanSeg.charAt(0);
-            if (/[0-9]/.test(firstChar) || /[a-zA-Z]/.test(firstChar) || symbolRegex.test(firstChar)) return; 
-            if(addToDB('address', cleanSeg)) hasUpdate = true;
+            if (/[0-9]/.test(firstChar) || /[a-zA-Z]/.test(firstChar) || symbolRegex.test(firstChar)) return;
+            if (addToDB('address', cleanSeg)) hasUpdate = true;
         });
         if (hasUpdate) cleanDBWithBlacklist();
         return hasUpdate;
@@ -608,7 +612,7 @@
 
         try {
             const text = await navigator.clipboard.readText();
-            log(`📋 剪贴板读取成功: "${text.substring(0, 50)}${text.length>50?'...':''}"`, 'success');
+            log(`📋 剪贴板读取成功: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`, 'success');
 
             const hasUpdate = parseTextToDB(text);
             updateListsUI();
@@ -625,11 +629,11 @@
             fillInput('phone', state.db.phones[0]);
         }
     };
-    
+
     const handleFileImport = (e) => {
         const file = e.target.files[0];
         if (!file) return;
-        if(!confirm(`确认导入文件 "${file.name}" 到本地库吗？\n将会自动清洗（含违禁词）。`)) {
+        if (!confirm(`确认导入文件 "${file.name}" 到本地库吗？\n将会自动清洗（含违禁词）。`)) {
             e.target.value = '';
             return;
         }
@@ -649,39 +653,43 @@
     };
 
     const fillInput = (type, value) => {
-        log(`✍️ 准备填入 ${type==='address'?'地址':'电话'}: "${value}"`, 'info');
+        log(`✍️ 准备填入 ${type === 'address' ? '地址' : '电话'}: "${value}"`, 'info');
         let input = null;
         if (type === 'address') {
-             input = document.getElementById('tipinput');
-             if (!input) {
-                 const inputs = document.querySelectorAll('input');
-                 for (let i = 0; i < inputs.length; i++) {
-                     const el = inputs[i];
-                     if (el.closest('.gj-window')) continue;
-                     if (!el.closest('.el-form-item') && el.type === 'text') { input = el; break;
-                     }
-                 }
-             }
-             if (!input) {
-                 const keywords = ['起点', '出发', '搜索', '关键字'];
-                 const allInputs = document.querySelectorAll('input');
-                 for (let i = 0; i < allInputs.length; i++) {
-                     const el = allInputs[i];
-                     if (el.closest('.gj-window')) continue; 
-                     const ph = (el.placeholder || '').toLowerCase();
-                     if (keywords.some(k => ph.includes(k))) { input = el; break;
-                     }
-                 }
-             }
+            input = document.getElementById('tipinput');
+            if (!input) {
+                const inputs = document.querySelectorAll('input');
+                for (let i = 0; i < inputs.length; i++) {
+                    const el = inputs[i];
+                    if (el.closest('.gj-window')) continue;
+                    if (!el.closest('.el-form-item') && el.type === 'text') {
+                        input = el; break;
+                    }
+                }
+            }
+            if (!input) {
+                const keywords = ['起点', '出发', '搜索', '关键字'];
+                const allInputs = document.querySelectorAll('input');
+                for (let i = 0; i < allInputs.length; i++) {
+                    const el = allInputs[i];
+                    if (el.closest('.gj-window')) continue;
+                    const ph = (el.placeholder || '').toLowerCase();
+                    if (keywords.some(k => ph.includes(k))) {
+                        input = el; break;
+                    }
+                }
+            }
         } else if (type === 'phone') {
-             const inputs = document.querySelectorAll('input');
-             for (let i = 0; i < inputs.length; i++) {
-                 const el = inputs[i];
-                 if (el.closest('.gj-window')) continue; 
-                 const ph = (el.placeholder || '').toLowerCase();
-                 if (ph.includes('用户电话') || ph.includes('电话') || el.type === 'tel') { input = el;
-                 break; }
-             }
+            const inputs = document.querySelectorAll('input');
+            for (let i = 0; i < inputs.length; i++) {
+                const el = inputs[i];
+                if (el.closest('.gj-window')) continue;
+                const ph = (el.placeholder || '').toLowerCase();
+                if (ph.includes('用户电话') || ph.includes('电话') || el.type === 'tel') {
+                    input = el;
+                    break;
+                }
+            }
         }
         if (input) {
             log(`✅ 找到输入框 (类型:${input.type}, Placeholder:${input.placeholder})`, 'success');
@@ -703,12 +711,12 @@
         const MAX_VAL = 20;
         const calibrationMap = { 2: 1, 3: 2, 5: 4, 10: 10, 20: 20 };
         const calcValue = calibrationMap[targetValue] !== undefined ? calibrationMap[targetValue] : targetValue;
-        const sliderDiv = document.querySelector('.el-slider'); 
+        const sliderDiv = document.querySelector('.el-slider');
         if (!sliderDiv) return;
         const runway = sliderDiv.querySelector('.el-slider__runway');
         if (runway) {
             const rect = runway.getBoundingClientRect();
-            let percentage = calcValue / MAX_VAL; 
+            let percentage = calcValue / MAX_VAL;
             if (percentage > 1) percentage = 1; if (percentage < 0) percentage = 0;
             const clientX = rect.left + (rect.width * percentage);
             const clientY = rect.top + (rect.height / 2);
@@ -731,7 +739,7 @@
             if (cleanKey.includes(dbItem)) return true;
             if (/^\d+$/.test(cleanKey) && cleanKey.length >= 4) {
                 const pattern = cleanKey.split('').join('.*');
-                try { const re = new RegExp(pattern); return re.test(dbItem); } catch(e) {}
+                try { const re = new RegExp(pattern); return re.test(dbItem); } catch (e) { }
             }
             return false;
         }
@@ -743,7 +751,7 @@
         const listBody = document.getElementById('list-addr-body');
         if (addrWidget && listBody) {
             addrWidget.style.width = state.layout.width + 'px';
-            listBody.style.height = state.layout.height + 'px'; 
+            listBody.style.height = state.layout.height + 'px';
             listBody.style.setProperty('--gj-col-width', state.colWidth + 'px');
         }
     };
@@ -751,7 +759,7 @@
         state.theme = state.theme === 'light' ? 'dark' : 'light';
         GM_setValue('theme', state.theme);
         updateUI();
-        applyGlobalTheme(); 
+        applyGlobalTheme();
     };
     const applyGlobalTheme = () => {
         const doc = document.documentElement;
@@ -799,8 +807,8 @@
             updateUI();
         });
         widget.querySelector('#gj-theme-toggle').addEventListener('click', (e) => {
-             e.stopPropagation();
-             toggleTheme();
+            e.stopPropagation();
+            toggleTheme();
         });
         return widget;
     };
@@ -849,12 +857,12 @@
         setupResizeDrag(widget);
 
         widget.querySelector('#btn-refresh-addr').addEventListener('click', () => processClipboard(null));
-        
+
         widget.querySelectorAll('.gj-tab').forEach(tab => {
             tab.addEventListener('click', (e) => {
                 state.viewTab = e.target.dataset.tab;
                 GM_setValue('viewTab', state.viewTab);
-                updateUI(); 
+                updateUI();
                 updateListsUI();
             });
         });
@@ -879,7 +887,7 @@
             document.getElementById('list-addr-body').style.setProperty('--gj-col-width', state.colWidth + 'px');
         });
         slider.addEventListener('change', (e) => {
-             GM_setValue('addrColWidth', state.colWidth);
+            GM_setValue('addrColWidth', state.colWidth);
         });
         return widget;
     };
@@ -887,16 +895,16 @@
     const updateUI = () => {
         let mainWidget = document.getElementById('gj-widget-main');
         if (!mainWidget) mainWidget = createMainWidget();
-        
+
         let addrWidget = document.getElementById('gj-widget-addr');
         if (isDispatchPage()) {
             if (!addrWidget) {
                 addrWidget = createAddrWidget();
                 updateListsUI();
-                applyLayout(); 
+                applyLayout();
             } else {
                 addrWidget.querySelectorAll('.gj-tab').forEach(el => {
-                    if(el.dataset.tab === state.viewTab) el.classList.add('active-tab');
+                    if (el.dataset.tab === state.viewTab) el.classList.add('active-tab');
                     else el.classList.remove('active-tab');
                 });
             }
@@ -905,11 +913,11 @@
         }
 
         const cls = state.theme === 'dark' ? 'gj-dark gj-window' : 'gj-light gj-window';
-        if(mainWidget) mainWidget.className = cls;
-        if(addrWidget) addrWidget.className = cls;
+        if (mainWidget) mainWidget.className = cls;
+        if (addrWidget) addrWidget.className = cls;
 
         const themeIcon = document.getElementById('gj-theme-toggle');
-        if(themeIcon) themeIcon.textContent = state.theme === 'light' ? '🌙' : '🌞';
+        if (themeIcon) themeIcon.textContent = state.theme === 'light' ? '🌙' : '🌞';
 
         const titleSpan = document.getElementById('gj-title-text');
         if (titleSpan) {
@@ -933,7 +941,7 @@
             const btnClass = state.manualPause ? 'btn-resume' : 'btn-pause';
             const btnText = state.manualPause ? '▶ 恢复运行' : '⏸ 暂停刷新';
             const statusColor = state.manualPause ? 'var(--gj-text-sec)' : '#409EFF';
-            
+
             const scrapeClass = state.isScrapingEnabled ? 'btn-resume' : 'btn-preset';
             const scrapeText = state.isScrapingEnabled ? '👁️ 自动抓取: 开启' : '🙈 自动抓取: 关闭';
             const scrapeStyle = state.isScrapingEnabled ? 'border:1px solid #e1f3d8;background:#f0f9eb;color:#67c23a;' : 'border:1px solid var(--gj-border);background:var(--gj-bg-sec);color:var(--gj-text-mute);';
@@ -964,7 +972,7 @@
                 </div>
             `;
         } else if (isDispatchPage()) {
-            const buttonsHtml = CONFIG.DISPATCH.PRESETS.map(num => 
+            const buttonsHtml = CONFIG.DISPATCH.PRESETS.map(num =>
                 `<button class="btn-preset" data-val="${num}">${num}</button>`
             ).join('');
             html = `
@@ -979,7 +987,7 @@
                 
                 <div class="gj-bottom-controls">
                     <button id="btn-sync-cloud" class="gj-btn-text">☁️ 手动同步</button>
-                    <span style="font-size:10px;color:var(--gj-text-mute);">缩放: ${(state.uiScale*100).toFixed(0)}%</span>
+                    <span style="font-size:10px;color:var(--gj-text-mute);">缩放: ${(state.uiScale * 100).toFixed(0)}%</span>
                 </div>
             `;
         } else {
@@ -1004,10 +1012,10 @@
 
         if (filteredList.length === 0) {
             addrBody.innerHTML = `<div class="gj-empty">${state.searchText ?
-            '无匹配结果' : '库为空<br>请导入文件或复制文本'}</div>`;
+                '无匹配结果' : '库为空<br>请导入文件或复制文本'}</div>`;
         } else {
             addrBody.innerHTML = filteredList.map(i => renderItem(i)).join('');
-            addrBody.querySelectorAll('.gj-list-item').forEach(el => 
+            addrBody.querySelectorAll('.gj-list-item').forEach(el =>
                 el.addEventListener('click', () => fillInput(el.dataset.type, el.dataset.val))
             );
         }
@@ -1015,26 +1023,26 @@
 
     const bindEvents = () => {
         document.getElementById('btn-cloud-setting')?.addEventListener('click', setupCloudConfig);
-        document.getElementById('btn-cloud-pull')?.addEventListener('click', () => pullFromCloud(false)); 
+        document.getElementById('btn-cloud-pull')?.addEventListener('click', () => pullFromCloud(false));
         document.getElementById('btn-cloud-push')?.addEventListener('click', pushToCloud);
         document.getElementById('gj-file-import')?.addEventListener('change', handleFileImport);
         if (isDispatchPage()) {
-            document.querySelectorAll('.btn-preset').forEach(btn => 
+            document.querySelectorAll('.btn-preset').forEach(btn =>
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
             );
-            
+
             document.getElementById('btn-auto-addr')?.addEventListener('click', () => {
                 processClipboard('address');
             });
             document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
                 processClipboard('phone');
             });
-            
+
             document.getElementById('btn-sync-cloud')?.addEventListener('click', () => {
                 fetchOnlineBlacklist(false);
             });
         }
-        
+
         if (document.getElementById('gj-btn-toggle')) {
             document.getElementById('gj-btn-toggle').addEventListener('click', () => {
                 state.manualPause = !state.manualPause;
@@ -1047,7 +1055,7 @@
                     state.isScrapingEnabled = !state.isScrapingEnabled;
                     GM_setValue('scrapeEnabled', state.isScrapingEnabled);
                     updateUI();
-            
+
                     if (state.isScrapingEnabled) {
                         scanOrderPage();
                     }
@@ -1058,8 +1066,8 @@
                 const val = parseInt(document.getElementById('gj-input-interval').value);
                 if (val > 0) {
                     state.refreshInterval = val;
-                    if(isOrderPage()) GM_setValue('orderInterval', val);
-                    if(isDriverPage()) GM_setValue('driverInterval', val);
+                    if (isOrderPage()) GM_setValue('orderInterval', val);
+                    if (isDriverPage()) GM_setValue('driverInterval', val);
                     performAction(); startCountdown();
                 }
             });
@@ -1069,22 +1077,30 @@
     const updateStatusText = () => {
         const text = document.querySelector('.gj-timer-text');
         if (text) {
-            if (state.manualPause) { text.textContent = "暂停";
-            text.style.color = "var(--gj-text-sec)"; }
-            else { 
+            if (state.manualPause) {
+                text.textContent = "暂停";
+                text.style.color = "var(--gj-text-sec)";
+            }
+            else {
                 text.innerHTML = `${state.countdown}<span style="font-size:16px;margin-left:2px;opacity:0.6">s</span>`;
-                text.style.color = state.countdown <= 3 ? "#F56C6C" : "#409EFF"; 
+                text.style.color = state.countdown <= 3 ? "#F56C6C" : "#409EFF";
             }
         }
     };
     const applyPos = (el, pos) => {
-        if (pos.left) { el.style.left = pos.left;
-        el.style.right = 'auto'; }
-        else { el.style.right = pos.right || '20px';
-        el.style.left = 'auto'; }
-        if (pos.top) { el.style.top = pos.top; el.style.bottom = 'auto';
+        if (pos.left) {
+            el.style.left = pos.left;
+            el.style.right = 'auto';
         }
-        else { el.style.bottom = pos.bottom || 'auto'; el.style.top = 'auto';
+        else {
+            el.style.right = pos.right || '20px';
+            el.style.left = 'auto';
+        }
+        if (pos.top) {
+            el.style.top = pos.top; el.style.bottom = 'auto';
+        }
+        else {
+            el.style.bottom = pos.bottom || 'auto'; el.style.top = 'auto';
         }
     };
 
@@ -1092,7 +1108,7 @@
         const header = el.querySelector('.gj-header');
         let isDragging = false, startX, startY, rect;
         header.addEventListener('mousedown', e => {
-            if(e.target.closest('.gj-toggle') || e.target.closest('#gj-theme-toggle') || e.target.closest('.gj-tab') || e.target.closest('input') || e.target.closest('label') || e.target.closest('.btn-icon-circle')) return;
+            if (e.target.closest('.gj-toggle') || e.target.closest('#gj-theme-toggle') || e.target.closest('.gj-tab') || e.target.closest('input') || e.target.closest('label') || e.target.closest('.btn-icon-circle')) return;
             isDragging = true; startX = e.clientX; startY = e.clientY;
             rect = el.getBoundingClientRect();
             header.style.cursor = 'grabbing';
@@ -1107,10 +1123,10 @@
             el.style.right = 'auto'; el.style.bottom = 'auto';
         });
         document.addEventListener('mouseup', () => {
-            if(isDragging) {
+            if (isDragging) {
                 isDragging = false; header.style.cursor = 'grab';
                 el.style.transition = 'transform 0.1s';
-                const newPos = {left: el.style.left, top: el.style.top};
+                const newPos = { left: el.style.left, top: el.style.top };
                 state[posKey] = newPos;
                 GM_setValue(posKey, JSON.stringify(newPos));
             }
@@ -1119,7 +1135,7 @@
 
     const setupScaleDrag = (el) => {
         const handle = el.querySelector('#gj-scale-handle');
-        if(!handle) return;
+        if (!handle) return;
         let isResizing = false, startY, startScale;
         handle.addEventListener('mousedown', e => {
             e.stopPropagation(); e.preventDefault();
@@ -1130,15 +1146,15 @@
             if (!isResizing) return;
             const dy = e.clientY - startY;
             let newScale = startScale + (dy * 0.005);
-            if(newScale < 0.5) newScale = 0.5;
-            if(newScale > 3.0) newScale = 3.0;
+            if (newScale < 0.5) newScale = 0.5;
+            if (newScale > 3.0) newScale = 3.0;
             state.uiScale = newScale;
             const mainW = document.getElementById('gj-widget-main');
             const addrW = document.getElementById('gj-widget-addr');
-            if(mainW) mainW.style.transform = `scale(${newScale})`;
-            if(addrW) addrW.style.transform = `scale(${newScale})`;
+            if (mainW) mainW.style.transform = `scale(${newScale})`;
+            if (addrW) addrW.style.transform = `scale(${newScale})`;
             const label = document.querySelector('.gj-bottom-controls span');
-            if(label) label.textContent = `缩放: ${(newScale*100).toFixed(0)}%`;
+            if (label) label.textContent = `缩放: ${(newScale * 100).toFixed(0)}%`;
         });
         document.addEventListener('mouseup', () => {
             if (isResizing) {
@@ -1150,11 +1166,11 @@
 
     const setupResizeDrag = (el) => {
         const handle = el.querySelector('#gj-size-handle');
-        if(!handle) return;
+        if (!handle) return;
         let isResizing = false, startX, startY, startW, startH;
         handle.addEventListener('mousedown', e => {
             e.stopPropagation(); e.preventDefault();
-            isResizing = true; 
+            isResizing = true;
             startX = e.clientX; startY = e.clientY;
             startW = state.layout.width; startH = state.layout.height;
             document.body.style.cursor = 'nwse-resize';
@@ -1163,13 +1179,13 @@
             if (!isResizing) return;
             const dx = (e.clientX - startX) / state.uiScale;
             const dy = (e.clientY - startY) / state.uiScale;
-            
+
             let newW = startW + dx;
             let newH = startH + dy;
-            
-            if(newW < 200) newW = 200;
-            if(newH < 150) newH = 150;
-            
+
+            if (newW < 200) newW = 200;
+            if (newH < 150) newH = 150;
+
             state.layout.width = newW;
             state.layout.height = newH;
             applyLayout();
@@ -1383,12 +1399,12 @@
         `);
     };
     const init = () => {
-        migrateOldData(); 
+        migrateOldData();
         addStyles();
         checkPage();
         window.addEventListener('hashchange', checkPage);
-        if(isDispatchPage()) setTimeout(applyDistanceByTime, 2000);
-        applyGlobalTheme(); 
+        if (isDispatchPage()) setTimeout(applyDistanceByTime, 2000);
+        applyGlobalTheme();
 
         document.addEventListener('visibilitychange', () => {
             if (!document.hidden) {
@@ -1397,11 +1413,11 @@
                 if (isDispatchPage()) processClipboard();
             }
         });
-        window.addEventListener('focus', () => { 
+        window.addEventListener('focus', () => {
             reloadDB();
-            if (isDispatchPage()) processClipboard(); 
+            if (isDispatchPage()) processClipboard();
         });
-        setTimeout(checkPage, 1000); 
+        setTimeout(checkPage, 1000);
     };
 
     if (document.readyState === 'complete' || document.readyState === 'interactive') init();
