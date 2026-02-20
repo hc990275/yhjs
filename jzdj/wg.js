@@ -56,6 +56,13 @@
             SYNC_URL: GM_getValue('cloud_sync_url', 'https://txt.abcai.online'),
             SYNC_TOKEN: GM_getValue('cloud_sync_token', '990299')
         },
+        UI: {
+            // [新增] 隐藏列配置 (仅视觉隐藏，不影响抓取)
+            HIDDEN_COLS: {
+                LEFT: [4],  // [左固定列] 需要隐藏的列号 (例如: 2=来源, 4=?)
+                MAIN: [6, 8, 9]   // [主表格] 需要隐藏的列号
+            }
+        },
         STORAGE: {
             MAX_ITEMS: 800000
         }
@@ -166,6 +173,29 @@
             } else {
                 stopCountdown();
             }
+        }
+
+        // [新增] 应用隐藏列样式
+        applyHiddenColumnStyles();
+    };
+
+    const applyHiddenColumnStyles = () => {
+        const leftCols = CONFIG.UI.HIDDEN_COLS.LEFT || [];
+        const mainCols = CONFIG.UI.HIDDEN_COLS.MAIN || [];
+
+        let css = '';
+        leftCols.forEach(idx => {
+            // 左固定列 (th/td)
+            css += `.el-table__fixed .el-table__fixed-header-wrapper th:nth-child(${idx}), .el-table__fixed .el-table__fixed-body-wrapper td:nth-child(${idx}) { display: none !important; }\n`;
+        });
+        mainCols.forEach(idx => {
+            // 主表格 (th/td)
+            css += `.el-table__header-wrapper th:nth-child(${idx}), .el-table__body-wrapper td:nth-child(${idx}) { display: none !important; }\n`;
+        });
+
+        if (css) {
+            GM_addStyle(css);
+            log(`👀 已隐藏列: 左[${leftCols}] / 主[${mainCols}]`, 'info');
         }
     };
 
