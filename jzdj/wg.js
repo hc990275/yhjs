@@ -1067,6 +1067,26 @@
         let mainWidget = document.getElementById('gj-widget-main');
         if (!mainWidget) mainWidget = createMainWidget();
 
+        // [新增] 动态更新头部启停按钮状态
+        const headerPauseBtn = mainWidget.querySelector('#gj-header-pause');
+        if (headerPauseBtn && (isOrderPage() || isDriverPage())) {
+            const isPausedPage = isPaused();
+            const statusText = isPausedPage ? '(已停止)' : '(运行中)';
+            const pauseIcon = isPausedPage ? '▶' : '⏸';
+            const pauseTitle = isPausedPage ? '当前已停止，点击开始刷新' : '当前运行中，点击暂停刷新';
+            const iconColor = isPausedPage ? '#909399' : '#67C23A';
+            const textColor = isPausedPage ? '#F56C6C' : '#67C23A';
+
+            headerPauseBtn.title = pauseTitle;
+            headerPauseBtn.innerHTML = `
+                <span style="color:${iconColor};font-size:16px;font-weight:bold;">${pauseIcon}</span>
+                <span style="font-weight:bold;font-size:14px;">启停</span>
+                <span style="font-size:12px;color:${textColor};transform:scale(0.9);">${statusText}</span>
+            `;
+        } else if (headerPauseBtn && !isOrderPage() && !isDriverPage()) {
+            headerPauseBtn.style.display = 'none'; // 非相关页面隐藏
+        }
+
         let addrWidget = document.getElementById('gj-widget-addr');
         if (isDispatchPage()) {
             if (!addrWidget) {
