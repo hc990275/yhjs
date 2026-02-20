@@ -920,12 +920,12 @@
         let pauseHtml = '';
         if (isOrderPage() || isDriverPage()) {
             const isPausedPage = isPaused();
-            // isPausedPage=true => 暂停状态 => 显示"停"
-            // isPausedPage=false => 正在运行 => 显示"启"
-            const pauseText = isPausedPage ? '停' : '启';
-            const pauseIcon = isPausedPage ? '⏸' : '▶';
-            const pauseTitle = isPausedPage ? '当前已暂停，点击恢复' : '正在刷新中，点击暂停';
-            const pauseColor = isPausedPage ? '#F56C6C' : '#67C23A';
+            // isPausedPage=true (暂停中) => 按钮应显示"启"(恢复运行) => 绿色
+            // isPausedPage=false (运行中) => 按钮应显示"停"(暂停运行) => 红色
+            const pauseText = isPausedPage ? '启' : '停';
+            const pauseIcon = isPausedPage ? '▶' : '⏸';
+            const pauseTitle = isPausedPage ? '当前已暂停，点击恢复刷新' : '正在刷新中，点击暂停刷新';
+            const pauseColor = isPausedPage ? '#67C23A' : '#F56C6C';
             pauseHtml = `<span id="gj-header-pause" title="${pauseTitle}" style="cursor:pointer;color:${pauseColor};font-weight:bold;font-size:14px;">${pauseIcon} ${pauseText}</span>`;
         }
 
