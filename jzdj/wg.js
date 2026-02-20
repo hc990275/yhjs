@@ -920,13 +920,21 @@
         let pauseHtml = '';
         if (isOrderPage() || isDriverPage()) {
             const isPausedPage = isPaused();
-            // isPausedPage=true (暂停中) => 按钮应显示"启"(恢复运行) => 绿色
-            // isPausedPage=false (运行中) => 按钮应显示"停"(暂停运行) => 红色
-            const pauseText = isPausedPage ? '启' : '停';
+            // isPausedPage=true (暂停中) => 按钮: [▶] 启停 (已停止)
+            // isPausedPage=false (运行中) => 按钮: [⏸] 启停 (运行中)
+            const statusText = isPausedPage ? '(已停止)' : '(运行中)';
             const pauseIcon = isPausedPage ? '▶' : '⏸';
-            const pauseTitle = isPausedPage ? '当前已暂停，点击恢复刷新' : '正在刷新中，点击暂停刷新';
-            const pauseColor = isPausedPage ? '#67C23A' : '#F56C6C';
-            pauseHtml = `<span id="gj-header-pause" title="${pauseTitle}" style="cursor:pointer;color:${pauseColor};font-weight:bold;font-size:14px;">${pauseIcon} ${pauseText}</span>`;
+            const pauseTitle = isPausedPage ? '当前已停止，点击开始刷新' : '当前运行中，点击暂停刷新';
+            const iconColor = isPausedPage ? '#909399' : '#67C23A'; // 停止灰/运行绿
+            const textColor = isPausedPage ? '#F56C6C' : '#67C23A'; // 停止红/运行绿
+
+            pauseHtml = `
+                <div id="gj-header-pause" title="${pauseTitle}" style="cursor:pointer; display:flex; align-items:center; gap:4px;">
+                    <span style="color:${iconColor};font-size:16px;font-weight:bold;">${pauseIcon}</span>
+                    <span style="font-weight:bold;font-size:14px;">启停</span>
+                    <span style="font-size:12px;color:${textColor};transform:scale(0.9);">${statusText}</span>
+                </div>
+            `;
         }
 
         widget.innerHTML = `
