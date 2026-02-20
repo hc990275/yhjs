@@ -213,21 +213,52 @@
         const idxAddr = CONFIG.SCRAPE.ADDR_COL_INDEX;
         const excludeKeywords = CONFIG.SCRAPE.EXCLUDE_NAMES || [];
 
-        const rows = document.querySelectorAll('.el-table__body-wrapper .el-table__row');
+        // [Fix] 同时获取主表格与固定列表格的行，用于合并数据
+        const mainRows = Array.from(document.querySelectorAll('.el-table__body-wrapper .el-table__row'));
+        const fixedRows = Array.from(document.querySelectorAll('.el-table__fixed .el-table__fixed-body-wrapper .el-table__row'));
+        const fixedRightRows = Array.from(document.querySelectorAll('.el-table__fixed-right .el-table__fixed-body-wrapper .el-table__row'));
+
         let newCount = 0;
-        rows.forEach(row => {
-            const cells = row.querySelectorAll('td');
-            if (cells.length <= Math.max(idxExclude, idxPhone, idxAddr)) return;
+
+        // 辅助函数：获取某行某列的文本（优先取主表，空则取固定表）
+        const getCellText = (rowIndex, colIndex) => {
+            let text = '';
+            // 1. 尝试主表
+            if (mainRows[rowIndex] && mainRows[rowIndex].cells[colIndex]) {
+                text = mainRows[rowIndex].cells[colIndex].innerText.trim();
+            }
+            // 2. 如果为空，尝试左侧固定表
+            if (!text && fixedRows[rowIndex] && fixedRows[rowIndex].cells[colIndex]) {
+                text = fixedRows[rowIndex].cells[colIndex].innerText.trim();
+            }
+            // 3. 如果仍为空，尝试右侧固定表
+            // 注意：右侧固定表的 colIndex 可能不对应，ElementUI通常是克隆对应列
+            // 但也可能是按 visbile columns 排列。这里假设索引一致或能通过 querySelector 找到。
+            // 简单起见，如果 colIndex 很大，尝试右侧表对应的“倒数”索引？
+            // ElementUI 右侧固定表通常包含完整的 tr，但只显示部分 td。
+            // 直接尝试索引读取。
+            if (!text && fixedRightRows[rowIndex] && fixedRightRows[rowIndex].cells[colIndex]) {
+                text = fixedRightRows[rowIndex].cells[colIndex].innerText.trim();
+            }
+            return text;
+        };
+
+        const getCellNumber = (rowIndex, colIndex) => {
+            const txt = getCellText(rowIndex, colIndex);
+            return txt.replace(/\D/g, '');
+        };
+
+        mainRows.forEach((row, rowIndex) => {
+            // 使用 getCellText 获取关键数据
 
             // 0. [新增] 消单自动剔除
-            const idxCancel = state.cancelColIndex; // 从配置读取
-            if (idxCancel !== -1 && cells[idxCancel]) {
-                const statusText = cells[idxCancel].innerText.trim();
+            const idxCancel = state.cancelColIndex;
+            if (idxCancel !== -1) {
+                const statusText = getCellText(rowIndex, idxCancel);
                 const cancelKeywords = CONFIG.SCRAPE.CANCEL_KEYWORDS || ['乘客取消', '后台销单'];
                 if (cancelKeywords.some(kw => statusText.includes(kw))) {
-                    // 找到消单，获取电话并删除
-                    if (idxPhone !== null && cells[idxPhone]) {
-                        const rawPhone = cells[idxPhone].innerText.trim().replace(/\D/g, '');
+                    if (idxPhone !== null) {
+                        const rawPhone = getCellNumber(rowIndex, idxPhone);
                         if (/^1\d{10}$/.test(rawPhone)) {
                             removeFromDB('phone', rawPhone);
                         }
@@ -237,18 +268,16 @@
             }
 
             // 1. 排除逻辑
-            if (idxExclude !== null && cells[idxExclude]) {
-                const checkText = cells[idxExclude].innerText.trim();
+            if (idxExclude !== null) {
+                const checkText = getCellText(rowIndex, idxExclude);
                 const hit = excludeKeywords.find(kw => checkText.includes(kw));
                 if (hit) return;
             }
 
             // 2. 抓取电话
-            if (idxPhone !== null && cells[idxPhone]) {
-                const rawText = cells[idxPhone].innerText.trim();
-                const cleanNum = rawText.replace(/\D/g, '');
+            if (idxPhone !== null) {
+                const cleanNum = getCellNumber(rowIndex, idxPhone);
                 if (/^1\d{10}$/.test(cleanNum)) {
-                    // 【防重复核心】只有本地库不存在时才添加
                     if (!state.db.phones.includes(cleanNum)) {
                         if (addToDB('phone', cleanNum, idxPhone)) newCount++;
                     }
@@ -256,13 +285,12 @@
             }
 
             // 3. 抓取地址
-            if (idxAddr !== null && cells[idxAddr]) {
-                const addrText = cells[idxAddr].innerText.trim();
+            if (idxAddr !== null) {
+                const addrText = getCellText(rowIndex, idxAddr);
                 if (addrText && addrText.length > 1) {
                     const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                     if (!blockers.some(b => addrText.includes(b))) {
                         if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) {
-                            // 【防重复核心】只有本地库不存在时才添加
                             if (!state.db.addrs.includes(addrText)) {
                                 if (addToDB('address', addrText, idxAddr)) newCount++;
                             }
@@ -273,21 +301,48 @@
         });
         if (newCount > 0) updateListsUI();
 
-        // 4. [新增] 调试模式：显示列信息
+        // 4. [修改] 调试模式：显示合并后的列信息
         if (state.debugMode) {
-            debugRowInfo(rows[0]);
+            debugRowInfo(mainRows, fixedRows, fixedRightRows);
         }
     };
 
-    // [新增] 调试列信息
-    const debugRowInfo = (row) => {
-        if (!row) return;
-        const cells = row.querySelectorAll('td');
-        let debugText = `=== 🛠️ 调试模式: 当前第一行数据 (共${cells.length}列) ===\n`;
-        cells.forEach((cell, index) => {
-            let content = cell.innerText.replace(/[\r\n]+/g, ' ').substring(0, 20);
-            debugText += `[列 ${index}]: ${content}\n`;
-        });
+    // [修改] 调试列信息 (接受所有表引用)
+    const debugRowInfo = (mainRows, fixedRows, fixedRightRows) => {
+        if (!mainRows || mainRows.length === 0) return;
+        const rowIndex = 0; // 只看第一行
+
+        // 找出最大的列数
+        let maxCols = 0;
+        if (mainRows[0]) maxCols = Math.max(maxCols, mainRows[0].cells.length);
+        if (fixedRows[0]) maxCols = Math.max(maxCols, fixedRows[0].cells.length);
+
+        let debugText = `=== 🛠️ 调试模式: 综合行数据 (Index 0) ===\n`;
+
+        for (let i = 0; i < maxCols; i++) {
+            let parts = [];
+            // 主表
+            if (mainRows[0] && mainRows[0].cells[i]) {
+                const txt = mainRows[0].cells[i].innerText.replace(/[\r\n]+/g, ' ').trim();
+                if (txt) parts.push(`[主]${txt}`);
+            }
+            // 左固定
+            if (fixedRows[0] && fixedRows[0].cells[i]) {
+                const txt = fixedRows[0].cells[i].innerText.replace(/[\r\n]+/g, ' ').trim();
+                if (txt) parts.push(`[左]${txt}`);
+            }
+            // 右固定
+            if (fixedRightRows[0] && fixedRightRows[0].cells[i]) {
+                const txt = fixedRightRows[0].cells[i].innerText.replace(/[\r\n]+/g, ' ').trim();
+                if (txt) parts.push(`[右]${txt}`);
+            }
+
+            if (parts.length > 0) {
+                debugText += `[列 ${i}]: ${parts.join(' | ').substring(0, 30)}\n`;
+            } else {
+                // debugText += `[列 ${i}]: (空)\n`; // 可选：不显示空列以减少干扰
+            }
+        }
 
         const debugPanel = document.getElementById('gj-debug-console');
         if (debugPanel) {
