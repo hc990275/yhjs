@@ -995,21 +995,23 @@
         updateStatusText();
     };
 
-    const debugPanelHtml = state.debugMode ?
-        `<div id="gj-debug-console" style="margin-top:10px;padding:8px;background:#333;color:#fff;font-size:11px;font-family:monospace;white-space:pre-wrap;max-height:150px;overflow-y:auto;border-radius:4px;">正在等待抓取数据...</div>` : '';
+    const renderMainContent = (container) => {
+        let html = '';
+        const debugPanelHtml = state.debugMode ?
+            `<div id="gj-debug-console" style="margin-top:10px;padding:8px;background:#333;color:#fff;font-size:11px;font-family:monospace;white-space:pre-wrap;max-height:150px;overflow-y:auto;border-radius:4px;">正在等待抓取数据...</div>` : '';
 
-    const cancelColValue = state.cancelColIndex === -1 ? '' : state.cancelColIndex;
+        const cancelColValue = state.cancelColIndex === -1 ? '' : state.cancelColIndex;
 
-    if (isOrderPage() || isDriverPage()) {
-        const btnClass = state.manualPause ? 'btn-resume' : 'btn-pause';
-        const btnText = state.manualPause ? '▶ 恢复运行' : '⏸ 暂停刷新';
-        const statusColor = state.manualPause ? 'var(--gj-text-sec)' : '#409EFF';
+        if (isOrderPage() || isDriverPage()) {
+            const btnClass = state.manualPause ? 'btn-resume' : 'btn-pause';
+            const btnText = state.manualPause ? '▶ 恢复运行' : '⏸ 暂停刷新';
+            const statusColor = state.manualPause ? 'var(--gj-text-sec)' : '#409EFF';
 
-        const scrapeClass = state.isScrapingEnabled ? 'btn-resume' : 'btn-preset';
-        const scrapeText = state.isScrapingEnabled ? '👁️ 自动抓取: 开启' : '🙈 自动抓取: 关闭';
-        const scrapeStyle = state.isScrapingEnabled ? 'border:1px solid #e1f3d8;background:#f0f9eb;color:#67c23a;' : 'border:1px solid var(--gj-border);background:var(--gj-bg-sec);color:var(--gj-text-mute);';
+            const scrapeClass = state.isScrapingEnabled ? 'btn-resume' : 'btn-preset';
+            const scrapeText = state.isScrapingEnabled ? '👁️ 自动抓取: 开启' : '🙈 自动抓取: 关闭';
+            const scrapeStyle = state.isScrapingEnabled ? 'border:1px solid #e1f3d8;background:#f0f9eb;color:#67c23a;' : 'border:1px solid var(--gj-border);background:var(--gj-bg-sec);color:var(--gj-text-mute);';
 
-        html = `
+            html = `
                 <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
                     <span class="gj-timer-text" style="color:${statusColor}">${state.manualPause ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
                 </div>
@@ -1048,11 +1050,11 @@
                     </label>
                 </div>
             `;
-    } else if (isDispatchPage()) {
-        const buttonsHtml = CONFIG.DISPATCH.PRESETS.map(num =>
-            `<button class="btn-preset" data-val="${num}">${num}</button>`
-        ).join('');
-        html = `
+        } else if (isDispatchPage()) {
+            const buttonsHtml = CONFIG.DISPATCH.PRESETS.map(num =>
+                `<button class="btn-preset" data-val="${num}">${num}</button>`
+            ).join('');
+            html = `
                 <div class="gj-group">
                     <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
                     <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
@@ -1067,242 +1069,242 @@
                     <span style="font-size:10px;color:var(--gj-text-mute);">缩放: ${(state.uiScale * 100).toFixed(0)}%</span>
                 </div>
             `;
-    } else {
-        html = `<div style="padding:20px;color:var(--gj-text-mute);text-align:center;font-size:13px;">💤 非工作区域</div>`;
-    }
-    container.innerHTML = html;
-    bindEvents();
-};
+        } else {
+            html = `<div style="padding:20px;color:var(--gj-text-mute);text-align:center;font-size:13px;">💤 非工作区域</div>`;
+        }
+        container.innerHTML = html;
+        bindEvents();
+    };
 
-const updateListsUI = () => {
-    const addrBody = document.getElementById('list-addr-body');
-    if (!addrBody) return;
-    const isPhone = state.viewTab === 'phone';
-    const sourceList = isPhone ? state.db.phones : state.db.addrs;
-    const filteredList = (sourceList || []).filter(item => isMatch(item, state.searchText, isPhone ? 'phone' : 'address'));
-    const renderItem = (item) => {
-        return `<div class="gj-list-item" title="${item}" data-val="${item}" data-type="${isPhone ? 'phone' : 'address'}">
+    const updateListsUI = () => {
+        const addrBody = document.getElementById('list-addr-body');
+        if (!addrBody) return;
+        const isPhone = state.viewTab === 'phone';
+        const sourceList = isPhone ? state.db.phones : state.db.addrs;
+        const filteredList = (sourceList || []).filter(item => isMatch(item, state.searchText, isPhone ? 'phone' : 'address'));
+        const renderItem = (item) => {
+            return `<div class="gj-list-item" title="${item}" data-val="${item}" data-type="${isPhone ? 'phone' : 'address'}">
                 ${isPhone ? '📞' : ''}
                 <span class="gj-item-text">${item}</span>
             </div>`;
+        };
+
+        if (filteredList.length === 0) {
+            addrBody.innerHTML = `<div class="gj-empty">${state.searchText ?
+                '无匹配结果' : '库为空<br>请导入文件或复制文本'}</div>`;
+        } else {
+            addrBody.innerHTML = filteredList.map(i => renderItem(i)).join('');
+            addrBody.querySelectorAll('.gj-list-item').forEach(el =>
+                el.addEventListener('click', () => fillInput(el.dataset.type, el.dataset.val))
+            );
+        }
     };
 
-    if (filteredList.length === 0) {
-        addrBody.innerHTML = `<div class="gj-empty">${state.searchText ?
-            '无匹配结果' : '库为空<br>请导入文件或复制文本'}</div>`;
-    } else {
-        addrBody.innerHTML = filteredList.map(i => renderItem(i)).join('');
-        addrBody.querySelectorAll('.gj-list-item').forEach(el =>
-            el.addEventListener('click', () => fillInput(el.dataset.type, el.dataset.val))
-        );
-    }
-};
+    const bindEvents = () => {
+        document.getElementById('btn-cloud-setting')?.addEventListener('click', setupCloudConfig);
+        document.getElementById('btn-cloud-pull')?.addEventListener('click', () => pullFromCloud(false));
+        document.getElementById('btn-cloud-push')?.addEventListener('click', pushToCloud);
+        document.getElementById('gj-file-import')?.addEventListener('change', handleFileImport);
+        if (isDispatchPage()) {
+            document.querySelectorAll('.btn-preset').forEach(btn =>
+                btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
+            );
 
-const bindEvents = () => {
-    document.getElementById('btn-cloud-setting')?.addEventListener('click', setupCloudConfig);
-    document.getElementById('btn-cloud-pull')?.addEventListener('click', () => pullFromCloud(false));
-    document.getElementById('btn-cloud-push')?.addEventListener('click', pushToCloud);
-    document.getElementById('gj-file-import')?.addEventListener('change', handleFileImport);
-    if (isDispatchPage()) {
-        document.querySelectorAll('.btn-preset').forEach(btn =>
-            btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
-        );
+            document.getElementById('btn-auto-addr')?.addEventListener('click', () => {
+                processClipboard('address');
+            });
+            document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
+                processClipboard('phone');
+            });
 
-        document.getElementById('btn-auto-addr')?.addEventListener('click', () => {
-            processClipboard('address');
-        });
-        document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
-            processClipboard('phone');
-        });
+            document.getElementById('btn-sync-cloud')?.addEventListener('click', () => {
+                fetchOnlineBlacklist(false);
+            });
+        }
 
-        document.getElementById('btn-sync-cloud')?.addEventListener('click', () => {
-            fetchOnlineBlacklist(false);
-        });
-    }
-
-    if (document.getElementById('gj-btn-toggle')) {
-        document.getElementById('gj-btn-toggle').addEventListener('click', () => {
-            state.manualPause = !state.manualPause;
-            GM_setValue('manualPause', state.manualPause);
-            updateUI();
-        });
-        const scrapeBtn = document.getElementById('gj-btn-scrape');
-        if (scrapeBtn) {
-            scrapeBtn.addEventListener('click', () => {
-                state.isScrapingEnabled = !state.isScrapingEnabled;
-                GM_setValue('scrapeEnabled', state.isScrapingEnabled);
+        if (document.getElementById('gj-btn-toggle')) {
+            document.getElementById('gj-btn-toggle').addEventListener('click', () => {
+                state.manualPause = !state.manualPause;
+                GM_setValue('manualPause', state.manualPause);
                 updateUI();
-
-                if (state.isScrapingEnabled) {
-                    scanOrderPage();
-                }
             });
-        }
+            const scrapeBtn = document.getElementById('gj-btn-scrape');
+            if (scrapeBtn) {
+                scrapeBtn.addEventListener('click', () => {
+                    state.isScrapingEnabled = !state.isScrapingEnabled;
+                    GM_setValue('scrapeEnabled', state.isScrapingEnabled);
+                    updateUI();
 
-        document.getElementById('gj-btn-set').addEventListener('click', () => {
-            const val = parseInt(document.getElementById('gj-input-interval').value);
-            if (val > 0) {
-                state.refreshInterval = val;
-                if (isOrderPage()) GM_setValue('orderInterval', val);
-                if (isDriverPage()) GM_setValue('driverInterval', val);
-                performAction(); startCountdown();
+                    if (state.isScrapingEnabled) {
+                        scanOrderPage();
+                    }
+                });
             }
-        });
 
-        // [新增] 调试模式切换
-        const chkDebug = document.getElementById('gj-chk-debug');
-        if (chkDebug) {
-            chkDebug.addEventListener('change', (e) => {
-                state.debugMode = e.target.checked;
-                updateUI(); // 触发重绘以显示/隐藏面板
-                if (state.debugMode) scanOrderPage();
-            });
-        }
-
-        // [新增] 消单列号配置
-        const inputCancelCol = document.getElementById('gj-input-cancel-col');
-        if (inputCancelCol) {
-            inputCancelCol.addEventListener('change', (e) => {
-                const val = parseInt(e.target.value);
-                if (!isNaN(val)) {
-                    state.cancelColIndex = val;
-                    GM_setValue('cancelColIndex', val);
-                    log(`🚫 消单列已设置为: ${val}`, 'info');
-                } else {
-                    state.cancelColIndex = -1;
-                    GM_setValue('cancelColIndex', -1);
+            document.getElementById('gj-btn-set').addEventListener('click', () => {
+                const val = parseInt(document.getElementById('gj-input-interval').value);
+                if (val > 0) {
+                    state.refreshInterval = val;
+                    if (isOrderPage()) GM_setValue('orderInterval', val);
+                    if (isDriverPage()) GM_setValue('driverInterval', val);
+                    performAction(); startCountdown();
                 }
             });
-        }
-    }
-};
 
-const updateStatusText = () => {
-    const text = document.querySelector('.gj-timer-text');
-    if (text) {
-        if (state.manualPause) {
-            text.textContent = "暂停";
-            text.style.color = "var(--gj-text-sec)";
+            // [新增] 调试模式切换
+            const chkDebug = document.getElementById('gj-chk-debug');
+            if (chkDebug) {
+                chkDebug.addEventListener('change', (e) => {
+                    state.debugMode = e.target.checked;
+                    updateUI(); // 触发重绘以显示/隐藏面板
+                    if (state.debugMode) scanOrderPage();
+                });
+            }
+
+            // [新增] 消单列号配置
+            const inputCancelCol = document.getElementById('gj-input-cancel-col');
+            if (inputCancelCol) {
+                inputCancelCol.addEventListener('change', (e) => {
+                    const val = parseInt(e.target.value);
+                    if (!isNaN(val)) {
+                        state.cancelColIndex = val;
+                        GM_setValue('cancelColIndex', val);
+                        log(`🚫 消单列已设置为: ${val}`, 'info');
+                    } else {
+                        state.cancelColIndex = -1;
+                        GM_setValue('cancelColIndex', -1);
+                    }
+                });
+            }
+        }
+    };
+
+    const updateStatusText = () => {
+        const text = document.querySelector('.gj-timer-text');
+        if (text) {
+            if (state.manualPause) {
+                text.textContent = "暂停";
+                text.style.color = "var(--gj-text-sec)";
+            }
+            else {
+                text.innerHTML = `${state.countdown}<span style="font-size:16px;margin-left:2px;opacity:0.6">s</span>`;
+                text.style.color = state.countdown <= 3 ? "#F56C6C" : "#409EFF";
+            }
+        }
+    };
+    const applyPos = (el, pos) => {
+        if (pos.left) {
+            el.style.left = pos.left;
+            el.style.right = 'auto';
         }
         else {
-            text.innerHTML = `${state.countdown}<span style="font-size:16px;margin-left:2px;opacity:0.6">s</span>`;
-            text.style.color = state.countdown <= 3 ? "#F56C6C" : "#409EFF";
+            el.style.right = pos.right || '20px';
+            el.style.left = 'auto';
         }
-    }
-};
-const applyPos = (el, pos) => {
-    if (pos.left) {
-        el.style.left = pos.left;
-        el.style.right = 'auto';
-    }
-    else {
-        el.style.right = pos.right || '20px';
-        el.style.left = 'auto';
-    }
-    if (pos.top) {
-        el.style.top = pos.top; el.style.bottom = 'auto';
-    }
-    else {
-        el.style.bottom = pos.bottom || 'auto'; el.style.top = 'auto';
-    }
-};
-
-const setupDrag = (el, posKey) => {
-    const header = el.querySelector('.gj-header');
-    let isDragging = false, startX, startY, rect;
-    header.addEventListener('mousedown', e => {
-        if (e.target.closest('.gj-toggle') || e.target.closest('#gj-theme-toggle') || e.target.closest('.gj-tab') || e.target.closest('input') || e.target.closest('label') || e.target.closest('.btn-icon-circle')) return;
-        isDragging = true; startX = e.clientX; startY = e.clientY;
-        rect = el.getBoundingClientRect();
-        header.style.cursor = 'grabbing';
-        el.style.transition = 'none';
-    });
-    document.addEventListener('mousemove', e => {
-        if (!isDragging) return;
-        const dx = (e.clientX - startX) / state.uiScale;
-        const dy = (e.clientY - startY) / state.uiScale;
-        el.style.left = (rect.left + dx) + 'px';
-        el.style.top = (rect.top + dy) + 'px';
-        el.style.right = 'auto'; el.style.bottom = 'auto';
-    });
-    document.addEventListener('mouseup', () => {
-        if (isDragging) {
-            isDragging = false; header.style.cursor = 'grab';
-            el.style.transition = 'transform 0.1s';
-            const newPos = { left: el.style.left, top: el.style.top };
-            state[posKey] = newPos;
-            GM_setValue(posKey, JSON.stringify(newPos));
+        if (pos.top) {
+            el.style.top = pos.top; el.style.bottom = 'auto';
         }
-    });
-};
-
-const setupScaleDrag = (el) => {
-    const handle = el.querySelector('#gj-scale-handle');
-    if (!handle) return;
-    let isResizing = false, startY, startScale;
-    handle.addEventListener('mousedown', e => {
-        e.stopPropagation(); e.preventDefault();
-        isResizing = true; startY = e.clientY; startScale = state.uiScale;
-        document.body.style.cursor = 'nwse-resize';
-    });
-    document.addEventListener('mousemove', e => {
-        if (!isResizing) return;
-        const dy = e.clientY - startY;
-        let newScale = startScale + (dy * 0.005);
-        if (newScale < 0.5) newScale = 0.5;
-        if (newScale > 3.0) newScale = 3.0;
-        state.uiScale = newScale;
-        const mainW = document.getElementById('gj-widget-main');
-        const addrW = document.getElementById('gj-widget-addr');
-        if (mainW) mainW.style.transform = `scale(${newScale})`;
-        if (addrW) addrW.style.transform = `scale(${newScale})`;
-        const label = document.querySelector('.gj-bottom-controls span');
-        if (label) label.textContent = `缩放: ${(newScale * 100).toFixed(0)}%`;
-    });
-    document.addEventListener('mouseup', () => {
-        if (isResizing) {
-            isResizing = false; document.body.style.cursor = 'default';
-            GM_setValue('uiScale', state.uiScale);
+        else {
+            el.style.bottom = pos.bottom || 'auto'; el.style.top = 'auto';
         }
-    });
-};
+    };
 
-const setupResizeDrag = (el) => {
-    const handle = el.querySelector('#gj-size-handle');
-    if (!handle) return;
-    let isResizing = false, startX, startY, startW, startH;
-    handle.addEventListener('mousedown', e => {
-        e.stopPropagation(); e.preventDefault();
-        isResizing = true;
-        startX = e.clientX; startY = e.clientY;
-        startW = state.layout.width; startH = state.layout.height;
-        document.body.style.cursor = 'nwse-resize';
-    });
-    document.addEventListener('mousemove', e => {
-        if (!isResizing) return;
-        const dx = (e.clientX - startX) / state.uiScale;
-        const dy = (e.clientY - startY) / state.uiScale;
+    const setupDrag = (el, posKey) => {
+        const header = el.querySelector('.gj-header');
+        let isDragging = false, startX, startY, rect;
+        header.addEventListener('mousedown', e => {
+            if (e.target.closest('.gj-toggle') || e.target.closest('#gj-theme-toggle') || e.target.closest('.gj-tab') || e.target.closest('input') || e.target.closest('label') || e.target.closest('.btn-icon-circle')) return;
+            isDragging = true; startX = e.clientX; startY = e.clientY;
+            rect = el.getBoundingClientRect();
+            header.style.cursor = 'grabbing';
+            el.style.transition = 'none';
+        });
+        document.addEventListener('mousemove', e => {
+            if (!isDragging) return;
+            const dx = (e.clientX - startX) / state.uiScale;
+            const dy = (e.clientY - startY) / state.uiScale;
+            el.style.left = (rect.left + dx) + 'px';
+            el.style.top = (rect.top + dy) + 'px';
+            el.style.right = 'auto'; el.style.bottom = 'auto';
+        });
+        document.addEventListener('mouseup', () => {
+            if (isDragging) {
+                isDragging = false; header.style.cursor = 'grab';
+                el.style.transition = 'transform 0.1s';
+                const newPos = { left: el.style.left, top: el.style.top };
+                state[posKey] = newPos;
+                GM_setValue(posKey, JSON.stringify(newPos));
+            }
+        });
+    };
 
-        let newW = startW + dx;
-        let newH = startH + dy;
+    const setupScaleDrag = (el) => {
+        const handle = el.querySelector('#gj-scale-handle');
+        if (!handle) return;
+        let isResizing = false, startY, startScale;
+        handle.addEventListener('mousedown', e => {
+            e.stopPropagation(); e.preventDefault();
+            isResizing = true; startY = e.clientY; startScale = state.uiScale;
+            document.body.style.cursor = 'nwse-resize';
+        });
+        document.addEventListener('mousemove', e => {
+            if (!isResizing) return;
+            const dy = e.clientY - startY;
+            let newScale = startScale + (dy * 0.005);
+            if (newScale < 0.5) newScale = 0.5;
+            if (newScale > 3.0) newScale = 3.0;
+            state.uiScale = newScale;
+            const mainW = document.getElementById('gj-widget-main');
+            const addrW = document.getElementById('gj-widget-addr');
+            if (mainW) mainW.style.transform = `scale(${newScale})`;
+            if (addrW) addrW.style.transform = `scale(${newScale})`;
+            const label = document.querySelector('.gj-bottom-controls span');
+            if (label) label.textContent = `缩放: ${(newScale * 100).toFixed(0)}%`;
+        });
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false; document.body.style.cursor = 'default';
+                GM_setValue('uiScale', state.uiScale);
+            }
+        });
+    };
 
-        if (newW < 200) newW = 200;
-        if (newH < 150) newH = 150;
+    const setupResizeDrag = (el) => {
+        const handle = el.querySelector('#gj-size-handle');
+        if (!handle) return;
+        let isResizing = false, startX, startY, startW, startH;
+        handle.addEventListener('mousedown', e => {
+            e.stopPropagation(); e.preventDefault();
+            isResizing = true;
+            startX = e.clientX; startY = e.clientY;
+            startW = state.layout.width; startH = state.layout.height;
+            document.body.style.cursor = 'nwse-resize';
+        });
+        document.addEventListener('mousemove', e => {
+            if (!isResizing) return;
+            const dx = (e.clientX - startX) / state.uiScale;
+            const dy = (e.clientY - startY) / state.uiScale;
 
-        state.layout.width = newW;
-        state.layout.height = newH;
-        applyLayout();
-    });
-    document.addEventListener('mouseup', () => {
-        if (isResizing) {
-            isResizing = false; document.body.style.cursor = 'default';
-            GM_setValue('uiLayout', JSON.stringify(state.layout));
-        }
-    });
-};
+            let newW = startW + dx;
+            let newH = startH + dy;
 
-const addStyles = () => {
-    GM_addStyle(`
+            if (newW < 200) newW = 200;
+            if (newH < 150) newH = 150;
+
+            state.layout.width = newW;
+            state.layout.height = newH;
+            applyLayout();
+        });
+        document.addEventListener('mouseup', () => {
+            if (isResizing) {
+                isResizing = false; document.body.style.cursor = 'default';
+                GM_setValue('uiLayout', JSON.stringify(state.layout));
+            }
+        });
+    };
+
+    const addStyles = () => {
+        GM_addStyle(`
             html.gj-global-dark {
                 filter: invert(0.92) hue-rotate(180deg) !important;
                 background-color: #111 !important;
@@ -1500,29 +1502,29 @@ const addStyles = () => {
                 opacity: 1;
             }
         `);
-};
-const init = () => {
-    migrateOldData();
-    addStyles();
-    checkPage();
-    window.addEventListener('hashchange', checkPage);
-    if (isDispatchPage()) setTimeout(applyDistanceByTime, 2000);
-    applyGlobalTheme();
+    };
+    const init = () => {
+        migrateOldData();
+        addStyles();
+        checkPage();
+        window.addEventListener('hashchange', checkPage);
+        if (isDispatchPage()) setTimeout(applyDistanceByTime, 2000);
+        applyGlobalTheme();
 
-    document.addEventListener('visibilitychange', () => {
-        if (!document.hidden) {
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden) {
+                reloadDB();
+                if ((isOrderPage() || isDriverPage()) && !state.manualPause) performAction();
+                if (isDispatchPage()) processClipboard();
+            }
+        });
+        window.addEventListener('focus', () => {
             reloadDB();
-            if ((isOrderPage() || isDriverPage()) && !state.manualPause) performAction();
             if (isDispatchPage()) processClipboard();
-        }
-    });
-    window.addEventListener('focus', () => {
-        reloadDB();
-        if (isDispatchPage()) processClipboard();
-    });
-    setTimeout(checkPage, 1000);
-};
+        });
+        setTimeout(checkPage, 1000);
+    };
 
-if (document.readyState === 'complete' || document.readyState === 'interactive') init();
-else window.addEventListener('load', init);
-}) ();
+    if (document.readyState === 'complete' || document.readyState === 'interactive') init();
+    else window.addEventListener('load', init);
+})();
