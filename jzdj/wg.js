@@ -185,12 +185,15 @@
 
         let css = '';
         leftCols.forEach(idx => {
-            // 左固定列 (th/td)
-            css += `.el-table__fixed .el-table__fixed-header-wrapper th:nth-child(${idx}), .el-table__fixed .el-table__fixed-body-wrapper td:nth-child(${idx}) { display: none !important; }\n`;
+            // 左固定列 (th/td) nth-child 是 1-based, 调试模式是 0-based
+            // 因此需要 +1
+            const realIdx = idx + 1;
+            css += `.el-table__fixed .el-table__fixed-header-wrapper th:nth-child(${realIdx}), .el-table__fixed .el-table__fixed-body-wrapper td:nth-child(${realIdx}) { display: none !important; }\n`;
         });
         mainCols.forEach(idx => {
             // 主表格 (th/td)
-            css += `.el-table__header-wrapper th:nth-child(${idx}), .el-table__body-wrapper td:nth-child(${idx}) { display: none !important; }\n`;
+            const realIdx = idx + 1;
+            css += `.el-table__header-wrapper th:nth-child(${realIdx}), .el-table__body-wrapper td:nth-child(${realIdx}) { display: none !important; }\n`;
         });
 
         if (css) {
