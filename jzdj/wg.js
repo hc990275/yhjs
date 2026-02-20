@@ -24,12 +24,12 @@
     const CONFIG = {
         // 【抓取与排除配置】
         SCRAPE: {
-            PHONE_COL_INDEX: 13,  // 第13列
-            ADDR_COL_INDEX: 7,    // 第7列
-            EXCLUDE_COL_INDEX: 6, // 第6列
+            PHONE_COL_INDEX: 3,   // [左] 乘客电话 (第3列)
+            ADDR_COL_INDEX: 7,    // [主] 乘客起点 (第7列)
+            EXCLUDE_COL_INDEX: null, // (可选)
             EXCLUDE_NAMES: ['腾讯出行', '盛大大地模式'],
-            CANCEL_COL_INDEX: null, // [新增] 消单状态列 (需手动配置)
-            CANCEL_KEYWORDS: ['乘客取消', '后台销单'] // [新增] 消单关键词
+            CANCEL_COL_INDEX: 1,  // [左] 订单状态 (第1列)
+            CANCEL_KEYWORDS: ['乘客取消', '后台销单'] // 消单关键词
         },
         ORDER: {
             HASH: '#/substituteDrivingOrder',
@@ -71,6 +71,7 @@
         currentHash: window.location.hash,
         isCollapsed: GM_getValue('uiCollapsed', false),
         manualPause: GM_getValue('manualPause', false),
+        driverManualPause: GM_getValue('driverManualPause', false), // [新增] 司机调度独立暂停状态
         isScrapingEnabled: GM_getValue('scrapeEnabled', false),
         debugMode: false, // [新增] 调试模式
         debugTimer: null,
@@ -172,6 +173,13 @@
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
 
+    // [新增] 统一判断当前页面是否暂停
+    const isPaused = () => {
+        if (isOrderPage()) return state.manualPause;
+        if (isDriverPage()) return state.driverManualPause;
+        return false;
+    };
+
     // ==============================================
     //        核心修正：防重复抓取 + 本地存储
     // ==============================================
@@ -252,7 +260,8 @@
             // 使用 getCellText 获取关键数据
 
             // 0. [新增] 消单自动剔除
-            const idxCancel = state.cancelColIndex;
+            // 优先使用 CONFIG 配置，如果没有配置则使用手动设置
+            const idxCancel = CONFIG.SCRAPE.CANCEL_COL_INDEX !== null ? CONFIG.SCRAPE.CANCEL_COL_INDEX : state.cancelColIndex;
             if (idxCancel !== -1) {
                 const statusText = getCellText(rowIndex, idxCancel);
                 const cancelKeywords = CONFIG.SCRAPE.CANCEL_KEYWORDS || ['乘客取消', '后台销单'];
@@ -665,7 +674,7 @@
     };
     const stopRapidRefresh = () => { if (state.rapidTimer) { clearInterval(state.rapidTimer); state.rapidTimer = null; } };
     const performAction = () => {
-        if (state.manualPause) return;
+        if (isPaused()) return; // [修改] 使用统一暂停判断
         let selector = null;
         if (isOrderPage()) selector = CONFIG.ORDER.BUTTON_SELECTOR;
         else if (isDriverPage()) selector = CONFIG.DRIVER.BUTTON_SELECTOR;
@@ -683,7 +692,7 @@
         state.countdown = state.refreshInterval;
         updateStatusText();
         state.timerId = setInterval(() => {
-            if (state.manualPause) return;
+            if (isPaused()) return; // [修改] 使用统一暂停判断
             state.countdown--;
             updateStatusText();
             if (state.countdown <= 0) {
@@ -1058,9 +1067,10 @@
         const cancelColValue = state.cancelColIndex === -1 ? '' : state.cancelColIndex;
 
         if (isOrderPage() || isDriverPage()) {
-            const btnClass = state.manualPause ? 'btn-resume' : 'btn-pause';
-            const btnText = state.manualPause ? '▶ 恢复运行' : '⏸ 暂停刷新';
-            const statusColor = state.manualPause ? 'var(--gj-text-sec)' : '#409EFF';
+            const paused = isPaused(); // [修改] 获取当前页面的暂停状态
+            const btnClass = paused ? 'btn-resume' : 'btn-pause';
+            const btnText = paused ? '▶ 恢复运行' : '⏸ 暂停刷新';
+            const statusColor = paused ? 'var(--gj-text-sec)' : '#409EFF';
 
             const scrapeClass = state.isScrapingEnabled ? 'btn-resume' : 'btn-preset';
             const scrapeText = state.isScrapingEnabled ? '👁️ 自动抓取: 开启' : '🙈 自动抓取: 关闭';
@@ -1068,7 +1078,7 @@
 
             html = `
                 <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
-                    <span class="gj-timer-text" style="color:${statusColor}">${state.manualPause ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
+                    <span class="gj-timer-text" style="color:${statusColor}">${paused ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
                 </div>
                 
                 <button id="gj-btn-toggle" class="gj-btn ${btnClass}">${btnText}</button>
@@ -1179,8 +1189,14 @@
 
         if (document.getElementById('gj-btn-toggle')) {
             document.getElementById('gj-btn-toggle').addEventListener('click', () => {
-                state.manualPause = !state.manualPause;
-                GM_setValue('manualPause', state.manualPause);
+                // [修改] 根据页面类型切换对应的暂停状态
+                if (isOrderPage()) {
+                    state.manualPause = !state.manualPause;
+                    GM_setValue('manualPause', state.manualPause);
+                } else if (isDriverPage()) {
+                    state.driverManualPause = !state.driverManualPause;
+                    GM_setValue('driverManualPause', state.driverManualPause);
+                }
                 updateUI();
             });
             const scrapeBtn = document.getElementById('gj-btn-scrape');
@@ -1237,7 +1253,7 @@
     const updateStatusText = () => {
         const text = document.querySelector('.gj-timer-text');
         if (text) {
-            if (state.manualPause) {
+            if (isPaused()) { // [修改] 使用统一暂停判断
                 text.textContent = "暂停";
                 text.style.color = "var(--gj-text-sec)";
             }
