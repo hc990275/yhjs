@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.6.9 终极修正版)
+// @name          代驾调度系统助手 (v15.7.0 独立刷新版)
 // @namespace     http://tampermonkey.net/
 // @version       15.7.0
-// @description   【v15.7.0】新增：1.调试模式(查看列号)；2.自动消单(根据状态列自动剔除电话)；3.修复：地址长度限制移除。
+// @description   【v15.7.0】新增：1.独立刷新控制(司机/订单页面互不影响)；2.头部启停按钮；3.自动消单功能。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -26,8 +26,8 @@
         SCRAPE: {
             PHONE_COL_INDEX: 3,   // [左] 乘客电话 (第3列)
             ADDR_COL_INDEX: 7,    // [主] 乘客起点 (第7列)
-            EXCLUDE_COL_INDEX: null, // (可选)
-            EXCLUDE_NAMES: ['腾讯出行', '盛大大地模式'],
+            EXCLUDE_COL_INDEX: 2,     // [左] 订单来源 (第2列)
+            EXCLUDE_NAMES: ['新腾讯出行', '盛大', '腾讯出行', '盛大大地模式'],
             CANCEL_COL_INDEX: 1,  // [左] 订单状态 (第1列)
             CANCEL_KEYWORDS: ['乘客取消', '后台销单'] // 消单关键词
         },
@@ -276,11 +276,21 @@
                 }
             }
 
-            // 1. 排除逻辑
+            // 1. 排除逻辑 (来源过滤)
             if (idxExclude !== null) {
                 const checkText = getCellText(rowIndex, idxExclude);
-                const hit = excludeKeywords.find(kw => checkText.includes(kw));
-                if (hit) return;
+                const excludeKeywords = CONFIG.SCRAPE.EXCLUDE_NAMES || [];
+                // 检查是否包含屏蔽关键词
+                if (excludeKeywords.some(kw => checkText.includes(kw))) {
+                    // [新增] 如果是屏蔽来源，尝试从库中删除该行地址（如果之前误录入）
+                    if (idxAddr !== null) {
+                        const addrToRemove = getCellText(rowIndex, idxAddr);
+                        if (addrToRemove && addrToRemove.length > 1) {
+                            removeFromDB('address', addrToRemove);
+                        }
+                    }
+                    return; // 跳过此行，不录入
+                }
             }
 
             // 2. 抓取电话
@@ -906,13 +916,27 @@
         const themeIcon = state.theme === 'light' ? '🌙' : '🌞';
         const toggleIcon = state.isCollapsed ? '➕' : '➖';
 
+        // [新增] 头部启停按钮 (仅在订单/司机管理页面显示)
+        let pauseHtml = '';
+        if (isOrderPage() || isDriverPage()) {
+            const isPausedPage = isPaused();
+            // isPausedPage=true => 暂停状态 => 显示"停"
+            // isPausedPage=false => 正在运行 => 显示"启"
+            const pauseText = isPausedPage ? '停' : '启';
+            const pauseIcon = isPausedPage ? '⏸' : '▶';
+            const pauseTitle = isPausedPage ? '当前已暂停，点击恢复' : '正在刷新中，点击暂停';
+            const pauseColor = isPausedPage ? '#F56C6C' : '#67C23A';
+            pauseHtml = `<span id="gj-header-pause" title="${pauseTitle}" style="cursor:pointer;color:${pauseColor};font-weight:bold;font-size:14px;">${pauseIcon} ${pauseText}</span>`;
+        }
+
         widget.innerHTML = `
             <div class="gj-header">
                 <div style="display:flex;align-items:center;gap:6px;">
                     <span style="font-size:16px;">🤖</span>
                     <span id="gj-title-text">...</span>
                 </div>
-                <div style="display:flex; gap:8px;">
+                <div style="display:flex; gap:10px;">
+                     ${pauseHtml}
                      <span id="gj-theme-toggle" title="全站变黑/变亮">${themeIcon}</span>
                      <span class="gj-toggle" title="折叠/展开">${toggleIcon}</span>
                 </div>
@@ -934,6 +958,21 @@
             e.stopPropagation();
             toggleTheme();
         });
+        // [新增] 头部启停事件
+        const headerPauseBtn = widget.querySelector('#gj-header-pause');
+        if (headerPauseBtn) {
+            headerPauseBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (isOrderPage()) {
+                    state.manualPause = !state.manualPause;
+                    GM_setValue('manualPause', state.manualPause);
+                } else if (isDriverPage()) {
+                    state.driverManualPause = !state.driverManualPause;
+                    GM_setValue('driverManualPause', state.driverManualPause);
+                }
+                updateUI();
+            });
+        }
         return widget;
     };
 
