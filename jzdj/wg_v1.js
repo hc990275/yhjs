@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.7.0 独立刷新版)
+// @name          代驾调度系统助手 (v15.6.9 终极修正版)
 // @namespace     http://tampermonkey.net/
-// @version       15.7.0
-// @description   【v15.7.0】新增：1.独立刷新控制(司机/订单页面互不影响)；2.头部启停按钮；3.自动消单功能。
+// @version       15.6.9
+// @description   【v15.6.9】修复：1.移除地址长度限制(解决本地数据变少)；2.订单页已存数据不再重复抓取；3.下载后可选择反向清洗云端数据，确保数量一致。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -24,12 +24,10 @@
     const CONFIG = {
         // 【抓取与排除配置】
         SCRAPE: {
-            PHONE_COL_INDEX: 3,   // [左] 乘客电话 (第3列)
-            ADDR_COL_INDEX: 7,    // [主] 乘客起点 (第7列)
-            EXCLUDE_COL_INDEX: 2,     // [左] 订单来源 (第2列)
-            EXCLUDE_NAMES: ['新腾讯出行', '盛大', '腾讯出行', '盛大大地模式'],
-            CANCEL_COL_INDEX: 1,  // [左] 订单状态 (第1列)
-            CANCEL_KEYWORDS: ['乘客取消', '后台销单'] // 消单关键词
+            PHONE_COL_INDEX: 13,  // 第13列
+            ADDR_COL_INDEX: 7,    // 第7列
+            EXCLUDE_COL_INDEX: 6, // 第6列
+            EXCLUDE_NAMES: ['腾讯出行', '盛大大地模式']
         },
         ORDER: {
             HASH: '#/substituteDrivingOrder',
@@ -71,10 +69,7 @@
         currentHash: window.location.hash,
         isCollapsed: GM_getValue('uiCollapsed', false),
         manualPause: GM_getValue('manualPause', false),
-        driverManualPause: GM_getValue('driverManualPause', false), // [新增] 司机调度独立暂停状态
         isScrapingEnabled: GM_getValue('scrapeEnabled', false),
-        debugMode: false, // [新增] 调试模式
-        debugTimer: null,
 
         refreshInterval: 20,
         countdown: 0,
@@ -86,7 +81,6 @@
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
         layout: safeParse('uiLayout', '{"width": 280, "height": 350}'),
         colWidth: parseInt(GM_getValue('addrColWidth', 80)),
-        cancelColIndex: parseInt(GM_getValue('cancelColIndex', -1)), // [新增] 消单列号配置
 
         db: {
             addrs: safeParse('dbAddrs', '[]'),
@@ -173,13 +167,6 @@
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
 
-    // [新增] 统一判断当前页面是否暂停
-    const isPaused = () => {
-        if (isOrderPage()) return state.manualPause;
-        if (isDriverPage()) return state.driverManualPause;
-        return false;
-    };
-
     // ==============================================
     //        核心修正：防重复抓取 + 本地存储
     // ==============================================
@@ -221,82 +208,25 @@
         const idxAddr = CONFIG.SCRAPE.ADDR_COL_INDEX;
         const excludeKeywords = CONFIG.SCRAPE.EXCLUDE_NAMES || [];
 
-        // [Fix] 同时获取主表格与固定列表格的行，用于合并数据
-        const mainRows = Array.from(document.querySelectorAll('.el-table__body-wrapper .el-table__row'));
-        const fixedRows = Array.from(document.querySelectorAll('.el-table__fixed .el-table__fixed-body-wrapper .el-table__row'));
-        const fixedRightRows = Array.from(document.querySelectorAll('.el-table__fixed-right .el-table__fixed-body-wrapper .el-table__row'));
-
+        const rows = document.querySelectorAll('.el-table__body-wrapper .el-table__row');
         let newCount = 0;
+        rows.forEach(row => {
+            const cells = row.querySelectorAll('td');
+            if (cells.length <= Math.max(idxExclude, idxPhone, idxAddr)) return;
 
-        // 辅助函数：获取某行某列的文本（优先取主表，空则取固定表）
-        const getCellText = (rowIndex, colIndex) => {
-            let text = '';
-            // 1. 尝试主表
-            if (mainRows[rowIndex] && mainRows[rowIndex].cells[colIndex]) {
-                text = mainRows[rowIndex].cells[colIndex].innerText.trim();
-            }
-            // 2. 如果为空，尝试左侧固定表
-            if (!text && fixedRows[rowIndex] && fixedRows[rowIndex].cells[colIndex]) {
-                text = fixedRows[rowIndex].cells[colIndex].innerText.trim();
-            }
-            // 3. 如果仍为空，尝试右侧固定表
-            // 注意：右侧固定表的 colIndex 可能不对应，ElementUI通常是克隆对应列
-            // 但也可能是按 visbile columns 排列。这里假设索引一致或能通过 querySelector 找到。
-            // 简单起见，如果 colIndex 很大，尝试右侧表对应的“倒数”索引？
-            // ElementUI 右侧固定表通常包含完整的 tr，但只显示部分 td。
-            // 直接尝试索引读取。
-            if (!text && fixedRightRows[rowIndex] && fixedRightRows[rowIndex].cells[colIndex]) {
-                text = fixedRightRows[rowIndex].cells[colIndex].innerText.trim();
-            }
-            return text;
-        };
-
-        const getCellNumber = (rowIndex, colIndex) => {
-            const txt = getCellText(rowIndex, colIndex);
-            return txt.replace(/\D/g, '');
-        };
-
-        mainRows.forEach((row, rowIndex) => {
-            // 使用 getCellText 获取关键数据
-
-            // 0. [新增] 消单自动剔除
-            // 优先使用 CONFIG 配置，如果没有配置则使用手动设置
-            const idxCancel = CONFIG.SCRAPE.CANCEL_COL_INDEX !== null ? CONFIG.SCRAPE.CANCEL_COL_INDEX : state.cancelColIndex;
-            if (idxCancel !== -1) {
-                const statusText = getCellText(rowIndex, idxCancel);
-                const cancelKeywords = CONFIG.SCRAPE.CANCEL_KEYWORDS || ['乘客取消', '后台销单'];
-                if (cancelKeywords.some(kw => statusText.includes(kw))) {
-                    if (idxPhone !== null) {
-                        const rawPhone = getCellNumber(rowIndex, idxPhone);
-                        if (/^1\d{10}$/.test(rawPhone)) {
-                            removeFromDB('phone', rawPhone);
-                        }
-                    }
-                    return; // 消单行不进行后续抓取
-                }
-            }
-
-            // 1. 排除逻辑 (来源过滤)
-            if (idxExclude !== null) {
-                const checkText = getCellText(rowIndex, idxExclude);
-                const excludeKeywords = CONFIG.SCRAPE.EXCLUDE_NAMES || [];
-                // 检查是否包含屏蔽关键词
-                if (excludeKeywords.some(kw => checkText.includes(kw))) {
-                    // [新增] 如果是屏蔽来源，尝试从库中删除该行地址（如果之前误录入）
-                    if (idxAddr !== null) {
-                        const addrToRemove = getCellText(rowIndex, idxAddr);
-                        if (addrToRemove && addrToRemove.length > 1) {
-                            removeFromDB('address', addrToRemove);
-                        }
-                    }
-                    return; // 跳过此行，不录入
-                }
+            // 1. 排除逻辑
+            if (idxExclude !== null && cells[idxExclude]) {
+                const checkText = cells[idxExclude].innerText.trim();
+                const hit = excludeKeywords.find(kw => checkText.includes(kw));
+                if (hit) return;
             }
 
             // 2. 抓取电话
-            if (idxPhone !== null) {
-                const cleanNum = getCellNumber(rowIndex, idxPhone);
+            if (idxPhone !== null && cells[idxPhone]) {
+                const rawText = cells[idxPhone].innerText.trim();
+                const cleanNum = rawText.replace(/\D/g, '');
                 if (/^1\d{10}$/.test(cleanNum)) {
+                    // 【防重复核心】只有本地库不存在时才添加
                     if (!state.db.phones.includes(cleanNum)) {
                         if (addToDB('phone', cleanNum, idxPhone)) newCount++;
                     }
@@ -304,12 +234,13 @@
             }
 
             // 3. 抓取地址
-            if (idxAddr !== null) {
-                const addrText = getCellText(rowIndex, idxAddr);
+            if (idxAddr !== null && cells[idxAddr]) {
+                const addrText = cells[idxAddr].innerText.trim();
                 if (addrText && addrText.length > 1) {
                     const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                     if (!blockers.some(b => addrText.includes(b))) {
                         if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) {
+                            // 【防重复核心】只有本地库不存在时才添加
                             if (!state.db.addrs.includes(addrText)) {
                                 if (addToDB('address', addrText, idxAddr)) newCount++;
                             }
@@ -319,56 +250,6 @@
             }
         });
         if (newCount > 0) updateListsUI();
-
-        // 4. [修改] 调试模式：显示合并后的列信息
-        if (state.debugMode) {
-            debugRowInfo(mainRows, fixedRows, fixedRightRows);
-        }
-    };
-
-    // [修改] 调试列信息 (接受所有表引用)
-    const debugRowInfo = (mainRows, fixedRows, fixedRightRows) => {
-        if (!mainRows || mainRows.length === 0) return;
-        const rowIndex = 0; // 只看第一行
-
-        // 找出最大的列数
-        let maxCols = 0;
-        if (mainRows[0]) maxCols = Math.max(maxCols, mainRows[0].cells.length);
-        if (fixedRows[0]) maxCols = Math.max(maxCols, fixedRows[0].cells.length);
-
-        let debugText = `=== 🛠️ 调试模式: 综合行数据 (Index 0) ===\n`;
-
-        for (let i = 0; i < maxCols; i++) {
-            let parts = [];
-            // 主表
-            if (mainRows[0] && mainRows[0].cells[i]) {
-                const txt = mainRows[0].cells[i].innerText.replace(/[\r\n]+/g, ' ').trim();
-                if (txt) parts.push(`[主]${txt}`);
-            }
-            // 左固定
-            if (fixedRows[0] && fixedRows[0].cells[i]) {
-                const txt = fixedRows[0].cells[i].innerText.replace(/[\r\n]+/g, ' ').trim();
-                if (txt) parts.push(`[左]${txt}`);
-            }
-            // 右固定
-            if (fixedRightRows[0] && fixedRightRows[0].cells[i]) {
-                const txt = fixedRightRows[0].cells[i].innerText.replace(/[\r\n]+/g, ' ').trim();
-                if (txt) parts.push(`[右]${txt}`);
-            }
-
-            if (parts.length > 0) {
-                debugText += `[列 ${i}]: ${parts.join(' | ').substring(0, 30)}\n`;
-            } else {
-                // debugText += `[列 ${i}]: (空)\n`; // 可选：不显示空列以减少干扰
-            }
-        }
-
-        const debugPanel = document.getElementById('gj-debug-console');
-        if (debugPanel) {
-            debugPanel.textContent = debugText;
-        } else {
-            console.log(debugText);
-        }
     };
 
     // ==============================================
@@ -412,21 +293,6 @@
             log(`🆕 [新录入] ${type === 'address' ? '地址' : '电话'}: ${value}`, 'success');
         }
         return true;
-    };
-
-    // [新增] 从本地库移除
-    const removeFromDB = (type, value) => {
-        if (!value) return;
-        const storageKey = type === 'address' ? 'dbAddrs' : 'dbPhones';
-        const list = type === 'address' ? state.db.addrs : state.db.phones;
-
-        const idx = list.indexOf(value);
-        if (idx > -1) {
-            list.splice(idx, 1);
-            GM_setValue(storageKey, JSON.stringify(list));
-            log(`🗑️ [自动剔除] 发现消单/取消, 已移除${type === 'address' ? '地址' : '电话'}: ${value}`, 'warning');
-            updateListsUI();
-        }
     };
 
     // ==============================================
@@ -684,7 +550,7 @@
     };
     const stopRapidRefresh = () => { if (state.rapidTimer) { clearInterval(state.rapidTimer); state.rapidTimer = null; } };
     const performAction = () => {
-        if (isPaused()) return; // [修改] 使用统一暂停判断
+        if (state.manualPause) return;
         let selector = null;
         if (isOrderPage()) selector = CONFIG.ORDER.BUTTON_SELECTOR;
         else if (isDriverPage()) selector = CONFIG.DRIVER.BUTTON_SELECTOR;
@@ -702,7 +568,7 @@
         state.countdown = state.refreshInterval;
         updateStatusText();
         state.timerId = setInterval(() => {
-            if (isPaused()) return; // [修改] 使用统一暂停判断
+            if (state.manualPause) return;
             state.countdown--;
             updateStatusText();
             if (state.countdown <= 0) {
@@ -916,35 +782,13 @@
         const themeIcon = state.theme === 'light' ? '🌙' : '🌞';
         const toggleIcon = state.isCollapsed ? '➕' : '➖';
 
-        // [新增] 头部启停按钮 (仅在订单/司机管理页面显示)
-        let pauseHtml = '';
-        if (isOrderPage() || isDriverPage()) {
-            const isPausedPage = isPaused();
-            // isPausedPage=true (暂停中) => 按钮: [▶] 启停 (已停止)
-            // isPausedPage=false (运行中) => 按钮: [⏸] 启停 (运行中)
-            const statusText = isPausedPage ? '(已停止)' : '(运行中)';
-            const pauseIcon = isPausedPage ? '▶' : '⏸';
-            const pauseTitle = isPausedPage ? '当前已停止，点击开始刷新' : '当前运行中，点击暂停刷新';
-            const iconColor = isPausedPage ? '#909399' : '#67C23A'; // 停止灰/运行绿
-            const textColor = isPausedPage ? '#F56C6C' : '#67C23A'; // 停止红/运行绿
-
-            pauseHtml = `
-                <div id="gj-header-pause" title="${pauseTitle}" style="cursor:pointer; display:flex; align-items:center; gap:4px;">
-                    <span style="color:${iconColor};font-size:16px;font-weight:bold;">${pauseIcon}</span>
-                    <span style="font-weight:bold;font-size:14px;">启停</span>
-                    <span style="font-size:12px;color:${textColor};transform:scale(0.9);">${statusText}</span>
-                </div>
-            `;
-        }
-
         widget.innerHTML = `
             <div class="gj-header">
                 <div style="display:flex;align-items:center;gap:6px;">
                     <span style="font-size:16px;">🤖</span>
                     <span id="gj-title-text">...</span>
                 </div>
-                <div style="display:flex; gap:10px;">
-                     ${pauseHtml}
+                <div style="display:flex; gap:8px;">
                      <span id="gj-theme-toggle" title="全站变黑/变亮">${themeIcon}</span>
                      <span class="gj-toggle" title="折叠/展开">${toggleIcon}</span>
                 </div>
@@ -966,21 +810,6 @@
             e.stopPropagation();
             toggleTheme();
         });
-        // [新增] 头部启停事件
-        const headerPauseBtn = widget.querySelector('#gj-header-pause');
-        if (headerPauseBtn) {
-            headerPauseBtn.addEventListener('click', (e) => {
-                e.stopPropagation();
-                if (isOrderPage()) {
-                    state.manualPause = !state.manualPause;
-                    GM_setValue('manualPause', state.manualPause);
-                } else if (isDriverPage()) {
-                    state.driverManualPause = !state.driverManualPause;
-                    GM_setValue('driverManualPause', state.driverManualPause);
-                }
-                updateUI();
-            });
-        }
         return widget;
     };
 
@@ -1067,26 +896,6 @@
         let mainWidget = document.getElementById('gj-widget-main');
         if (!mainWidget) mainWidget = createMainWidget();
 
-        // [新增] 动态更新头部启停按钮状态
-        const headerPauseBtn = mainWidget.querySelector('#gj-header-pause');
-        if (headerPauseBtn && (isOrderPage() || isDriverPage())) {
-            const isPausedPage = isPaused();
-            const statusText = isPausedPage ? '(已停止)' : '(运行中)';
-            const pauseIcon = isPausedPage ? '▶' : '⏸';
-            const pauseTitle = isPausedPage ? '当前已停止，点击开始刷新' : '当前运行中，点击暂停刷新';
-            const iconColor = isPausedPage ? '#909399' : '#67C23A';
-            const textColor = isPausedPage ? '#F56C6C' : '#67C23A';
-
-            headerPauseBtn.title = pauseTitle;
-            headerPauseBtn.innerHTML = `
-                <span style="color:${iconColor};font-size:16px;font-weight:bold;">${pauseIcon}</span>
-                <span style="font-weight:bold;font-size:14px;">启停</span>
-                <span style="font-size:12px;color:${textColor};transform:scale(0.9);">${statusText}</span>
-            `;
-        } else if (headerPauseBtn && !isOrderPage() && !isDriverPage()) {
-            headerPauseBtn.style.display = 'none'; // 非相关页面隐藏
-        }
-
         let addrWidget = document.getElementById('gj-widget-addr');
         if (isDispatchPage()) {
             if (!addrWidget) {
@@ -1128,24 +937,17 @@
 
     const renderMainContent = (container) => {
         let html = '';
-        const debugPanelHtml = state.debugMode ?
-            `<div id="gj-debug-console" style="margin-top:10px;padding:8px;background:#333;color:#fff;font-size:11px;font-family:monospace;white-space:pre-wrap;max-height:150px;overflow-y:auto;border-radius:4px;">正在等待抓取数据...</div>` : '';
-
-        const cancelColValue = state.cancelColIndex === -1 ? '' : state.cancelColIndex;
-
         if (isOrderPage() || isDriverPage()) {
-            const paused = isPaused(); // [修改] 获取当前页面的暂停状态
-            const btnClass = paused ? 'btn-resume' : 'btn-pause';
-            const btnText = paused ? '▶ 恢复运行' : '⏸ 暂停刷新';
-            const statusColor = paused ? 'var(--gj-text-sec)' : '#409EFF';
+            const btnClass = state.manualPause ? 'btn-resume' : 'btn-pause';
+            const btnText = state.manualPause ? '▶ 恢复运行' : '⏸ 暂停刷新';
+            const statusColor = state.manualPause ? 'var(--gj-text-sec)' : '#409EFF';
 
             const scrapeClass = state.isScrapingEnabled ? 'btn-resume' : 'btn-preset';
             const scrapeText = state.isScrapingEnabled ? '👁️ 自动抓取: 开启' : '🙈 自动抓取: 关闭';
             const scrapeStyle = state.isScrapingEnabled ? 'border:1px solid #e1f3d8;background:#f0f9eb;color:#67c23a;' : 'border:1px solid var(--gj-border);background:var(--gj-bg-sec);color:var(--gj-text-mute);';
-
             html = `
                 <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
-                    <span class="gj-timer-text" style="color:${statusColor}">${paused ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
+                    <span class="gj-timer-text" style="color:${statusColor}">${state.manualPause ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
                 </div>
                 
                 <button id="gj-btn-toggle" class="gj-btn ${btnClass}">${btnText}</button>
@@ -1159,19 +961,6 @@
                         <button id="gj-btn-set" class="gj-btn-icon">🆗</button>
                     </div>
                 </div>
-
-                <!-- [新增] 调试与消单配置 -->
-                <div class="gj-control-row" style="margin-top:8px;border-top:1px dashed var(--gj-border);padding-top:8px;">
-                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;">
-                        <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
-                        🐛 调试模式
-                     </label>
-                     <div style="display:flex;align-items:center;gap:4px;" title="当状态列包含'乘客取消'时自动删除电话">
-                        <span style="font-size:12px;">🚫 消单列</span>
-                        <input type="number" id="gj-input-cancel-col" value="${cancelColValue}" placeholder="无" class="gj-input-mini" style="width:30px;">
-                     </div>
-                </div>
-                ${debugPanelHtml}
 
                 <div class="gj-control-row" style="margin-top:10px; border-top:1px dashed var(--gj-border); padding-top:10px; justify-content: space-around;">
                     <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
@@ -1256,14 +1045,8 @@
 
         if (document.getElementById('gj-btn-toggle')) {
             document.getElementById('gj-btn-toggle').addEventListener('click', () => {
-                // [修改] 根据页面类型切换对应的暂停状态
-                if (isOrderPage()) {
-                    state.manualPause = !state.manualPause;
-                    GM_setValue('manualPause', state.manualPause);
-                } else if (isDriverPage()) {
-                    state.driverManualPause = !state.driverManualPause;
-                    GM_setValue('driverManualPause', state.driverManualPause);
-                }
+                state.manualPause = !state.manualPause;
+                GM_setValue('manualPause', state.manualPause);
                 updateUI();
             });
             const scrapeBtn = document.getElementById('gj-btn-scrape');
@@ -1288,39 +1071,13 @@
                     performAction(); startCountdown();
                 }
             });
-
-            // [新增] 调试模式切换
-            const chkDebug = document.getElementById('gj-chk-debug');
-            if (chkDebug) {
-                chkDebug.addEventListener('change', (e) => {
-                    state.debugMode = e.target.checked;
-                    updateUI(); // 触发重绘以显示/隐藏面板
-                    if (state.debugMode) scanOrderPage();
-                });
-            }
-
-            // [新增] 消单列号配置
-            const inputCancelCol = document.getElementById('gj-input-cancel-col');
-            if (inputCancelCol) {
-                inputCancelCol.addEventListener('change', (e) => {
-                    const val = parseInt(e.target.value);
-                    if (!isNaN(val)) {
-                        state.cancelColIndex = val;
-                        GM_setValue('cancelColIndex', val);
-                        log(`🚫 消单列已设置为: ${val}`, 'info');
-                    } else {
-                        state.cancelColIndex = -1;
-                        GM_setValue('cancelColIndex', -1);
-                    }
-                });
-            }
         }
     };
 
     const updateStatusText = () => {
         const text = document.querySelector('.gj-timer-text');
         if (text) {
-            if (isPaused()) { // [修改] 使用统一暂停判断
+            if (state.manualPause) {
                 text.textContent = "暂停";
                 text.style.color = "var(--gj-text-sec)";
             }

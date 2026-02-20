@@ -1,0 +1,22 @@
+# 任务清单
+
+- [x] 备份 `wg.js` 为 `wg_v1.js` <!-- id: 0 -->
+- [/] 修改 `wg.js` (v15.7.0) <!-- id: 1 -->
+    - [x] 核心逻辑：新增 `removeFromDB` 函数 <!-- id: 2 -->
+    - [x] 核心逻辑：`scanOrderPage` 增加消单关键词检测与触发删除 (已增强固定列支持) <!-- id: 3 -->
+    - [x] 核心逻辑：`debugRowInfo` 函数实现 <!-- id: 4 -->
+    - [x] UI：设置面板增加 `消单列号` 输入框 <!-- id: 5 -->
+    - [x] UI：设置面板增加 `调试模式` 开关 <!-- id: 6 -->
+    - [x] UI：新增调试信息显示区域 <!-- id: 7 -->
+- [x] 更新 `README.md` <!-- id: 8 -->
+- [x] 更新 `wg.js` 配置：Phone=3, Addr=7, Cancel=1 <!-- id: 9 -->
+- [x] 状态管理：新增 `driverManualPause` 状态 <!-- id: 10 -->
+- [x] 逻辑解耦：`performAction` 和 `startCountdown` 使用独立暂停状态 <!-- id: 11 -->
+- [x] UI更新：`renderMainContent` 根据页面显示对应暂停状态 <!-- id: 12 -->
+- [x] 事件绑定：`#gj-btn-toggle` 根据页面切换不同暂停状态 <!-- id: 13 -->
+- [x] 更新 `wg.js` Metadata 版本号 <!-- id: 14 -->
+- [x] 最终代码审查与文档更新 <!-- id: 15 -->
+- [x] 更新 `EXCLUDE_COL_INDEX` 为 2 和 `EXCLUDE_NAMES` <!-- id: 16 -->
+- [x] 更新 `EXCLUDE_COL_INDEX` 为 2 和 `EXCLUDE_NAMES` <!-- id: 16 -->
+- [x] 更新排除逻辑：发现屏蔽来源时，从库中移除地址 <!-- id: 17 -->
+- [x] 重新生成 `README.md` <!-- id: 18 -->
