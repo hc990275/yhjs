@@ -1281,79 +1281,89 @@
         if (!isDispatchPage() || window._gjDispatchAutoSwitched) return;
 
         let noData = false;
-        document.querySelectorAll('.el-table__empty-text, .el-table__empty-block').forEach(el => {
-            if (el.innerText.includes('暂无数据') || el.innerText.includes('暂无服务人员')) noData = true;
+        document.querySelectorAll('.el-table__empty-text, .el-table__empty-block, td, div').forEach(el => {
+            const txt = el.textContent || '';
+            if (txt.includes('暂无数据') || txt.includes('暂无服务人员')) {
+                // 确保是在主页面，不是助手自己的UI
+                if (!el.closest('#gj-widget-main') && !el.closest('#gj-widget-addr')) {
+                    noData = true;
+                }
+            }
         });
 
-        // 确保有输入内容（地址或电话非空）才判定为正在寻找司机
+        // 取消单纯类名限制，寻找任意输入电话、起点等内容的输入框
         let hasInput = false;
-        document.querySelectorAll('.el-form-item input[type="text"], .el-form-item input[type="tel"]').forEach(input => {
-            if (input.value && input.value.trim().length > 0) hasInput = true;
+        document.querySelectorAll('input').forEach(input => {
+            const val = input.value ? input.value.trim() : '';
+            const ph = (input.placeholder || '').toLowerCase();
+            if (val.length >= 2) {
+                if (ph.includes('电话') || input.type === 'tel' || ph.includes('起点') || ph.includes('出发') || ph.includes('地址') || ph.includes('姓名') || ph.includes('搜索')) {
+                    hasInput = true;
+                }
+            }
         });
 
         if (noData && hasInput) {
             log('👀 检测到暂无司机数据，执行自动改派: [普通指派] + [20公里] + [实际距离]', 'warning');
+            window._gjDispatchAutoSwitched = true;
 
             // 1. 点击 '普通指派'
-            const spans = document.querySelectorAll('span.el-radio-button__inner, span.el-radio__label, span');
-            for (let span of spans) {
-                if (span.textContent.trim() === '普通指派') {
+            let clickedNormal = false;
+            document.querySelectorAll('span, label, button, .el-radio-button__inner').forEach(span => {
+                if (!clickedNormal && span.textContent.trim() === '普通指派') {
                     span.click();
-                    break;
+                    clickedNormal = true;
                 }
-            }
+            });
 
             // 2. 延迟拉动 slider 到 20 并点击实际距离
             setTimeout(() => {
                 setSliderValue(20);
                 setTimeout(() => {
-                    const btns = document.querySelectorAll('button, span, th');
-                    for (let btn of btns) {
-                        if (btn.textContent.trim() === '实际距离') {
+                    let clickedDist = false;
+                    document.querySelectorAll('button, span, th, .el-button').forEach(btn => {
+                        if (!clickedDist && btn.textContent.trim() === '实际距离') {
                             btn.click();
-                            break;
+                            clickedDist = true;
                         }
-                    }
-                }, 500);
-            }, 500);
-
-            window._gjDispatchAutoSwitched = true;
+                    });
+                }, 800);
+            }, 800);
         }
     };
 
     const watchDispatchFormClear = () => {
         if (!isDispatchPage() || !window._gjDispatchAutoSwitched) return;
 
-        // 检查是否派单完成 (输入框被清空)
-        let allEmpty = true;
-        const inputs = document.querySelectorAll('.el-form-item input[type="text"], .el-form-item input[type="tel"]');
-        if (inputs.length === 0) return;
-        inputs.forEach(input => {
-            const ph = (input.placeholder || '');
-            // 只关注 用户电话、姓名、地址 等关键输入框
-            if ((ph.includes('电话') || ph.includes('地址') || ph.includes('姓名')) && input.value && input.value.trim().length > 0) {
-                allEmpty = false;
+        // 检查是否派单完成 (关键输入框全被清空)
+        let hasInput = false;
+        document.querySelectorAll('input').forEach(input => {
+            const val = input.value ? input.value.trim() : '';
+            const ph = (input.placeholder || '').toLowerCase();
+            if (val.length >= 2) {
+                if (ph.includes('电话') || input.type === 'tel' || ph.includes('起点') || ph.includes('出发') || ph.includes('地址') || ph.includes('姓名')) {
+                    hasInput = true;
+                }
             }
         });
 
-        if (allEmpty) {
-            log('🧹 检测到表单已清空(派单完成)，恢复默认 [AI智能] 模式和默认距离', 'success');
+        if (!hasInput) {
+            log('🧹 检测到表单已清空(派单完成/重置)，恢复默认 [AI智能] 模式和默认距离', 'success');
+            window._gjDispatchAutoSwitched = false;
 
             // 1. 点击 'AI智能'
-            const spans = document.querySelectorAll('span.el-radio-button__inner, span.el-radio__label, span');
-            for (let span of spans) {
-                if (span.textContent.trim() === 'AI智能') {
+            let clickedAi = false;
+            document.querySelectorAll('span, label, button, .el-radio-button__inner').forEach(span => {
+                if (!clickedAi && span.textContent.trim() === 'AI智能') {
                     span.click();
-                    break;
+                    clickedAi = true;
                 }
-            }
+            });
 
             // 2. 恢复默认距离
             setTimeout(() => {
                 applyDistanceByTime();
-            }, 500);
-
-            window._gjDispatchAutoSwitched = false;
+            }, 800);
         }
     };
 
