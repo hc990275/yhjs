@@ -1284,20 +1284,22 @@
         document.querySelectorAll('.el-table__empty-text, .el-table__empty-block, td, div').forEach(el => {
             const txt = el.textContent || '';
             if (txt.includes('暂无数据') || txt.includes('暂无服务人员')) {
-                // 确保是在主页面，不是助手自己的UI
                 if (!el.closest('#gj-widget-main') && !el.closest('#gj-widget-addr')) {
                     noData = true;
                 }
             }
         });
 
-        // 取消单纯类名限制，寻找任意输入电话、起点等内容的输入框
         let hasInput = false;
         document.querySelectorAll('input').forEach(input => {
+            // 需要忽略系统隐藏的或不相关的输入框
+            if (input.type === 'hidden' || input.style.display === 'none') return;
             const val = input.value ? input.value.trim() : '';
-            const ph = (input.placeholder || '').toLowerCase();
             if (val.length >= 2) {
-                if (ph.includes('电话') || input.type === 'tel' || ph.includes('起点') || ph.includes('出发') || ph.includes('地址') || ph.includes('姓名') || ph.includes('搜索')) {
+                // 如果父级包含这些关键词也算
+                const parentText = (input.closest('.el-form-item') ? input.closest('.el-form-item').textContent : '').toLowerCase();
+                const ph = (input.placeholder || '').toLowerCase();
+                if (ph.includes('电话') || input.type === 'tel' || ph.includes('起点') || ph.includes('地址') || parentText.includes('电话') || parentText.includes('起点')) {
                     hasInput = true;
                 }
             }
@@ -1307,7 +1309,6 @@
             log('👀 检测到暂无司机数据，执行自动改派: [普通指派] + [20公里] + [实际距离]', 'warning');
             window._gjDispatchAutoSwitched = true;
 
-            // 1. 点击 '普通指派'
             let clickedNormal = false;
             document.querySelectorAll('span, label, button, .el-radio-button__inner').forEach(span => {
                 if (!clickedNormal && span.textContent.trim() === '普通指派') {
@@ -1316,7 +1317,6 @@
                 }
             });
 
-            // 2. 延迟拉动 slider 到 20 并点击实际距离
             setTimeout(() => {
                 setSliderValue(20);
                 setTimeout(() => {
@@ -1335,23 +1335,24 @@
     const watchDispatchFormClear = () => {
         if (!isDispatchPage() || !window._gjDispatchAutoSwitched) return;
 
-        // 检查是否派单完成 (关键输入框全被清空)
         let hasInput = false;
         document.querySelectorAll('input').forEach(input => {
+            if (input.type === 'hidden' || input.style.display === 'none') return;
             const val = input.value ? input.value.trim() : '';
-            const ph = (input.placeholder || '').toLowerCase();
             if (val.length >= 2) {
-                if (ph.includes('电话') || input.type === 'tel' || ph.includes('起点') || ph.includes('出发') || ph.includes('地址') || ph.includes('姓名')) {
+                const parentText = (input.closest('.el-form-item') ? input.closest('.el-form-item').textContent : '').toLowerCase();
+                const ph = (input.placeholder || '').toLowerCase();
+                if (ph.includes('电话') || input.type === 'tel' || ph.includes('起点') || ph.includes('地址') || parentText.includes('电话') || parentText.includes('起点')) {
                     hasInput = true;
                 }
             }
         });
 
+        // 只有当所有的关键输入框（电话、起点等）都为空，且之前改派过，才判定为派单并复原
         if (!hasInput) {
-            log('🧹 检测到表单已清空(派单完成/重置)，恢复默认 [AI智能] 模式和默认距离', 'success');
+            log('🧹 检测到关键表单已清空，且存在曾改派记录，开始恢复 [AI智能] 模式和默认距离', 'success');
             window._gjDispatchAutoSwitched = false;
 
-            // 1. 点击 'AI智能'
             let clickedAi = false;
             document.querySelectorAll('span, label, button, .el-radio-button__inner').forEach(span => {
                 if (!clickedAi && span.textContent.trim() === 'AI智能') {
@@ -1360,7 +1361,6 @@
                 }
             });
 
-            // 2. 恢复默认距离
             setTimeout(() => {
                 applyDistanceByTime();
             }, 800);
