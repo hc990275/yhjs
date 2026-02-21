@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.8.0 独立刷新版)
+// @name          代驾调度系统助手 (v15.9.0 独立刷新版)
 // @namespace     http://tampermonkey.net/
-// @version       15.8.0
-// @description   【v15.8.0】新增：指派页调试按钮-输入手机号后显示，查询总下单量，为0时自动备注"拉群"。
+// @version       15.9.0
+// @description   【v15.9.0】新增：指派页无司机时自动切换普通指派、拉爆20km搜索并点实际距离；派单后自动复原。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -1277,6 +1277,86 @@
         }
     };
 
+    const checkNoDriverAndSwitch = () => {
+        if (!isDispatchPage() || window._gjDispatchAutoSwitched) return;
+
+        let noData = false;
+        document.querySelectorAll('.el-table__empty-text, .el-table__empty-block').forEach(el => {
+            if (el.innerText.includes('暂无数据') || el.innerText.includes('暂无服务人员')) noData = true;
+        });
+
+        // 确保有输入内容（地址或电话非空）才判定为正在寻找司机
+        let hasInput = false;
+        document.querySelectorAll('.el-form-item input[type="text"], .el-form-item input[type="tel"]').forEach(input => {
+            if (input.value && input.value.trim().length > 0) hasInput = true;
+        });
+
+        if (noData && hasInput) {
+            log('👀 检测到暂无司机数据，执行自动改派: [普通指派] + [20公里] + [实际距离]', 'warning');
+
+            // 1. 点击 '普通指派'
+            const spans = document.querySelectorAll('span.el-radio-button__inner, span.el-radio__label, span');
+            for (let span of spans) {
+                if (span.textContent.trim() === '普通指派') {
+                    span.click();
+                    break;
+                }
+            }
+
+            // 2. 延迟拉动 slider 到 20 并点击实际距离
+            setTimeout(() => {
+                setSliderValue(20);
+                setTimeout(() => {
+                    const btns = document.querySelectorAll('button, span, th');
+                    for (let btn of btns) {
+                        if (btn.textContent.trim() === '实际距离') {
+                            btn.click();
+                            break;
+                        }
+                    }
+                }, 500);
+            }, 500);
+
+            window._gjDispatchAutoSwitched = true;
+        }
+    };
+
+    const watchDispatchFormClear = () => {
+        if (!isDispatchPage() || !window._gjDispatchAutoSwitched) return;
+
+        // 检查是否派单完成 (输入框被清空)
+        let allEmpty = true;
+        const inputs = document.querySelectorAll('.el-form-item input[type="text"], .el-form-item input[type="tel"]');
+        if (inputs.length === 0) return;
+        inputs.forEach(input => {
+            const ph = (input.placeholder || '');
+            // 只关注 用户电话、姓名、地址 等关键输入框
+            if ((ph.includes('电话') || ph.includes('地址') || ph.includes('姓名')) && input.value && input.value.trim().length > 0) {
+                allEmpty = false;
+            }
+        });
+
+        if (allEmpty) {
+            log('🧹 检测到表单已清空(派单完成)，恢复默认 [AI智能] 模式和默认距离', 'success');
+
+            // 1. 点击 'AI智能'
+            const spans = document.querySelectorAll('span.el-radio-button__inner, span.el-radio__label, span');
+            for (let span of spans) {
+                if (span.textContent.trim() === 'AI智能') {
+                    span.click();
+                    break;
+                }
+            }
+
+            // 2. 恢复默认距离
+            setTimeout(() => {
+                applyDistanceByTime();
+            }, 500);
+
+            window._gjDispatchAutoSwitched = false;
+        }
+    };
+
     const bindEvents = () => {
         document.getElementById('btn-cloud-setting')?.addEventListener('click', setupCloudConfig);
         document.getElementById('btn-cloud-pull')?.addEventListener('click', () => pullFromCloud(false));
@@ -1345,6 +1425,14 @@
                 });
             };
             setTimeout(watchDispatchPhone, 1500);
+
+            // 循环检测司机数据和表单重置状态
+            if (window._gjDispatchLoop) clearInterval(window._gjDispatchLoop);
+            window._gjDispatchLoop = setInterval(() => {
+                if (!isDispatchPage()) return;
+                checkNoDriverAndSwitch();
+                watchDispatchFormClear();
+            }, 1000);
         }
 
         if (document.getElementById('gj-btn-toggle')) {
