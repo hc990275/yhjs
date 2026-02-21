@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.7.0 独立刷新版)
+// @name          代驾调度系统助手 (v15.8.0 独立刷新版)
 // @namespace     http://tampermonkey.net/
-// @version       15.7.0
-// @description   【v15.7.0】新增：1.独立刷新控制(司机/订单页面互不影响)；2.头部启停按钮；3.自动消单功能。
+// @version       15.8.0
+// @description   【v15.8.0】新增：指派页调试按钮-输入手机号后显示，查询总下单量，为0时自动备注"拉群"。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -1190,6 +1190,8 @@
                 <div class="gj-group">
                     <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
                     <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
+                    <button id="btn-check-new-user" class="gj-btn" style="margin-top:8px;background:#fff3cd;color:#856404;border:1px solid #ffc107;display:none;">🔍 查询是否新客户</button>
+                    <div id="gj-user-check-result" style="display:none; margin-top:6px; font-size:12px; text-align:center; padding:4px; border-radius:4px;"></div>
                 </div>
                 <div class="gj-divider">
                     <span class="gj-label-sm">AI 距离 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</span>
@@ -1232,6 +1234,48 @@
         }
     };
 
+    const queryAndMarkNewUser = () => {
+        let totalOrders = null;
+        const thCells = document.querySelectorAll('th');
+        let totalOrderColIdx = -1;
+        thCells.forEach((th, idx) => {
+            if (th.innerText.includes('总下单')) totalOrderColIdx = idx;
+        });
+
+        if (totalOrderColIdx >= 0) {
+            const rows = document.querySelectorAll('.el-table__body-wrapper .el-table__row');
+            if (rows.length > 0) {
+                const targetCell = rows[0].cells[totalOrderColIdx];
+                if (targetCell) totalOrders = parseInt(targetCell.innerText.trim()) || 0;
+            }
+        }
+
+        const resultDiv = document.getElementById('gj-user-check-result');
+        if (totalOrders === null) {
+            if (resultDiv) { resultDiv.style.display = 'block'; resultDiv.style.background = '#fff3cd'; resultDiv.style.color = '#856404'; resultDiv.textContent = '⚠️ 未找到了总下单量，请先点击"收用户信息"'; }
+            return;
+        }
+
+        if (totalOrders === 0) {
+            const remarkTextareas = document.querySelectorAll('textarea');
+            let filled = false;
+            remarkTextareas.forEach(ta => {
+                const label = ta.closest('.el-form-item')?.querySelector('.el-form-item__label');
+                if ((label && label.textContent.includes('备注')) || (ta.placeholder || '').includes('备注')) {
+                    if (!ta.value.includes('拉群')) {
+                        ta.value = ta.value ? ta.value + ' 拉群' : '拉群';
+                        ta.dispatchEvent(new Event('input', { bubbles: true }));
+                        ta.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                    filled = true;
+                }
+            });
+            if (resultDiv) { resultDiv.style.display = 'block'; resultDiv.style.background = '#d4edda'; resultDiv.style.color = '#155724'; resultDiv.textContent = `✅ 新客户！总下单量=0，${filled ? '已自动备注"拉群"' : '请手动备注"拉群"'}`; }
+        } else {
+            if (resultDiv) { resultDiv.style.display = 'block'; resultDiv.style.background = '#e2e3e5'; resultDiv.style.color = '#383d41'; resultDiv.textContent = `📊 老客户，历史下单 ${totalOrders} 次`; }
+        }
+    };
+
     const bindEvents = () => {
         document.getElementById('btn-cloud-setting')?.addEventListener('click', setupCloudConfig);
         document.getElementById('btn-cloud-pull')?.addEventListener('click', () => pullFromCloud(false));
@@ -1252,6 +1296,22 @@
             document.getElementById('btn-sync-cloud')?.addEventListener('click', () => {
                 fetchOnlineBlacklist(false);
             });
+
+            const watchDispatchPhone = () => {
+                const phoneInputs = document.querySelectorAll('input');
+                phoneInputs.forEach(el => {
+                    const ph = (el.placeholder || '');
+                    if (ph.includes('用户电话') || ph.includes('电话')) {
+                        el.addEventListener('input', () => {
+                            const btn = document.getElementById('btn-check-new-user');
+                            if (btn) btn.style.display = el.value.trim() ? 'flex' : 'none';
+                        });
+                    }
+                });
+            };
+            setTimeout(watchDispatchPhone, 1500);
+
+            document.getElementById('btn-check-new-user')?.addEventListener('click', queryAndMarkNewUser);
         }
 
         if (document.getElementById('gj-btn-toggle')) {
