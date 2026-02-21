@@ -1190,7 +1190,6 @@
                 <div class="gj-group">
                     <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
                     <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
-                    <button id="btn-check-new-user" class="gj-btn" style="margin-top:8px;background:#fff3cd;color:#856404;border:1px solid #ffc107;display:none;">🔍 查询是否新客户</button>
                     <div id="gj-user-check-result" style="display:none; margin-top:6px; font-size:12px; text-align:center; padding:4px; border-radius:4px;"></div>
                 </div>
                 <div class="gj-divider">
@@ -1252,7 +1251,9 @@
 
         const resultDiv = document.getElementById('gj-user-check-result');
         if (totalOrders === null) {
-            if (resultDiv) { resultDiv.style.display = 'block'; resultDiv.style.background = '#fff3cd'; resultDiv.style.color = '#856404'; resultDiv.textContent = '⚠️ 未找到了总下单量，请先点击"收用户信息"'; }
+            // 自动模式下找不到时不显示黄色警告，避免频繁打扰
+            // 但是如果之前有结果需要清空或者隐藏
+            if (resultDiv) { resultDiv.style.display = 'none'; }
             return;
         }
 
@@ -1297,21 +1298,53 @@
                 fetchOnlineBlacklist(false);
             });
 
+            // 回收旧的 observer
+            if (window._gjDispatchObserver) {
+                window._gjDispatchObserver.disconnect();
+                window._gjDispatchObserver = null;
+            }
+
+            // 自动检测 "收用户信息" 生成的用户表格
+            const targetNode = document.body;
+            const config = { childList: true, subtree: true };
+            let autoCheckTimeout = null;
+
+            window._gjDispatchObserver = new MutationObserver((mutationsList) => {
+                if (!isDispatchPage()) return;
+                let hasTableChange = false;
+                for (let mutation of mutationsList) {
+                    if (mutation.type === 'childList') {
+                        // 寻找新增的表格或行
+                        if (mutation.target.classList &&
+                            (mutation.target.classList.contains('el-table__row') ||
+                                mutation.target.nodeName === 'TBODY' ||
+                                mutation.target.classList.contains('el-table__body-wrapper'))) {
+                            hasTableChange = true;
+                            break;
+                        }
+                    }
+                }
+                if (hasTableChange) {
+                    if (autoCheckTimeout) clearTimeout(autoCheckTimeout);
+                    autoCheckTimeout = setTimeout(() => { queryAndMarkNewUser(); }, 500);
+                }
+            });
+            window._gjDispatchObserver.observe(targetNode, config);
+
             const watchDispatchPhone = () => {
                 const phoneInputs = document.querySelectorAll('input');
                 phoneInputs.forEach(el => {
                     const ph = (el.placeholder || '');
                     if (ph.includes('用户电话') || ph.includes('电话')) {
                         el.addEventListener('input', () => {
-                            const btn = document.getElementById('btn-check-new-user');
-                            if (btn) btn.style.display = el.value.trim() ? 'flex' : 'none';
+                            // 当输入内容改变时，清空上一次的查询结果，避免残留
+                            const resultDiv = document.getElementById('gj-user-check-result');
+                            if (resultDiv) resultDiv.style.display = 'none';
                         });
                     }
                 });
             };
             setTimeout(watchDispatchPhone, 1500);
-
-            document.getElementById('btn-check-new-user')?.addEventListener('click', queryAndMarkNewUser);
         }
 
         if (document.getElementById('gj-btn-toggle')) {
