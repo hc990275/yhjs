@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.9.1 独立刷新版)
+// @name          代驾调度系统助手 (v15.9.2 独立刷新版)
 // @namespace     http://tampermonkey.net/
-// @version       15.9.1
-// @description   【v15.9.1】新增：自动备注开关（默认不开启），开启后新客户才会自动备注“拉群”。
+// @version       15.9.2
+// @description   【v15.9.2】新增：抓取按钮和调试选项仅在订单管理页面显示，避免干扰。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -1151,7 +1151,7 @@
                 
                 <button id="gj-btn-toggle" class="gj-btn ${btnClass}">${btnText}</button>
                 
-                <button id="gj-btn-scrape" class="gj-btn" style="margin-top:8px; ${scrapeStyle}">${scrapeText}</button>
+                ${isOrderPage() ? `<button id="gj-btn-scrape" class="gj-btn" style="margin-top:8px; ${scrapeStyle}">${scrapeText}</button>` : ''}
 
                 <div class="gj-control-row">
                     <span style="color:var(--gj-text-sec);font-size:12px;">刷新间隔</span>
@@ -1161,12 +1161,9 @@
                     </div>
                 </div>
 
+                ${isOrderPage() ? `
                 <!-- [新增] 调试与消单配置 -->
                 <div class="gj-control-row" style="margin-top:8px;border-top:1px dashed var(--gj-border);padding-top:8px; flex-wrap:wrap; gap:4px;">
-                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;margin-right:8px;" title="新客户自动备注拉群">
-                        <input type="checkbox" id="gj-chk-auto-remark" ${state.autoRemark ? 'checked' : ''} style="margin-right:4px;">
-                        📝 自动备注
-                     </label>
                      <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;margin-right:8px;">
                         <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
                         🐛 调试模式
@@ -1177,6 +1174,7 @@
                      </div>
                 </div>
                 ${debugPanelHtml}
+                ` : ''}
 
                 <div class="gj-control-row" style="margin-top:10px; border-top:1px dashed var(--gj-border); padding-top:10px; justify-content: space-around;">
                     <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
@@ -1196,6 +1194,13 @@
                     <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
                     <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
                     <div id="gj-user-check-result" style="display:none; margin-top:6px; font-size:12px; text-align:center; padding:4px; border-radius:4px;"></div>
+                </div>
+                <!-- [移动] 自动备注开关到指派页面 -->
+                <div class="gj-control-row" style="margin-top:6px; justify-content:center;">
+                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;color:var(--gj-text-sec);" title="新客户自动备注拉群">
+                        <input type="checkbox" id="gj-chk-auto-remark" ${state.autoRemark ? 'checked' : ''} style="margin-right:4px;">
+                        📝 新客户自动备注"拉群"
+                     </label>
                 </div>
                 <div class="gj-divider">
                     <span class="gj-label-sm">AI 距离 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</span>
@@ -1452,6 +1457,15 @@
             };
             setTimeout(watchDispatchPhone, 1500);
 
+            // [新增/移动] 自动备注切换绑定 (指派页面)
+            const chkAutoRemark = document.getElementById('gj-chk-auto-remark');
+            if (chkAutoRemark) {
+                chkAutoRemark.addEventListener('change', (e) => {
+                    state.autoRemark = e.target.checked;
+                    GM_setValue('autoRemark', state.autoRemark);
+                });
+            }
+
             // 循环检测司机数据和表单重置状态
             if (window._gjDispatchLoop) clearInterval(window._gjDispatchLoop);
             window._gjDispatchLoop = setInterval(() => {
@@ -1495,15 +1509,6 @@
                     performAction(); startCountdown();
                 }
             });
-
-            // [新增] 自动备注切换
-            const chkAutoRemark = document.getElementById('gj-chk-auto-remark');
-            if (chkAutoRemark) {
-                chkAutoRemark.addEventListener('change', (e) => {
-                    state.autoRemark = e.target.checked;
-                    GM_setValue('autoRemark', state.autoRemark);
-                });
-            }
 
             // [新增] 调试模式切换
             const chkDebug = document.getElementById('gj-chk-debug');
