@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.9.0 独立刷新版)
+// @name          代驾调度系统助手 (v15.9.1 独立刷新版)
 // @namespace     http://tampermonkey.net/
-// @version       15.9.0
-// @description   【v15.9.0】新增：指派页无司机时自动切换普通指派、拉爆20km搜索并点实际距离；派单后自动复原。
+// @version       15.9.1
+// @description   【v15.9.1】新增：自动备注开关（默认不开启），开启后新客户才会自动备注“拉群”。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -73,6 +73,7 @@
         manualPause: GM_getValue('manualPause', false),
         driverManualPause: GM_getValue('driverManualPause', false), // [新增] 司机调度独立暂停状态
         isScrapingEnabled: GM_getValue('scrapeEnabled', false),
+        autoRemark: GM_getValue('autoRemark', false), // [新增] 自动备注拉群
         debugMode: false, // [新增] 调试模式
         debugTimer: null,
 
@@ -1161,8 +1162,8 @@
                 </div>
 
                 <!-- [新增] 调试与消单配置 -->
-                <div class="gj-control-row" style="margin-top:8px;border-top:1px dashed var(--gj-border);padding-top:8px;">
-                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;">
+                <div class="gj-control-row" style="margin-top:8px;border-top:1px dashed var(--gj-border);padding-top:8px; flex-wrap:wrap; gap:4px;">
+                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;margin-right:8px;">
                         <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
                         🐛 调试模式
                      </label>
@@ -1191,6 +1192,13 @@
                     <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
                     <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
                     <div id="gj-user-check-result" style="display:none; margin-top:6px; font-size:12px; text-align:center; padding:4px; border-radius:4px;"></div>
+                </div>
+                <!-- [移动] 自动备注开关到指派页面 -->
+                <div class="gj-control-row" style="margin-top:6px; justify-content:center;">
+                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;color:var(--gj-text-sec);" title="新客户自动备注拉群">
+                        <input type="checkbox" id="gj-chk-auto-remark" ${state.autoRemark ? 'checked' : ''} style="margin-right:4px;">
+                        📝 新客户自动备注"拉群"
+                     </label>
                 </div>
                 <div class="gj-divider">
                     <span class="gj-label-sm">AI 距离 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</span>
@@ -1258,20 +1266,31 @@
         }
 
         if (totalOrders === 0) {
-            const remarkTextareas = document.querySelectorAll('textarea');
             let filled = false;
-            remarkTextareas.forEach(ta => {
-                const label = ta.closest('.el-form-item')?.querySelector('.el-form-item__label');
-                if ((label && label.textContent.includes('备注')) || (ta.placeholder || '').includes('备注')) {
-                    if (!ta.value.includes('拉群')) {
-                        ta.value = ta.value ? ta.value + ' 拉群' : '拉群';
-                        ta.dispatchEvent(new Event('input', { bubbles: true }));
-                        ta.dispatchEvent(new Event('change', { bubbles: true }));
+            if (state.autoRemark) {
+                const remarkTextareas = document.querySelectorAll('textarea');
+                remarkTextareas.forEach(ta => {
+                    const label = ta.closest('.el-form-item')?.querySelector('.el-form-item__label');
+                    if ((label && label.textContent.includes('备注')) || (ta.placeholder || '').includes('备注')) {
+                        if (!ta.value.includes('拉群')) {
+                            ta.value = ta.value ? ta.value + ' 拉群' : '拉群';
+                            ta.dispatchEvent(new Event('input', { bubbles: true }));
+                            ta.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                        filled = true;
                     }
-                    filled = true;
+                });
+            }
+            if (resultDiv) {
+                resultDiv.style.display = 'block';
+                resultDiv.style.background = '#d4edda';
+                resultDiv.style.color = '#155724';
+                if (state.autoRemark) {
+                    resultDiv.textContent = `✅ 新客户！总下单量=0，${filled ? '已自动备注"拉群"' : '未找到备注输入框'}`;
+                } else {
+                    resultDiv.textContent = `✅ 新客户！总下单量=0，请手动备注"拉群"`;
                 }
-            });
-            if (resultDiv) { resultDiv.style.display = 'block'; resultDiv.style.background = '#d4edda'; resultDiv.style.color = '#155724'; resultDiv.textContent = `✅ 新客户！总下单量=0，${filled ? '已自动备注"拉群"' : '请手动备注"拉群"'}`; }
+            }
         } else {
             if (resultDiv) { resultDiv.style.display = 'block'; resultDiv.style.background = '#e2e3e5'; resultDiv.style.color = '#383d41'; resultDiv.textContent = `📊 老客户，历史下单 ${totalOrders} 次`; }
         }
@@ -1284,20 +1303,22 @@
         document.querySelectorAll('.el-table__empty-text, .el-table__empty-block, td, div').forEach(el => {
             const txt = el.textContent || '';
             if (txt.includes('暂无数据') || txt.includes('暂无服务人员')) {
-                // 确保是在主页面，不是助手自己的UI
                 if (!el.closest('#gj-widget-main') && !el.closest('#gj-widget-addr')) {
                     noData = true;
                 }
             }
         });
 
-        // 取消单纯类名限制，寻找任意输入电话、起点等内容的输入框
         let hasInput = false;
         document.querySelectorAll('input').forEach(input => {
+            // 需要忽略系统隐藏的或不相关的输入框
+            if (input.type === 'hidden' || input.style.display === 'none') return;
             const val = input.value ? input.value.trim() : '';
-            const ph = (input.placeholder || '').toLowerCase();
             if (val.length >= 2) {
-                if (ph.includes('电话') || input.type === 'tel' || ph.includes('起点') || ph.includes('出发') || ph.includes('地址') || ph.includes('姓名') || ph.includes('搜索')) {
+                // 如果父级包含这些关键词也算
+                const parentText = (input.closest('.el-form-item') ? input.closest('.el-form-item').textContent : '').toLowerCase();
+                const ph = (input.placeholder || '').toLowerCase();
+                if (ph.includes('电话') || input.type === 'tel' || ph.includes('起点') || ph.includes('地址') || parentText.includes('电话') || parentText.includes('起点')) {
                     hasInput = true;
                 }
             }
@@ -1307,7 +1328,6 @@
             log('👀 检测到暂无司机数据，执行自动改派: [普通指派] + [20公里] + [实际距离]', 'warning');
             window._gjDispatchAutoSwitched = true;
 
-            // 1. 点击 '普通指派'
             let clickedNormal = false;
             document.querySelectorAll('span, label, button, .el-radio-button__inner').forEach(span => {
                 if (!clickedNormal && span.textContent.trim() === '普通指派') {
@@ -1316,7 +1336,6 @@
                 }
             });
 
-            // 2. 延迟拉动 slider 到 20 并点击实际距离
             setTimeout(() => {
                 setSliderValue(20);
                 setTimeout(() => {
@@ -1335,23 +1354,24 @@
     const watchDispatchFormClear = () => {
         if (!isDispatchPage() || !window._gjDispatchAutoSwitched) return;
 
-        // 检查是否派单完成 (关键输入框全被清空)
         let hasInput = false;
         document.querySelectorAll('input').forEach(input => {
+            if (input.type === 'hidden' || input.style.display === 'none') return;
             const val = input.value ? input.value.trim() : '';
-            const ph = (input.placeholder || '').toLowerCase();
             if (val.length >= 2) {
-                if (ph.includes('电话') || input.type === 'tel' || ph.includes('起点') || ph.includes('出发') || ph.includes('地址') || ph.includes('姓名')) {
+                const parentText = (input.closest('.el-form-item') ? input.closest('.el-form-item').textContent : '').toLowerCase();
+                const ph = (input.placeholder || '').toLowerCase();
+                if (ph.includes('电话') || input.type === 'tel' || ph.includes('起点') || ph.includes('地址') || parentText.includes('电话') || parentText.includes('起点')) {
                     hasInput = true;
                 }
             }
         });
 
+        // 只有当所有的关键输入框（电话、起点等）都为空，且之前改派过，才判定为派单并复原
         if (!hasInput) {
-            log('🧹 检测到表单已清空(派单完成/重置)，恢复默认 [AI智能] 模式和默认距离', 'success');
+            log('🧹 检测到关键表单已清空，且存在曾改派记录，开始恢复 [AI智能] 模式和默认距离', 'success');
             window._gjDispatchAutoSwitched = false;
 
-            // 1. 点击 'AI智能'
             let clickedAi = false;
             document.querySelectorAll('span, label, button, .el-radio-button__inner').forEach(span => {
                 if (!clickedAi && span.textContent.trim() === 'AI智能') {
@@ -1360,7 +1380,6 @@
                 }
             });
 
-            // 2. 恢复默认距离
             setTimeout(() => {
                 applyDistanceByTime();
             }, 800);
@@ -1435,6 +1454,15 @@
                 });
             };
             setTimeout(watchDispatchPhone, 1500);
+
+            // [新增/移动] 自动备注切换绑定 (指派页面)
+            const chkAutoRemark = document.getElementById('gj-chk-auto-remark');
+            if (chkAutoRemark) {
+                chkAutoRemark.addEventListener('change', (e) => {
+                    state.autoRemark = e.target.checked;
+                    GM_setValue('autoRemark', state.autoRemark);
+                });
+            }
 
             // 循环检测司机数据和表单重置状态
             if (window._gjDispatchLoop) clearInterval(window._gjDispatchLoop);
