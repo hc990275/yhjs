@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.6.9 终极修正版)
+// @name          代驾调度系统助手 (v15.9.0 独立刷新版)
 // @namespace     http://tampermonkey.net/
-// @version       15.6.9
-// @description   【v15.6.9】修复：1.移除地址长度限制(解决本地数据变少)；2.订单页已存数据不再重复抓取；3.下载后可选择反向清洗云端数据，确保数量一致。
+// @version       15.9.0
+// @description   【v15.9.0】新增：指派页无司机时自动切换普通指派、拉爆20km搜索并点实际距离；派单后自动复原。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -24,10 +24,12 @@
     const CONFIG = {
         // 【抓取与排除配置】
         SCRAPE: {
-            PHONE_COL_INDEX: 13,  // 第13列
-            ADDR_COL_INDEX: 7,    // 第7列
-            EXCLUDE_COL_INDEX: 6, // 第6列
-            EXCLUDE_NAMES: ['腾讯出行', '盛大大地模式']
+            PHONE_COL_INDEX: 3,   // [左] 乘客电话 (第3列)
+            ADDR_COL_INDEX: 7,    // [主] 乘客起点 (第7列)
+            EXCLUDE_COL_INDEX: 2,     // [左] 订单来源 (第2列)
+            EXCLUDE_NAMES: ['新腾讯出行', '盛大', '腾讯出行', '盛大大地模式'],
+            CANCEL_COL_INDEX: 1,  // [左] 订单状态 (第1列)
+            CANCEL_KEYWORDS: ['乘客取消', '后台销单'] // 消单关键词
         },
         ORDER: {
             HASH: '#/substituteDrivingOrder',
@@ -69,7 +71,10 @@
         currentHash: window.location.hash,
         isCollapsed: GM_getValue('uiCollapsed', false),
         manualPause: GM_getValue('manualPause', false),
+        driverManualPause: GM_getValue('driverManualPause', false), // [新增] 司机调度独立暂停状态
         isScrapingEnabled: GM_getValue('scrapeEnabled', false),
+        debugMode: false, // [新增] 调试模式
+        debugTimer: null,
 
         refreshInterval: 20,
         countdown: 0,
@@ -81,6 +86,7 @@
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
         layout: safeParse('uiLayout', '{"width": 280, "height": 350}'),
         colWidth: parseInt(GM_getValue('addrColWidth', 80)),
+        cancelColIndex: parseInt(GM_getValue('cancelColIndex', -1)), // [新增] 消单列号配置
 
         db: {
             addrs: safeParse('dbAddrs', '[]'),
@@ -167,6 +173,13 @@
     const isDispatchPage = () => state.currentHash.includes(CONFIG.DISPATCH.HASH);
     const isDriverPage = () => state.currentHash.includes(CONFIG.DRIVER.HASH);
 
+    // [新增] 统一判断当前页面是否暂停
+    const isPaused = () => {
+        if (isOrderPage()) return state.manualPause;
+        if (isDriverPage()) return state.driverManualPause;
+        return false;
+    };
+
     // ==============================================
     //        核心修正：防重复抓取 + 本地存储
     // ==============================================
@@ -208,25 +221,82 @@
         const idxAddr = CONFIG.SCRAPE.ADDR_COL_INDEX;
         const excludeKeywords = CONFIG.SCRAPE.EXCLUDE_NAMES || [];
 
-        const rows = document.querySelectorAll('.el-table__body-wrapper .el-table__row');
-        let newCount = 0;
-        rows.forEach(row => {
-            const cells = row.querySelectorAll('td');
-            if (cells.length <= Math.max(idxExclude, idxPhone, idxAddr)) return;
+        // [Fix] 同时获取主表格与固定列表格的行，用于合并数据
+        const mainRows = Array.from(document.querySelectorAll('.el-table__body-wrapper .el-table__row'));
+        const fixedRows = Array.from(document.querySelectorAll('.el-table__fixed .el-table__fixed-body-wrapper .el-table__row'));
+        const fixedRightRows = Array.from(document.querySelectorAll('.el-table__fixed-right .el-table__fixed-body-wrapper .el-table__row'));
 
-            // 1. 排除逻辑
-            if (idxExclude !== null && cells[idxExclude]) {
-                const checkText = cells[idxExclude].innerText.trim();
-                const hit = excludeKeywords.find(kw => checkText.includes(kw));
-                if (hit) return;
+        let newCount = 0;
+
+        // 辅助函数：获取某行某列的文本（优先取主表，空则取固定表）
+        const getCellText = (rowIndex, colIndex) => {
+            let text = '';
+            // 1. 尝试主表
+            if (mainRows[rowIndex] && mainRows[rowIndex].cells[colIndex]) {
+                text = mainRows[rowIndex].cells[colIndex].innerText.trim();
+            }
+            // 2. 如果为空，尝试左侧固定表
+            if (!text && fixedRows[rowIndex] && fixedRows[rowIndex].cells[colIndex]) {
+                text = fixedRows[rowIndex].cells[colIndex].innerText.trim();
+            }
+            // 3. 如果仍为空，尝试右侧固定表
+            // 注意：右侧固定表的 colIndex 可能不对应，ElementUI通常是克隆对应列
+            // 但也可能是按 visbile columns 排列。这里假设索引一致或能通过 querySelector 找到。
+            // 简单起见，如果 colIndex 很大，尝试右侧表对应的“倒数”索引？
+            // ElementUI 右侧固定表通常包含完整的 tr，但只显示部分 td。
+            // 直接尝试索引读取。
+            if (!text && fixedRightRows[rowIndex] && fixedRightRows[rowIndex].cells[colIndex]) {
+                text = fixedRightRows[rowIndex].cells[colIndex].innerText.trim();
+            }
+            return text;
+        };
+
+        const getCellNumber = (rowIndex, colIndex) => {
+            const txt = getCellText(rowIndex, colIndex);
+            return txt.replace(/\D/g, '');
+        };
+
+        mainRows.forEach((row, rowIndex) => {
+            // 使用 getCellText 获取关键数据
+
+            // 0. [新增] 消单自动剔除
+            // 优先使用 CONFIG 配置，如果没有配置则使用手动设置
+            const idxCancel = CONFIG.SCRAPE.CANCEL_COL_INDEX !== null ? CONFIG.SCRAPE.CANCEL_COL_INDEX : state.cancelColIndex;
+            if (idxCancel !== -1) {
+                const statusText = getCellText(rowIndex, idxCancel);
+                const cancelKeywords = CONFIG.SCRAPE.CANCEL_KEYWORDS || ['乘客取消', '后台销单'];
+                if (cancelKeywords.some(kw => statusText.includes(kw))) {
+                    if (idxPhone !== null) {
+                        const rawPhone = getCellNumber(rowIndex, idxPhone);
+                        if (/^1\d{10}$/.test(rawPhone)) {
+                            removeFromDB('phone', rawPhone);
+                        }
+                    }
+                    return; // 消单行不进行后续抓取
+                }
+            }
+
+            // 1. 排除逻辑 (来源过滤)
+            if (idxExclude !== null) {
+                const checkText = getCellText(rowIndex, idxExclude);
+                const excludeKeywords = CONFIG.SCRAPE.EXCLUDE_NAMES || [];
+                // 检查是否包含屏蔽关键词
+                if (excludeKeywords.some(kw => checkText.includes(kw))) {
+                    // [新增] 如果是屏蔽来源，尝试从库中删除该行地址（如果之前误录入）
+                    if (idxAddr !== null) {
+                        const addrToRemove = getCellText(rowIndex, idxAddr);
+                        if (addrToRemove && addrToRemove.length > 1) {
+                            removeFromDB('address', addrToRemove);
+                        }
+                    }
+                    return; // 跳过此行，不录入
+                }
             }
 
             // 2. 抓取电话
-            if (idxPhone !== null && cells[idxPhone]) {
-                const rawText = cells[idxPhone].innerText.trim();
-                const cleanNum = rawText.replace(/\D/g, '');
+            if (idxPhone !== null) {
+                const cleanNum = getCellNumber(rowIndex, idxPhone);
                 if (/^1\d{10}$/.test(cleanNum)) {
-                    // 【防重复核心】只有本地库不存在时才添加
                     if (!state.db.phones.includes(cleanNum)) {
                         if (addToDB('phone', cleanNum, idxPhone)) newCount++;
                     }
@@ -234,13 +304,12 @@
             }
 
             // 3. 抓取地址
-            if (idxAddr !== null && cells[idxAddr]) {
-                const addrText = cells[idxAddr].innerText.trim();
+            if (idxAddr !== null) {
+                const addrText = getCellText(rowIndex, idxAddr);
                 if (addrText && addrText.length > 1) {
                     const blockers = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s);
                     if (!blockers.some(b => addrText.includes(b))) {
                         if (!/^\d{4}-\d{2}-\d{2}/.test(addrText)) {
-                            // 【防重复核心】只有本地库不存在时才添加
                             if (!state.db.addrs.includes(addrText)) {
                                 if (addToDB('address', addrText, idxAddr)) newCount++;
                             }
@@ -250,6 +319,56 @@
             }
         });
         if (newCount > 0) updateListsUI();
+
+        // 4. [修改] 调试模式：显示合并后的列信息
+        if (state.debugMode) {
+            debugRowInfo(mainRows, fixedRows, fixedRightRows);
+        }
+    };
+
+    // [修改] 调试列信息 (接受所有表引用)
+    const debugRowInfo = (mainRows, fixedRows, fixedRightRows) => {
+        if (!mainRows || mainRows.length === 0) return;
+        const rowIndex = 0; // 只看第一行
+
+        // 找出最大的列数
+        let maxCols = 0;
+        if (mainRows[0]) maxCols = Math.max(maxCols, mainRows[0].cells.length);
+        if (fixedRows[0]) maxCols = Math.max(maxCols, fixedRows[0].cells.length);
+
+        let debugText = `=== 🛠️ 调试模式: 综合行数据 (Index 0) ===\n`;
+
+        for (let i = 0; i < maxCols; i++) {
+            let parts = [];
+            // 主表
+            if (mainRows[0] && mainRows[0].cells[i]) {
+                const txt = mainRows[0].cells[i].innerText.replace(/[\r\n]+/g, ' ').trim();
+                if (txt) parts.push(`[主]${txt}`);
+            }
+            // 左固定
+            if (fixedRows[0] && fixedRows[0].cells[i]) {
+                const txt = fixedRows[0].cells[i].innerText.replace(/[\r\n]+/g, ' ').trim();
+                if (txt) parts.push(`[左]${txt}`);
+            }
+            // 右固定
+            if (fixedRightRows[0] && fixedRightRows[0].cells[i]) {
+                const txt = fixedRightRows[0].cells[i].innerText.replace(/[\r\n]+/g, ' ').trim();
+                if (txt) parts.push(`[右]${txt}`);
+            }
+
+            if (parts.length > 0) {
+                debugText += `[列 ${i}]: ${parts.join(' | ').substring(0, 30)}\n`;
+            } else {
+                // debugText += `[列 ${i}]: (空)\n`; // 可选：不显示空列以减少干扰
+            }
+        }
+
+        const debugPanel = document.getElementById('gj-debug-console');
+        if (debugPanel) {
+            debugPanel.textContent = debugText;
+        } else {
+            console.log(debugText);
+        }
     };
 
     // ==============================================
@@ -293,6 +412,21 @@
             log(`🆕 [新录入] ${type === 'address' ? '地址' : '电话'}: ${value}`, 'success');
         }
         return true;
+    };
+
+    // [新增] 从本地库移除
+    const removeFromDB = (type, value) => {
+        if (!value) return;
+        const storageKey = type === 'address' ? 'dbAddrs' : 'dbPhones';
+        const list = type === 'address' ? state.db.addrs : state.db.phones;
+
+        const idx = list.indexOf(value);
+        if (idx > -1) {
+            list.splice(idx, 1);
+            GM_setValue(storageKey, JSON.stringify(list));
+            log(`🗑️ [自动剔除] 发现消单/取消, 已移除${type === 'address' ? '地址' : '电话'}: ${value}`, 'warning');
+            updateListsUI();
+        }
     };
 
     // ==============================================
@@ -550,7 +684,7 @@
     };
     const stopRapidRefresh = () => { if (state.rapidTimer) { clearInterval(state.rapidTimer); state.rapidTimer = null; } };
     const performAction = () => {
-        if (state.manualPause) return;
+        if (isPaused()) return; // [修改] 使用统一暂停判断
         let selector = null;
         if (isOrderPage()) selector = CONFIG.ORDER.BUTTON_SELECTOR;
         else if (isDriverPage()) selector = CONFIG.DRIVER.BUTTON_SELECTOR;
@@ -568,7 +702,7 @@
         state.countdown = state.refreshInterval;
         updateStatusText();
         state.timerId = setInterval(() => {
-            if (state.manualPause) return;
+            if (isPaused()) return; // [修改] 使用统一暂停判断
             state.countdown--;
             updateStatusText();
             if (state.countdown <= 0) {
@@ -782,13 +916,35 @@
         const themeIcon = state.theme === 'light' ? '🌙' : '🌞';
         const toggleIcon = state.isCollapsed ? '➕' : '➖';
 
+        // [新增] 头部启停按钮 (仅在订单/司机管理页面显示)
+        let pauseHtml = '';
+        if (isOrderPage() || isDriverPage()) {
+            const isPausedPage = isPaused();
+            // isPausedPage=true (暂停中) => 按钮: [▶] 启停 (已停止)
+            // isPausedPage=false (运行中) => 按钮: [⏸] 启停 (运行中)
+            const statusText = isPausedPage ? '(已停止)' : '(运行中)';
+            const pauseIcon = isPausedPage ? '▶' : '⏸';
+            const pauseTitle = isPausedPage ? '当前已停止，点击开始刷新' : '当前运行中，点击暂停刷新';
+            const iconColor = isPausedPage ? '#909399' : '#67C23A'; // 停止灰/运行绿
+            const textColor = isPausedPage ? '#F56C6C' : '#67C23A'; // 停止红/运行绿
+
+            pauseHtml = `
+                <div id="gj-header-pause" title="${pauseTitle}" style="cursor:pointer; display:flex; align-items:center; gap:4px;">
+                    <span style="color:${iconColor};font-size:16px;font-weight:bold;">${pauseIcon}</span>
+                    <span style="font-weight:bold;font-size:14px;">启停</span>
+                    <span style="font-size:12px;color:${textColor};transform:scale(0.9);">${statusText}</span>
+                </div>
+            `;
+        }
+
         widget.innerHTML = `
             <div class="gj-header">
                 <div style="display:flex;align-items:center;gap:6px;">
                     <span style="font-size:16px;">🤖</span>
                     <span id="gj-title-text">...</span>
                 </div>
-                <div style="display:flex; gap:8px;">
+                <div style="display:flex; gap:10px;">
+                     ${pauseHtml}
                      <span id="gj-theme-toggle" title="全站变黑/变亮">${themeIcon}</span>
                      <span class="gj-toggle" title="折叠/展开">${toggleIcon}</span>
                 </div>
@@ -810,6 +966,21 @@
             e.stopPropagation();
             toggleTheme();
         });
+        // [新增] 头部启停事件
+        const headerPauseBtn = widget.querySelector('#gj-header-pause');
+        if (headerPauseBtn) {
+            headerPauseBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                if (isOrderPage()) {
+                    state.manualPause = !state.manualPause;
+                    GM_setValue('manualPause', state.manualPause);
+                } else if (isDriverPage()) {
+                    state.driverManualPause = !state.driverManualPause;
+                    GM_setValue('driverManualPause', state.driverManualPause);
+                }
+                updateUI();
+            });
+        }
         return widget;
     };
 
@@ -896,6 +1067,26 @@
         let mainWidget = document.getElementById('gj-widget-main');
         if (!mainWidget) mainWidget = createMainWidget();
 
+        // [新增] 动态更新头部启停按钮状态
+        const headerPauseBtn = mainWidget.querySelector('#gj-header-pause');
+        if (headerPauseBtn && (isOrderPage() || isDriverPage())) {
+            const isPausedPage = isPaused();
+            const statusText = isPausedPage ? '(已停止)' : '(运行中)';
+            const pauseIcon = isPausedPage ? '▶' : '⏸';
+            const pauseTitle = isPausedPage ? '当前已停止，点击开始刷新' : '当前运行中，点击暂停刷新';
+            const iconColor = isPausedPage ? '#909399' : '#67C23A';
+            const textColor = isPausedPage ? '#F56C6C' : '#67C23A';
+
+            headerPauseBtn.title = pauseTitle;
+            headerPauseBtn.innerHTML = `
+                <span style="color:${iconColor};font-size:16px;font-weight:bold;">${pauseIcon}</span>
+                <span style="font-weight:bold;font-size:14px;">启停</span>
+                <span style="font-size:12px;color:${textColor};transform:scale(0.9);">${statusText}</span>
+            `;
+        } else if (headerPauseBtn && !isOrderPage() && !isDriverPage()) {
+            headerPauseBtn.style.display = 'none'; // 非相关页面隐藏
+        }
+
         let addrWidget = document.getElementById('gj-widget-addr');
         if (isDispatchPage()) {
             if (!addrWidget) {
@@ -937,17 +1128,24 @@
 
     const renderMainContent = (container) => {
         let html = '';
+        const debugPanelHtml = state.debugMode ?
+            `<div id="gj-debug-console" style="margin-top:10px;padding:8px;background:#333;color:#fff;font-size:11px;font-family:monospace;white-space:pre-wrap;max-height:150px;overflow-y:auto;border-radius:4px;">正在等待抓取数据...</div>` : '';
+
+        const cancelColValue = state.cancelColIndex === -1 ? '' : state.cancelColIndex;
+
         if (isOrderPage() || isDriverPage()) {
-            const btnClass = state.manualPause ? 'btn-resume' : 'btn-pause';
-            const btnText = state.manualPause ? '▶ 恢复运行' : '⏸ 暂停刷新';
-            const statusColor = state.manualPause ? 'var(--gj-text-sec)' : '#409EFF';
+            const paused = isPaused(); // [修改] 获取当前页面的暂停状态
+            const btnClass = paused ? 'btn-resume' : 'btn-pause';
+            const btnText = paused ? '▶ 恢复运行' : '⏸ 暂停刷新';
+            const statusColor = paused ? 'var(--gj-text-sec)' : '#409EFF';
 
             const scrapeClass = state.isScrapingEnabled ? 'btn-resume' : 'btn-preset';
             const scrapeText = state.isScrapingEnabled ? '👁️ 自动抓取: 开启' : '🙈 自动抓取: 关闭';
             const scrapeStyle = state.isScrapingEnabled ? 'border:1px solid #e1f3d8;background:#f0f9eb;color:#67c23a;' : 'border:1px solid var(--gj-border);background:var(--gj-bg-sec);color:var(--gj-text-mute);';
+
             html = `
                 <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
-                    <span class="gj-timer-text" style="color:${statusColor}">${state.manualPause ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
+                    <span class="gj-timer-text" style="color:${statusColor}">${paused ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
                 </div>
                 
                 <button id="gj-btn-toggle" class="gj-btn ${btnClass}">${btnText}</button>
@@ -961,6 +1159,19 @@
                         <button id="gj-btn-set" class="gj-btn-icon">🆗</button>
                     </div>
                 </div>
+
+                <!-- [新增] 调试与消单配置 -->
+                <div class="gj-control-row" style="margin-top:8px;border-top:1px dashed var(--gj-border);padding-top:8px;">
+                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;">
+                        <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
+                        🐛 调试模式
+                     </label>
+                     <div style="display:flex;align-items:center;gap:4px;" title="当状态列包含'乘客取消'时自动删除电话">
+                        <span style="font-size:12px;">🚫 消单列</span>
+                        <input type="number" id="gj-input-cancel-col" value="${cancelColValue}" placeholder="无" class="gj-input-mini" style="width:30px;">
+                     </div>
+                </div>
+                ${debugPanelHtml}
 
                 <div class="gj-control-row" style="margin-top:10px; border-top:1px dashed var(--gj-border); padding-top:10px; justify-content: space-around;">
                     <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
@@ -979,6 +1190,7 @@
                 <div class="gj-group">
                     <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
                     <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
+                    <div id="gj-user-check-result" style="display:none; margin-top:6px; font-size:12px; text-align:center; padding:4px; border-radius:4px;"></div>
                 </div>
                 <div class="gj-divider">
                     <span class="gj-label-sm">AI 距离 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</span>
@@ -1021,6 +1233,140 @@
         }
     };
 
+    const queryAndMarkNewUser = () => {
+        let totalOrders = null;
+        const thCells = document.querySelectorAll('th');
+        let totalOrderColIdx = -1;
+        thCells.forEach((th, idx) => {
+            if (th.innerText.includes('总下单')) totalOrderColIdx = idx;
+        });
+
+        if (totalOrderColIdx >= 0) {
+            const rows = document.querySelectorAll('.el-table__body-wrapper .el-table__row');
+            if (rows.length > 0) {
+                const targetCell = rows[0].cells[totalOrderColIdx];
+                if (targetCell) totalOrders = parseInt(targetCell.innerText.trim()) || 0;
+            }
+        }
+
+        const resultDiv = document.getElementById('gj-user-check-result');
+        if (totalOrders === null) {
+            // 自动模式下找不到时不显示黄色警告，避免频繁打扰
+            // 但是如果之前有结果需要清空或者隐藏
+            if (resultDiv) { resultDiv.style.display = 'none'; }
+            return;
+        }
+
+        if (totalOrders === 0) {
+            const remarkTextareas = document.querySelectorAll('textarea');
+            let filled = false;
+            remarkTextareas.forEach(ta => {
+                const label = ta.closest('.el-form-item')?.querySelector('.el-form-item__label');
+                if ((label && label.textContent.includes('备注')) || (ta.placeholder || '').includes('备注')) {
+                    if (!ta.value.includes('拉群')) {
+                        ta.value = ta.value ? ta.value + ' 拉群' : '拉群';
+                        ta.dispatchEvent(new Event('input', { bubbles: true }));
+                        ta.dispatchEvent(new Event('change', { bubbles: true }));
+                    }
+                    filled = true;
+                }
+            });
+            if (resultDiv) { resultDiv.style.display = 'block'; resultDiv.style.background = '#d4edda'; resultDiv.style.color = '#155724'; resultDiv.textContent = `✅ 新客户！总下单量=0，${filled ? '已自动备注"拉群"' : '请手动备注"拉群"'}`; }
+        } else {
+            if (resultDiv) { resultDiv.style.display = 'block'; resultDiv.style.background = '#e2e3e5'; resultDiv.style.color = '#383d41'; resultDiv.textContent = `📊 老客户，历史下单 ${totalOrders} 次`; }
+        }
+    };
+
+    const checkNoDriverAndSwitch = () => {
+        if (!isDispatchPage() || window._gjDispatchAutoSwitched) return;
+
+        let noData = false;
+        document.querySelectorAll('.el-table__empty-text, .el-table__empty-block, td, div').forEach(el => {
+            const txt = el.textContent || '';
+            if (txt.includes('暂无数据') || txt.includes('暂无服务人员')) {
+                // 确保是在主页面，不是助手自己的UI
+                if (!el.closest('#gj-widget-main') && !el.closest('#gj-widget-addr')) {
+                    noData = true;
+                }
+            }
+        });
+
+        // 取消单纯类名限制，寻找任意输入电话、起点等内容的输入框
+        let hasInput = false;
+        document.querySelectorAll('input').forEach(input => {
+            const val = input.value ? input.value.trim() : '';
+            const ph = (input.placeholder || '').toLowerCase();
+            if (val.length >= 2) {
+                if (ph.includes('电话') || input.type === 'tel' || ph.includes('起点') || ph.includes('出发') || ph.includes('地址') || ph.includes('姓名') || ph.includes('搜索')) {
+                    hasInput = true;
+                }
+            }
+        });
+
+        if (noData && hasInput) {
+            log('👀 检测到暂无司机数据，执行自动改派: [普通指派] + [20公里] + [实际距离]', 'warning');
+            window._gjDispatchAutoSwitched = true;
+
+            // 1. 点击 '普通指派'
+            let clickedNormal = false;
+            document.querySelectorAll('span, label, button, .el-radio-button__inner').forEach(span => {
+                if (!clickedNormal && span.textContent.trim() === '普通指派') {
+                    span.click();
+                    clickedNormal = true;
+                }
+            });
+
+            // 2. 延迟拉动 slider 到 20 并点击实际距离
+            setTimeout(() => {
+                setSliderValue(20);
+                setTimeout(() => {
+                    let clickedDist = false;
+                    document.querySelectorAll('button, span, th, .el-button').forEach(btn => {
+                        if (!clickedDist && btn.textContent.trim() === '实际距离') {
+                            btn.click();
+                            clickedDist = true;
+                        }
+                    });
+                }, 800);
+            }, 800);
+        }
+    };
+
+    const watchDispatchFormClear = () => {
+        if (!isDispatchPage() || !window._gjDispatchAutoSwitched) return;
+
+        // 检查是否派单完成 (关键输入框全被清空)
+        let hasInput = false;
+        document.querySelectorAll('input').forEach(input => {
+            const val = input.value ? input.value.trim() : '';
+            const ph = (input.placeholder || '').toLowerCase();
+            if (val.length >= 2) {
+                if (ph.includes('电话') || input.type === 'tel' || ph.includes('起点') || ph.includes('出发') || ph.includes('地址') || ph.includes('姓名')) {
+                    hasInput = true;
+                }
+            }
+        });
+
+        if (!hasInput) {
+            log('🧹 检测到表单已清空(派单完成/重置)，恢复默认 [AI智能] 模式和默认距离', 'success');
+            window._gjDispatchAutoSwitched = false;
+
+            // 1. 点击 'AI智能'
+            let clickedAi = false;
+            document.querySelectorAll('span, label, button, .el-radio-button__inner').forEach(span => {
+                if (!clickedAi && span.textContent.trim() === 'AI智能') {
+                    span.click();
+                    clickedAi = true;
+                }
+            });
+
+            // 2. 恢复默认距离
+            setTimeout(() => {
+                applyDistanceByTime();
+            }, 800);
+        }
+    };
+
     const bindEvents = () => {
         document.getElementById('btn-cloud-setting')?.addEventListener('click', setupCloudConfig);
         document.getElementById('btn-cloud-pull')?.addEventListener('click', () => pullFromCloud(false));
@@ -1041,12 +1387,74 @@
             document.getElementById('btn-sync-cloud')?.addEventListener('click', () => {
                 fetchOnlineBlacklist(false);
             });
+
+            // 回收旧的 observer
+            if (window._gjDispatchObserver) {
+                window._gjDispatchObserver.disconnect();
+                window._gjDispatchObserver = null;
+            }
+
+            // 自动检测 "收用户信息" 生成的用户表格
+            const targetNode = document.body;
+            const config = { childList: true, subtree: true };
+            let autoCheckTimeout = null;
+
+            window._gjDispatchObserver = new MutationObserver((mutationsList) => {
+                if (!isDispatchPage()) return;
+                let hasTableChange = false;
+                for (let mutation of mutationsList) {
+                    if (mutation.type === 'childList') {
+                        // 寻找新增的表格或行
+                        if (mutation.target.classList &&
+                            (mutation.target.classList.contains('el-table__row') ||
+                                mutation.target.nodeName === 'TBODY' ||
+                                mutation.target.classList.contains('el-table__body-wrapper'))) {
+                            hasTableChange = true;
+                            break;
+                        }
+                    }
+                }
+                if (hasTableChange) {
+                    if (autoCheckTimeout) clearTimeout(autoCheckTimeout);
+                    autoCheckTimeout = setTimeout(() => { queryAndMarkNewUser(); }, 500);
+                }
+            });
+            window._gjDispatchObserver.observe(targetNode, config);
+
+            const watchDispatchPhone = () => {
+                const phoneInputs = document.querySelectorAll('input');
+                phoneInputs.forEach(el => {
+                    const ph = (el.placeholder || '');
+                    if (ph.includes('用户电话') || ph.includes('电话')) {
+                        el.addEventListener('input', () => {
+                            // 当输入内容改变时，清空上一次的查询结果，避免残留
+                            const resultDiv = document.getElementById('gj-user-check-result');
+                            if (resultDiv) resultDiv.style.display = 'none';
+                        });
+                    }
+                });
+            };
+            setTimeout(watchDispatchPhone, 1500);
+
+            // 循环检测司机数据和表单重置状态
+            if (window._gjDispatchLoop) clearInterval(window._gjDispatchLoop);
+            window._gjDispatchLoop = setInterval(() => {
+                if (!isDispatchPage()) return;
+                checkNoDriverAndSwitch();
+                watchDispatchFormClear();
+            }, 1000);
         }
 
         if (document.getElementById('gj-btn-toggle')) {
             document.getElementById('gj-btn-toggle').addEventListener('click', () => {
-                state.manualPause = !state.manualPause;
-                GM_setValue('manualPause', state.manualPause);
+                // [修改] 根据页面类型切换对应的暂停状态
+                if (isOrderPage()) {
+                    state.manualPause = !state.manualPause;
+                    GM_setValue('manualPause', state.manualPause);
+                } else if (isDriverPage()) {
+                    state.driverManualPause = !state.driverManualPause;
+                    GM_setValue('driverManualPause', state.driverManualPause);
+                }
                 updateUI();
             });
             const scrapeBtn = document.getElementById('gj-btn-scrape');
@@ -1071,13 +1479,39 @@
                     performAction(); startCountdown();
                 }
             });
+
+            // [新增] 调试模式切换
+            const chkDebug = document.getElementById('gj-chk-debug');
+            if (chkDebug) {
+                chkDebug.addEventListener('change', (e) => {
+                    state.debugMode = e.target.checked;
+                    updateUI(); // 触发重绘以显示/隐藏面板
+                    if (state.debugMode) scanOrderPage();
+                });
+            }
+
+            // [新增] 消单列号配置
+            const inputCancelCol = document.getElementById('gj-input-cancel-col');
+            if (inputCancelCol) {
+                inputCancelCol.addEventListener('change', (e) => {
+                    const val = parseInt(e.target.value);
+                    if (!isNaN(val)) {
+                        state.cancelColIndex = val;
+                        GM_setValue('cancelColIndex', val);
+                        log(`🚫 消单列已设置为: ${val}`, 'info');
+                    } else {
+                        state.cancelColIndex = -1;
+                        GM_setValue('cancelColIndex', -1);
+                    }
+                });
+            }
         }
     };
 
     const updateStatusText = () => {
         const text = document.querySelector('.gj-timer-text');
         if (text) {
-            if (state.manualPause) {
+            if (isPaused()) { // [修改] 使用统一暂停判断
                 text.textContent = "暂停";
                 text.style.color = "var(--gj-text-sec)";
             }
