@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.9.0 独立刷新版)
+// @name          代驾调度系统助手 (v15.9.1 独立刷新版)
 // @namespace     http://tampermonkey.net/
-// @version       15.9.0
-// @description   【v15.9.0】新增：指派页无司机时自动切换普通指派、拉爆20km搜索并点实际距离；派单后自动复原。
+// @version       15.9.1
+// @description   【v15.9.1】新增：自动备注开关（默认不开启），开启后新客户才会自动备注“拉群”。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -73,6 +73,7 @@
         manualPause: GM_getValue('manualPause', false),
         driverManualPause: GM_getValue('driverManualPause', false), // [新增] 司机调度独立暂停状态
         isScrapingEnabled: GM_getValue('scrapeEnabled', false),
+        autoRemark: GM_getValue('autoRemark', false), // [新增] 自动备注拉群
         debugMode: false, // [新增] 调试模式
         debugTimer: null,
 
@@ -1161,8 +1162,12 @@
                 </div>
 
                 <!-- [新增] 调试与消单配置 -->
-                <div class="gj-control-row" style="margin-top:8px;border-top:1px dashed var(--gj-border);padding-top:8px;">
-                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;">
+                <div class="gj-control-row" style="margin-top:8px;border-top:1px dashed var(--gj-border);padding-top:8px; flex-wrap:wrap; gap:4px;">
+                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;margin-right:8px;" title="新客户自动备注拉群">
+                        <input type="checkbox" id="gj-chk-auto-remark" ${state.autoRemark ? 'checked' : ''} style="margin-right:4px;">
+                        📝 自动备注
+                     </label>
+                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;margin-right:8px;">
                         <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
                         🐛 调试模式
                      </label>
@@ -1258,20 +1263,31 @@
         }
 
         if (totalOrders === 0) {
-            const remarkTextareas = document.querySelectorAll('textarea');
             let filled = false;
-            remarkTextareas.forEach(ta => {
-                const label = ta.closest('.el-form-item')?.querySelector('.el-form-item__label');
-                if ((label && label.textContent.includes('备注')) || (ta.placeholder || '').includes('备注')) {
-                    if (!ta.value.includes('拉群')) {
-                        ta.value = ta.value ? ta.value + ' 拉群' : '拉群';
-                        ta.dispatchEvent(new Event('input', { bubbles: true }));
-                        ta.dispatchEvent(new Event('change', { bubbles: true }));
+            if (state.autoRemark) {
+                const remarkTextareas = document.querySelectorAll('textarea');
+                remarkTextareas.forEach(ta => {
+                    const label = ta.closest('.el-form-item')?.querySelector('.el-form-item__label');
+                    if ((label && label.textContent.includes('备注')) || (ta.placeholder || '').includes('备注')) {
+                        if (!ta.value.includes('拉群')) {
+                            ta.value = ta.value ? ta.value + ' 拉群' : '拉群';
+                            ta.dispatchEvent(new Event('input', { bubbles: true }));
+                            ta.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                        filled = true;
                     }
-                    filled = true;
+                });
+            }
+            if (resultDiv) {
+                resultDiv.style.display = 'block';
+                resultDiv.style.background = '#d4edda';
+                resultDiv.style.color = '#155724';
+                if (state.autoRemark) {
+                    resultDiv.textContent = `✅ 新客户！总下单量=0，${filled ? '已自动备注"拉群"' : '未找到备注输入框'}`;
+                } else {
+                    resultDiv.textContent = `✅ 新客户！总下单量=0，请手动备注"拉群"`;
                 }
-            });
-            if (resultDiv) { resultDiv.style.display = 'block'; resultDiv.style.background = '#d4edda'; resultDiv.style.color = '#155724'; resultDiv.textContent = `✅ 新客户！总下单量=0，${filled ? '已自动备注"拉群"' : '请手动备注"拉群"'}`; }
+            }
         } else {
             if (resultDiv) { resultDiv.style.display = 'block'; resultDiv.style.background = '#e2e3e5'; resultDiv.style.color = '#383d41'; resultDiv.textContent = `📊 老客户，历史下单 ${totalOrders} 次`; }
         }
@@ -1479,6 +1495,15 @@
                     performAction(); startCountdown();
                 }
             });
+
+            // [新增] 自动备注切换
+            const chkAutoRemark = document.getElementById('gj-chk-auto-remark');
+            if (chkAutoRemark) {
+                chkAutoRemark.addEventListener('change', (e) => {
+                    state.autoRemark = e.target.checked;
+                    GM_setValue('autoRemark', state.autoRemark);
+                });
+            }
 
             // [新增] 调试模式切换
             const chkDebug = document.getElementById('gj-chk-debug');
