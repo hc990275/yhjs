@@ -910,41 +910,59 @@
 
     // [新增] 司机调度页地图主题控制
     const applyDriverMapTheme = () => {
-        const mapContainer = document.querySelector('.amap-maps');
-        if (!mapContainer) return;
+        if (!isDriverPage()) return;
 
-        // CSS 滤镜模式
+        // CSS 滤镜强控模式 - 移除硬绑，改用动态 Style
+        let styleCss = document.getElementById('gj-driver-theme-css');
         if (state.driverCssDark) {
-            mapContainer.style.filter = 'invert(1) hue-rotate(180deg)';
-            mapContainer.style.webkitFilter = 'invert(1) hue-rotate(180deg)';
-        } else {
-            mapContainer.style.filter = '';
-            mapContainer.style.webkitFilter = '';
-        }
-
-        // API 黑夜模式
-        if (state.driverApiDark) {
-            // 尝试找到地图实例并设置主题
-            const vueInstance = mapContainer.__vue__;
-            if (vueInstance && vueInstance.map) {
-                try {
-                    vueInstance.map.setMapStyle('amap://styles/darkblue');
-                    log('✅ 司机页地图已切换为 API 黑夜模式', 'success');
-                } catch (e) {
-                    log(`❌ 司机页地图 API 黑夜模式切换失败: ${e.message}`, 'error');
-                }
-            } else {
-                log('⚠️ 未找到司机页地图 Vue 实例或地图对象，API 黑夜模式可能无法生效', 'warning');
+            if (!styleCss) {
+                styleCss = document.createElement('style');
+                styleCss.id = 'gj-driver-theme-css';
+                // 使用 !important 并选择最关键的底图层，避免污染所有 UI
+                styleCss.innerHTML = `
+                    .amap-layer, .amap-maps {
+                        filter: invert(90%) hue-rotate(180deg) brightness(85%) contrast(110%) !important;
+                        -webkit-filter: invert(90%) hue-rotate(180deg) brightness(85%) contrast(110%) !important;
+                    }
+                    /* 高德 Logo 也会被反色，给它翻转回来 */
+                    .amap-logo, .amap-copyright {
+                        filter: invert(100%) hue-rotate(180deg) !important; 
+                        -webkit-filter: invert(100%) hue-rotate(180deg) !important;
+                    }
+                `;
+                document.head.appendChild(styleCss);
+                log('🕶️ 已挂载强制 CSS 滤镜获取黑夜模式 (水系等非主干道颜色可能失真)', 'success');
             }
         } else {
-            const vueInstance = mapContainer.__vue__;
-            if (vueInstance && vueInstance.map) {
+            if (styleCss) styleCss.remove();
+        }
+
+        // API 野路子控制模式
+        const mapContainer = document.querySelector('.amap-maps, .amap-container, #map');
+        if (mapContainer && state.driverApiDark) {
+            const vueInstance = mapContainer.__vue__ || (mapContainer.parentNode ? mapContainer.parentNode.__vue__ : null);
+            if (vueInstance && vueInstance.map && vueInstance.map.setMapStyle) {
+                try {
+                    vueInstance.map.setMapStyle('amap://styles/dark');
+                    log('✅ 成功接管 AMap 实例并调用原生 API 改变为黑夜模式', 'success');
+                } catch (e) {
+                    log(`❌ 原生黑夜模式调用异常: ${e.message}`, 'error');
+                }
+            } else if (window.AMap && window.amap) {
+                try {
+                    window.amap.setMapStyle('amap://styles/dark');
+                } catch (e) { }
+            }
+        } else if (mapContainer && !state.driverApiDark && !state.driverCssDark) {
+            const vueInstance = mapContainer.__vue__ || (mapContainer.parentNode ? mapContainer.parentNode.__vue__ : null);
+            if (vueInstance && vueInstance.map && vueInstance.map.setMapStyle) {
                 try {
                     vueInstance.map.setMapStyle('amap://styles/normal');
-                    log('✅ 司机页地图已切换为 API 标准模式', 'success');
-                } catch (e) {
-                    log(`❌ 司机页地图 API 标准模式切换失败: ${e.message}`, 'error');
-                }
+                } catch (e) { }
+            } else if (window.AMap && window.amap) {
+                try {
+                    window.amap.setMapStyle('amap://styles/normal');
+                } catch (e) { }
             }
         }
     };
