@@ -151,6 +151,13 @@
             let saved = GM_getValue('driverInterval');
             if (!saved) saved = CONFIG.DRIVER.DEFAULT_INTERVAL;
             state.refreshInterval = saved;
+
+            // 修复初次加载时互相冲突的状态
+            if (state.driverApiDark && state.driverCssDark) {
+                state.driverApiDark = false;
+                GM_setValue('driverApiDark', false);
+            }
+
             applyDriverMapTheme(); // 应用司机页地图主题
         }
 
@@ -937,31 +944,59 @@
             if (styleCss) styleCss.remove();
         }
 
-        // API 野路子控制模式
-        const mapContainer = document.querySelector('.amap-maps, .amap-container, #map');
-        if (mapContainer && state.driverApiDark) {
-            const vueInstance = mapContainer.__vue__ || (mapContainer.parentNode ? mapContainer.parentNode.__vue__ : null);
-            if (vueInstance && vueInstance.map && vueInstance.map.setMapStyle) {
-                try {
-                    vueInstance.map.setMapStyle('amap://styles/dark');
-                    log('✅ 成功接管 AMap 实例并调用原生 API 改变为黑夜模式', 'success');
-                } catch (e) {
-                    log(`❌ 原生黑夜模式调用异常: ${e.message}`, 'error');
-                }
-            } else if (window.AMap && window.amap) {
-                try {
-                    window.amap.setMapStyle('amap://styles/dark');
-                } catch (e) { }
+        // 抽取搜寻地图真正的实例引用的核心逻辑
+        const findMapInstance = () => {
+            if (window.amapManager && window.amapManager.getMap) {
+                return window.amapManager.getMap();
             }
-        } else if (mapContainer && !state.driverApiDark && !state.driverCssDark) {
-            const vueInstance = mapContainer.__vue__ || (mapContainer.parentNode ? mapContainer.parentNode.__vue__ : null);
-            if (vueInstance && vueInstance.map && vueInstance.map.setMapStyle) {
+            if (window.AMap && window.amap) {
+                return window.amap;
+            }
+            const mapContainers = document.querySelectorAll('.amap-maps, .amap-container, .el-vue-amap, #map');
+            for (let container of mapContainers) {
+                const vueInstance = container.__vue__ || (container.parentNode ? container.parentNode.__vue__ : null);
+                if (vueInstance) {
+                    const findMap = (obj, depth = 0) => {
+                        if (depth > 5 || !obj) return null;
+                        if (obj.setMapStyle && typeof obj.setMapStyle === 'function') return obj;
+                        if (obj.map && typeof obj.map.setMapStyle === 'function') return obj.map;
+                        if (obj.$amap && typeof obj.$amap.setMapStyle === 'function') return obj.$amap;
+                        if (obj.amapManager && obj.amapManager.getMap) return obj.amapManager.getMap();
+                        if (obj.$children) {
+                            for (let child of obj.$children) {
+                                const res = findMap(child, depth + 1);
+                                if (res) return res;
+                            }
+                        }
+                        return null;
+                    };
+                    const mapInstance = findMap(vueInstance);
+                    if (mapInstance) return mapInstance;
+                }
+            }
+            return null;
+        };
+
+        const mapInstance = findMapInstance();
+
+        // API 模式处理
+        if (state.driverApiDark) {
+            if (mapInstance && typeof mapInstance.setMapStyle === 'function') {
                 try {
-                    vueInstance.map.setMapStyle('amap://styles/normal');
-                } catch (e) { }
-            } else if (window.AMap && window.amap) {
+                    mapInstance.setMapStyle('amap://styles/dark');
+                    log('✅ 成功接管 AMap 实例并调用原生 API 改变为 API 极夜黑', 'success');
+                } catch (e) {
+                    log(`❌ 原生极夜黑调用异常: ${e.message}`, 'error');
+                }
+            } else {
+                log('⚠️ API 提取失败，如果无法显示可直接使用 CSS 黑夜', 'warning');
+            }
+        }
+        // 切回标准模式 (当两个都没选中)
+        else if (!state.driverApiDark && !state.driverCssDark) {
+            if (mapInstance && typeof mapInstance.setMapStyle === 'function') {
                 try {
-                    window.amap.setMapStyle('amap://styles/normal');
+                    mapInstance.setMapStyle('amap://styles/normal');
                 } catch (e) { }
             }
         }
@@ -1313,7 +1348,7 @@
                         🐛 调试模式(持续记录)
                      </label>
                 </div>
-                ${state.debugMode ? `<div id="gj-debug-panel" style="margin-top:6px;padding:6px;background:#2c2c2c;color:#a6e22e;font-size:10px;border-radius:4px;max-height:120px;overflow-y:auto;word-wrap:break-word;font-family:monospace;white-space:pre-wrap;text-align:left;-webkit-user-select:all;user-select:all;" title="您可以直接选中复制这里的全部内容发给我">点击上方空白处或等待刷新提取元素...</div>` : ''}
+                ${state.debugMode ? `<div id="gj-debug-panel" style="margin-top:6px;padding:6px;background:#2c2c2c;color:#a6e22e;font-size:10px;border-radius:4px;max-height:120px;overflow-y:auto;word-wrap:break-word;font-family:monospace;white-wrap;text-align:left;-webkit-user-select:all;user-select:all;" title="您可以直接选中复制这里的全部内容发给我">点击上方空白处或等待刷新提取元素...</div>` : ''}
                 <div class="gj-divider">
                     <span class="gj-label-sm">AI 距离 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</span>
                 </div>
@@ -1766,8 +1801,41 @@
             if (chkDebug) {
                 chkDebug.addEventListener('change', (e) => {
                     state.debugMode = e.target.checked;
+                    GM_setValue('debugMode', state.debugMode);
                     updateUI(); // 触发重绘以显示/隐藏面板
                     if (state.debugMode) scanOrderPage();
+                });
+            }
+
+            // [新增] 司机页地图主题切换监听
+            const chkApiDark = document.getElementById('gj-chk-api-dark');
+            const chkCssDark = document.getElementById('gj-chk-css-dark');
+
+            if (chkApiDark) {
+                chkApiDark.addEventListener('change', (e) => {
+                    state.driverApiDark = e.target.checked;
+                    GM_setValue('driverApiDark', state.driverApiDark);
+                    // 互斥逻辑
+                    if (state.driverApiDark && state.driverCssDark) {
+                        state.driverCssDark = false;
+                        GM_setValue('driverCssDark', false);
+                        if (chkCssDark) chkCssDark.checked = false; // 同步UI状态
+                    }
+                    applyDriverMapTheme();
+                });
+            }
+
+            if (chkCssDark) {
+                chkCssDark.addEventListener('change', (e) => {
+                    state.driverCssDark = e.target.checked;
+                    GM_setValue('driverCssDark', state.driverCssDark);
+                    // 互斥逻辑
+                    if (state.driverCssDark && state.driverApiDark) {
+                        state.driverApiDark = false;
+                        GM_setValue('driverApiDark', false);
+                        if (chkApiDark) chkApiDark.checked = false; // 同步UI状态
+                    }
+                    applyDriverMapTheme();
                 });
             }
 
