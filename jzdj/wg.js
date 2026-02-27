@@ -1138,7 +1138,7 @@
     const renderMainContent = (container) => {
         let html = '';
         const debugPanelHtml = state.debugMode ?
-            `<div id="gj-debug-console" style="margin-top:10px;padding:8px;background:#333;color:#fff;font-size:11px;font-family:monospace;white-space:pre-wrap;max-height:150px;overflow-y:auto;border-radius:4px;">正在等待抓取数据...</div>` : '';
+            `<div id="gj-debug-panel" style="margin-top:6px;padding:6px;background:#2c2c2c;color:#a6e22e;font-size:10px;border-radius:4px;max-height:150px;overflow-y:auto;word-wrap:break-word;font-family:monospace;white-space:pre-wrap;text-align:left;-webkit-user-select:all;user-select:all;" title="您可以直接选中复制这里的全部内容发给我">等待提取结构变化...</div>` : '';
 
         const cancelColValue = state.cancelColIndex === -1 ? '' : state.cancelColIndex;
 
@@ -1224,8 +1224,8 @@
                      </div>
                      ` : ''}
                 </div>
-                ${state.debugMode ? `<div id="gj-debug-panel" style="margin-top:6px;padding:6px;background:#2c2c2c;color:#a6e22e;font-size:10px;border-radius:4px;max-height:200px;overflow-y:auto;word-wrap:break-word;font-family:monospace;white-space:pre-wrap;text-align:left;-webkit-user-select:all;user-select:all;" title="您可以直接选中复制这里的全部内容发给我">等待提取结构变化...</div>` : ''}
-                
+                ${debugPanelHtml}
+
                 ${isOrderPage() ? `
                 <div class="gj-control-row" style="margin-top:10px; border-top:1px dashed var(--gj-border); padding-top:10px; justify-content: space-around;">
                     <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
@@ -1561,7 +1561,7 @@
 
                 const updateDebugPanel = () => {
                     if (!state.debugMode) return;
-                    const panel = document.getElementById('gj-debug-panel');
+                    const panel = document.getElementById('gj-debug-panel') || document.getElementById('gj-debug-console');
                     if (panel) {
                         try {
                             const possibleHeader = document.querySelector('.el-header') || document.querySelector('.header') || document.querySelector('.navbar') || document.querySelector('header');
@@ -1576,13 +1576,22 @@
                                     }
                                     return '';
                                 }).filter(Boolean).join('');
+                                if (!fallbacks) {
+                                    // 第二层暴力查找，只要包含文字黑夜就可以
+                                    fallbacks = Array.from(document.querySelectorAll('span, div')).map(el => {
+                                        if (el.children.length === 0 && (el.innerText.includes('黑夜') || el.innerText.includes('标准'))) {
+                                            return `\n极简文本: "${el.innerText.trim()}" | class: "${el.className}" | html: ${el.outerHTML}`;
+                                        }
+                                        return '';
+                                    }).filter(Boolean).join('');
+                                }
                             } else {
                                 const allTexts = Array.from(possibleHeader.querySelectorAll('div, span, i, button, li')).map(el => {
                                     if (el.children.length === 0 && el.textContent.trim().length > 0 && el.textContent.trim().length < 10) {
                                         return `\n文字: "${el.textContent.trim()}" | class: "${el.className.trim()}" | html: ${el.outerHTML}`;
                                     }
                                     if (el.name && el.name.includes('amap')) {
-                                        return `\n地图底图切换特征: name="${el.name}" | class: "${el.className}" | html: ${el.outerHTML}`;
+                                        return `\n地图切换特征: name="${el.name}" | class: "${el.className}" | html: ${el.outerHTML}`;
                                     }
                                     return '';
                                 }).filter(Boolean).join('');
@@ -1605,6 +1614,8 @@
                                     panel.innerHTML = newRecord + panel.innerHTML;
                                 }
                                 recordCounter++;
+                            } else if (recordCounter === 1 && currentHtmlStr.length === 0) {
+                                panel.innerHTML = `⚠️ 未找到任何特征信息，请确认页面是否已完全加载，或者您是否在带有地图和【官方黑夜】主题按钮的页面中。`;
                             }
                         } catch (e) {
                             if (recordCounter === 1) panel.innerText = `提取错误: ${e.message}`;
