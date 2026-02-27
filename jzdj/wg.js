@@ -1154,11 +1154,6 @@
 
             if (isDriverPage()) {
                 html = `
-                    <div style="display:flex; justify-content:center; align-items:center; margin-bottom:10px; gap: 8px;">
-                        <button id="gj-btn-theme-dark" class="gj-btn-icon" style="flex:1; background:#2c2c2c; color:#fff; border:1px solid #444; border-radius:4px; padding:4px;" title="切换为高德黑夜底图">🌙 黑夜</button>
-                        <button id="gj-btn-theme-light" class="gj-btn-icon" style="flex:1; background:#f5f5f5; color:#333; border:1px solid #ddd; border-radius:4px; padding:4px;" title="切换为高德标准底图">☀️ 标准</button>
-                    </div>
-
                     <div class="gj-control-row">
                         <span style="color:var(--gj-text-sec);font-size:12px;">刷新间隔</span>
                         <div style="display:flex;align-items:center;">
@@ -1242,8 +1237,14 @@
             const buttonsHtml = CONFIG.DISPATCH.PRESETS.map(num =>
                 `<button class="btn-preset" data-val="${num}">${num}</button>`
             ).join('');
+
             html = `
-                <div class="gj-group">
+                <div style="display:flex; justify-content:center; align-items:center; margin-bottom:10px; gap: 8px;">
+                    <button id="gj-btn-theme-dark" class="gj-btn-icon" style="flex:1; background:#2c2c2c; color:#fff; border:1px solid #444; border-radius:4px; padding:4px;" title="切换为高德黑夜底图">🌙 黑夜</button>
+                    <button id="gj-btn-theme-light" class="gj-btn-icon" style="flex:1; background:#f5f5f5; color:#333; border:1px solid #ddd; border-radius:4px; padding:4px;" title="切换为高德标准底图">☀️ 标准</button>
+                </div>
+                
+                <div style="display:flex;gap:10px;margin-bottom:10px;height:40px;">
                     <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
                     <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
                     <div id="gj-user-check-result" style="display:none; margin-top:6px; font-size:12px; text-align:center; padding:4px; border-radius:4px;"></div>
@@ -1460,8 +1461,8 @@
         document.getElementById('btn-cloud-push')?.addEventListener('click', pushToCloud);
         document.getElementById('gj-file-import')?.addEventListener('change', handleFileImport);
 
-        // [新增] 司机调度页面主题按键代理：触发官方按钮的点击
-        if (isDriverPage()) {
+        // [新增] 订单指派页面主题按键代理：触发官方按钮的点击
+        if (isDispatchPage()) {
             const triggerAmapTheme = (themeName) => {
                 const targetText = themeName === 'dark' ? '黑夜' : '标准';
                 let found = false;
@@ -1507,9 +1508,7 @@
             };
             document.getElementById('gj-btn-theme-dark')?.addEventListener('click', () => triggerAmapTheme('dark'));
             document.getElementById('gj-btn-theme-light')?.addEventListener('click', () => triggerAmapTheme('normal'));
-        }
 
-        if (isDispatchPage()) {
             document.querySelectorAll('.btn-preset').forEach(btn =>
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
             );
