@@ -74,7 +74,7 @@
         driverManualPause: GM_getValue('driverManualPause', false), // [新增] 司机调度独立暂停状态
         isScrapingEnabled: GM_getValue('scrapeEnabled', false),
         autoRemark: GM_getValue('autoRemark', false), // [新增] 自动备注拉群
-        debugMode: false, // [新增] 调试模式
+        debugMode: GM_getValue('debugMode', false), // [持久化] 调试模式
         debugTimer: null,
 
         refreshInterval: 20,
@@ -1224,7 +1224,7 @@
                         🐛 调试开关
                      </label>
                 </div>
-                ${state.debugMode ? `<div id="gj-debug-dispatch-panel" style="margin-top:6px;padding:4px;background:#333;color:#fff;font-size:11px;border-radius:4px;text-align:center;">开发预留: 提取官方主题等逻辑</div>` : ''}
+                ${state.debugMode ? `<div id="gj-debug-dispatch-panel" style="margin-top:6px;padding:6px;background:#2c2c2c;color:#a6e22e;font-size:10px;border-radius:4px;max-height:120px;overflow-y:auto;word-wrap:break-word;font-family:monospace;white-space:pre-wrap;text-align:left;-webkit-user-select:all;user-select:all;" title="您可以直接选中复制这里的全部内容发给我">点击上方空白处或等待刷新提取元素...</div>` : ''}
                 <div class="gj-divider">
                     <span class="gj-label-sm">AI 距离 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</span>
                 </div>
@@ -1265,7 +1265,7 @@
 
         if (filteredList.length === 0) {
             addrBody.innerHTML = `<div class="gj-empty">${state.searchText ?
-                '无匹配结果' : '库为空<br>请导入文件或复制文本'}</div>`;
+                '无匹配结果<br>请尝试其他关键词' : '库为空<br>请导入文件或复制文本'}</div>`;
         } else {
             addrBody.innerHTML = filteredList.map(i => renderItem(i)).join('');
             addrBody.querySelectorAll('.gj-list-item').forEach(el =>
@@ -1436,8 +1436,6 @@
                 processClipboard('phone');
             });
 
-            // btn-sync-cloud 按钮已移除，无需绑定事件
-
             // 回收旧的 observer
             if (window._gjDispatchObserver) {
                 window._gjDispatchObserver.disconnect();
@@ -1499,8 +1497,64 @@
             if (chkDebugDispatch) {
                 chkDebugDispatch.addEventListener('change', (e) => {
                     state.debugMode = e.target.checked;
+                    GM_setValue('debugMode', state.debugMode);
                     updateUI(); // 重新渲染时显示或隐藏面板
                 });
+            }
+
+            // [新增] 动态提取官方“黑夜/标准”主题按钮信息
+            if (state.debugMode) {
+                const updateDebugPanel = () => {
+                    if (!isDispatchPage() || !state.debugMode) return;
+                    const panel = document.getElementById('gj-debug-dispatch-panel');
+                    if (panel) {
+                        try {
+                            // 扩大选取范围，防止类名不标准
+                            let possibleHeader = document.querySelector('.el-header') || document.querySelector('.header') || document.querySelector('.navbar') || document.querySelector('header');
+                            // 如果还是找不到结构，直接抓取 body 下第一层级类似头部区域的 div
+                            if (!possibleHeader) {
+                                const allDivs = document.querySelectorAll('body > div, #app > div');
+                                for (let d of allDivs) {
+                                    if (d.clientHeight > 30 && d.clientHeight < 120 && d.innerText.includes('系统')) {
+                                        possibleHeader = d;
+                                        break;
+                                    }
+                                }
+                            }
+                            // 如果实在没有，抓全页面的 button 和图标相关的元素作为备选
+                            if (!possibleHeader) {
+                                const fallbacks = Array.from(document.querySelectorAll('.el-switch, .el-radio-group, button')).map(el => {
+                                    if (el.innerText.includes('黑夜') || el.innerText.includes('主题') || el.innerText.includes('标准')) {
+                                        return `<br/>疑似按钮: "${el.innerText.trim()}" | class: "${el.className}" | html: ${el.outerHTML.substring(0, 200)}`;
+                                    }
+                                    return '';
+                                }).filter(Boolean).join('');
+
+                                panel.innerHTML = fallbacks ? `[未找到标准顶部导航栏，但找到了相关按钮特征:]\n${fallbacks.replace(/</g, '&lt;').replace(/>/g, '&gt;')}` : `[未找到顶部导航栏或带“主题/黑夜”字样的按钮元素，请确认该页面内是否真的存在这个按钮]`;
+                                return;
+                            }
+
+                            let debugHtml = '';
+                            if (possibleHeader) {
+                                const allTexts = Array.from(possibleHeader.querySelectorAll('div, span, i, button, li')).map(el => {
+                                    if (el.children.length === 0 && el.textContent.trim().length > 0 && el.textContent.trim().length < 10) {
+                                        return `\n文字: "${el.textContent.trim()}" | class: "${el.className.trim()}"`;
+                                    }
+                                    return '';
+                                }).filter(Boolean).slice(0, 10).join('');
+
+                                debugHtml = `[Header分析]\n完整高:${possibleHeader.clientHeight}px\n节点特征:${allTexts || '无独立文字'}\n\n[Header全量精简HTML]:\n<br/>${possibleHeader.innerHTML.replace(/<svg[\s\S]*?<\/svg>/gi, '<svg>...</svg>').replace(/<path[\s\S]*?>/gi, '').substring(0, 1500)}`;
+                            }
+                            panel.innerHTML = `⚠️ 请长按全选下面框内内容并复制发给我：\n============\n${debugHtml.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/&lt;br\/?&gt;/g, '<br/>')}`;
+                        } catch (e) {
+                            panel.innerText = `提取错误: ${e.message}`;
+                        }
+                    }
+                };
+
+                if (window._gjDebugDispatchLoop) clearInterval(window._gjDebugDispatchLoop);
+                window._gjDebugDispatchLoop = setInterval(updateDebugPanel, 3000);
+                setTimeout(updateDebugPanel, 800);
             }
 
             // 循环检测司机数据和表单重置状态
