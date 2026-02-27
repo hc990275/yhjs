@@ -927,14 +927,22 @@
                 styleCss.id = 'gj-driver-theme-css';
                 // 使用 !important 并选择最关键的底图层，避免污染所有 UI
                 styleCss.innerHTML = `
+                    /* 1. 对整个地图容器进行基础反色 */
                     .amap-layer, .amap-maps {
                         filter: invert(90%) hue-rotate(180deg) brightness(85%) contrast(110%) !important;
                         -webkit-filter: invert(90%) hue-rotate(180deg) brightness(85%) contrast(110%) !important;
                     }
-                    /* 高德 Logo 也会被反色，给它翻转回来 */
-                    .amap-logo, .amap-copyright {
-                        filter: invert(100%) hue-rotate(180deg) !important; 
-                        -webkit-filter: invert(100%) hue-rotate(180deg) !important;
+
+                    /* 2. 【关键】对司机图标、标记盒子、区域多边形叠加物等，再进行一次"反反色"，恢复它们原本鲜艳的颜色！ */
+                    .amap-markers,
+                    .amap-marker,
+                    .amap-overlay,
+                    .amap-labels,
+                    .amap-info,
+                    .amap-logo, 
+                    .amap-copyright {
+                        filter: invert(100%) hue-rotate(180deg) brightness(115%) contrast(90%) !important; 
+                        -webkit-filter: invert(100%) hue-rotate(180deg) brightness(115%) contrast(90%) !important;
                     }
                 `;
                 document.head.appendChild(styleCss);
