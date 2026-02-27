@@ -1254,12 +1254,12 @@
                         <input type="checkbox" id="gj-chk-auto-remark" ${state.autoRemark ? 'checked' : ''} style="margin-right:4px;">
                         📝 自动备注
                      </label>
-                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;color:var(--gj-text-sec);" title="启用调试面板">
-                        <input type="checkbox" id="gj-chk-debug-dispatch" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
-                        🐛 调试开关
+                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;color:var(--gj-text-sec);" title="开启后会在此收集页面变化进行分析">
+                        <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
+                        🐛 调试模式(持续记录)
                      </label>
                 </div>
-                ${state.debugMode ? `<div id="gj-debug-dispatch-panel" style="margin-top:6px;padding:6px;background:#2c2c2c;color:#a6e22e;font-size:10px;border-radius:4px;max-height:120px;overflow-y:auto;word-wrap:break-word;font-family:monospace;white-space:pre-wrap;text-align:left;-webkit-user-select:all;user-select:all;" title="您可以直接选中复制这里的全部内容发给我">点击上方空白处或等待刷新提取元素...</div>` : ''}
+                ${state.debugMode ? `<div id="gj-debug-panel" style="margin-top:6px;padding:6px;background:#2c2c2c;color:#a6e22e;font-size:10px;border-radius:4px;max-height:120px;overflow-y:auto;word-wrap:break-word;font-family:monospace;white-space:pre-wrap;text-align:left;-webkit-user-select:all;user-select:all;" title="您可以直接选中复制这里的全部内容发给我">点击上方空白处或等待刷新提取元素...</div>` : ''}
                 <div class="gj-divider">
                     <span class="gj-label-sm">AI 距离 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</span>
                 </div>
@@ -1577,13 +1577,19 @@
                                     return '';
                                 }).filter(Boolean).join('');
                                 if (!fallbacks) {
-                                    // 第二层暴力查找，只要包含文字黑夜就可以
-                                    fallbacks = Array.from(document.querySelectorAll('span, div')).map(el => {
-                                        if (el.children.length === 0 && (el.innerText.includes('黑夜') || el.innerText.includes('标准'))) {
-                                            return `\n极简文本: "${el.innerText.trim()}" | class: "${el.className}" | html: ${el.outerHTML}`;
+                                    // 第三层暴力查找所有包含相关文本的任意元素
+                                    const textWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                                    let node;
+                                    let texts = [];
+                                    while (node = textWalker.nextNode()) {
+                                        if (node.nodeValue.includes('黑夜') || node.nodeValue.includes('标准')) {
+                                            let parent = node.parentElement;
+                                            if (parent) {
+                                                texts.push(`\n文本节点: "${node.nodeValue.trim()}" | 父级class: "${parent.className}" | html: ${parent.outerHTML.substring(0, 150)}`);
+                                            }
                                         }
-                                        return '';
-                                    }).filter(Boolean).join('');
+                                    }
+                                    fallbacks = texts.slice(0, 10).join('');
                                 }
                             } else {
                                 const allTexts = Array.from(possibleHeader.querySelectorAll('div, span, i, button, li')).map(el => {
