@@ -75,6 +75,8 @@
         isScrapingEnabled: GM_getValue('scrapeEnabled', false),
         autoRemark: GM_getValue('autoRemark', false), // [新增] 自动备注拉群
         debugMode: GM_getValue('debugMode', false), // [持久化] 调试模式
+        driverApiDark: GM_getValue('driverApiDark', false), // [持久化] 司机页原生地图黑夜模式
+        driverCssDark: GM_getValue('driverCssDark', false), // [持久化] 司机页滤镜黑夜模式
         debugTimer: null,
 
         refreshInterval: 20,
@@ -149,6 +151,7 @@
             let saved = GM_getValue('driverInterval');
             if (!saved) saved = CONFIG.DRIVER.DEFAULT_INTERVAL;
             state.refreshInterval = saved;
+            applyDriverMapTheme(); // 应用司机页地图主题
         }
 
         if (isDispatchPage()) {
@@ -904,6 +907,48 @@
             doc.classList.remove('gj-global-dark');
         }
     };
+
+    // [新增] 司机调度页地图主题控制
+    const applyDriverMapTheme = () => {
+        const mapContainer = document.querySelector('.amap-maps');
+        if (!mapContainer) return;
+
+        // CSS 滤镜模式
+        if (state.driverCssDark) {
+            mapContainer.style.filter = 'invert(1) hue-rotate(180deg)';
+            mapContainer.style.webkitFilter = 'invert(1) hue-rotate(180deg)';
+        } else {
+            mapContainer.style.filter = '';
+            mapContainer.style.webkitFilter = '';
+        }
+
+        // API 黑夜模式
+        if (state.driverApiDark) {
+            // 尝试找到地图实例并设置主题
+            const vueInstance = mapContainer.__vue__;
+            if (vueInstance && vueInstance.map) {
+                try {
+                    vueInstance.map.setMapStyle('amap://styles/darkblue');
+                    log('✅ 司机页地图已切换为 API 黑夜模式', 'success');
+                } catch (e) {
+                    log(`❌ 司机页地图 API 黑夜模式切换失败: ${e.message}`, 'error');
+                }
+            } else {
+                log('⚠️ 未找到司机页地图 Vue 实例或地图对象，API 黑夜模式可能无法生效', 'warning');
+            }
+        } else {
+            const vueInstance = mapContainer.__vue__;
+            if (vueInstance && vueInstance.map) {
+                try {
+                    vueInstance.map.setMapStyle('amap://styles/normal');
+                    log('✅ 司机页地图已切换为 API 标准模式', 'success');
+                } catch (e) {
+                    log(`❌ 司机页地图 API 标准模式切换失败: ${e.message}`, 'error');
+                }
+            }
+        }
+    };
+
     const createMainWidget = () => {
         let widget = document.getElementById('gj-widget-main');
         if (widget) widget.remove();
@@ -1153,7 +1198,21 @@
             const scrapeStyle = state.isScrapingEnabled ? 'border:1px solid #e1f3d8;background:#f0f9eb;color:#67c23a;' : 'border:1px solid var(--gj-border);background:var(--gj-bg-sec);color:var(--gj-text-mute);';
 
             if (isDriverPage()) {
+                const apiDarkStyle = state.driverApiDark ? 'color:#a6e22e; font-weight:bold;' : 'color:var(--gj-text-sec);';
+                const cssDarkStyle = state.driverCssDark ? 'color:#a6e22e; font-weight:bold;' : 'color:var(--gj-text-sec);';
+
                 html = `
+                    <div style="display:flex; justify-content:center; align-items:center; margin-bottom:10px; gap: 8px;">
+                        <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;${apiDarkStyle}" title="尝试通过底层实例控制地图黑夜">
+                            <input type="checkbox" id="gj-chk-api-dark" ${state.driverApiDark ? 'checked' : ''} style="margin-right:4px;">
+                            🌌 API 黑夜
+                        </label>
+                        <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;${cssDarkStyle}" title="通过强力CSS滤镜使地图反色">
+                            <input type="checkbox" id="gj-chk-css-dark" ${state.driverCssDark ? 'checked' : ''} style="margin-right:4px;">
+                            🕶️ CSS 黑夜
+                        </label>
+                    </div>
+
                     <div class="gj-control-row">
                         <span style="color:var(--gj-text-sec);font-size:12px;">刷新间隔</span>
                         <div style="display:flex;align-items:center;">
@@ -1161,33 +1220,7 @@
                             <button id="gj-btn-set" class="gj-btn-icon">🆗</button>
                         </div>
                     </div>
-                
-                <!-- [移动] 调试与消单配置至公共区域（Order与Driver都可见） -->
-                <div class="gj-control-row" style="margin-top:8px;border-top:1px dashed var(--gj-border);padding-top:8px; flex-wrap:wrap; gap:4px;">
-                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;margin-right:8px;" title="开启后会在此收集页面变化进行分析">
-                        <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
-                        🐛 调试模式(持续记录)
-                     </label>
-                     ${isOrderPage() ? `
-                     <div style="display:flex;align-items:center;gap:4px;" title="当状态列包含'乘客取消'时自动删除电话">
-                        <span style="font-size:12px;">🚫 消单列</span>
-                        <input type="number" id="gj-input-cancel-col" value="${cancelColValue}" placeholder="无" class="gj-input-mini" style="width:30px;">
-                     </div>
-                     ` : ''}
-                </div>
-                ${state.debugMode ? `<div id="gj-debug-panel" style="margin-top:6px;padding:6px;background:#2c2c2c;color:#a6e22e;font-size:10px;border-radius:4px;max-height:200px;overflow-y:auto;word-wrap:break-word;font-family:monospace;white-space:pre-wrap;text-align:left;-webkit-user-select:all;user-select:all;" title="您可以直接选中复制这里的全部内容发给我">等待提取结构变化...</div>` : ''}
-
-                ${isOrderPage() ? `
-                <div class="gj-control-row" style="margin-top:10px; border-top:1px dashed var(--gj-border); padding-top:10px; justify-content: space-around;">
-                    <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
-                    <span class="btn-icon-circle" id="btn-cloud-pull" title="⬇️ 覆盖下载(以云端为准)" style="background:rgba(230,162,60,0.6)">⬇</span>
-                    <span class="btn-icon-circle" id="btn-cloud-push" title="⬆️ 上传本地数据" style="background:rgba(245,108,108,0.6)">⬆</span>
-                    <label class="btn-icon-circle" title="导入本地文件(txt/csv)" style="background:rgba(103,194,58,0.6)">
-                        📂<input type="file" id="gj-file-import" style="display:none" accept=".txt,.csv">
-                    </label>
-                </div>
-                ` : ''}
-            `;
+                `;
             } else { // This block handles isOrderPage()
                 html = `
                     <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
@@ -1205,8 +1238,11 @@
                         <button id="gj-btn-set" class="gj-btn-icon">🆗</button>
                     </div>
                 </div>
+            `;
+            }
 
-                <!-- [移动] 调试与消单配置至公共区域（Order与Driver都可见） -->
+            // Common debug and cloud settings for Order and Driver pages
+            html += `
                 <div class="gj-control-row" style="margin-top:8px;border-top:1px dashed var(--gj-border);padding-top:8px; flex-wrap:wrap; gap:4px;">
                      <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;margin-right:8px;" title="开启后会在此收集页面变化进行分析">
                         <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
@@ -1232,7 +1268,6 @@
                 </div>
                 ` : ''}
             `;
-            }
         } else if (isDispatchPage()) {
             const buttonsHtml = CONFIG.DISPATCH.PRESETS.map(num =>
                 `<button class="btn-preset" data-val="${num}">${num}</button>`
