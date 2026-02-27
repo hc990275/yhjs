@@ -1154,6 +1154,11 @@
 
             if (isDriverPage()) {
                 html = `
+                    <div style="display:flex; justify-content:center; align-items:center; margin-bottom:10px; gap: 8px;">
+                        <button id="gj-btn-theme-dark" class="gj-btn-icon" style="flex:1; background:#2c2c2c; color:#fff; border:1px solid #444; border-radius:4px; padding:4px;" title="切换为高德黑夜底图">🌙 黑夜</button>
+                        <button id="gj-btn-theme-light" class="gj-btn-icon" style="flex:1; background:#f5f5f5; color:#333; border:1px solid #ddd; border-radius:4px; padding:4px;" title="切换为高德标准底图">☀️ 标准</button>
+                    </div>
+
                     <div class="gj-control-row">
                         <span style="color:var(--gj-text-sec);font-size:12px;">刷新间隔</span>
                         <div style="display:flex;align-items:center;">
@@ -1162,7 +1167,7 @@
                         </div>
                     </div>
                 `;
-            } else {
+            } else { // This block handles isOrderPage()
                 html = `
                     <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
                         <span class="gj-timer-text" style="color:${statusColor}">${paused ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
@@ -1170,38 +1175,40 @@
                     
                     <button id="gj-btn-toggle" class="gj-btn ${btnClass}">${btnText}</button>
                     
-                    <button id="gj-btn-scrape" class="gj-btn" style="margin-top:8px; ${scrapeStyle}">${scrapeText}</button>
+                  ${isOrderPage() ? `<button id="gj-btn-scrape" class="gj-btn" style="margin-top:8px; ${scrapeStyle}">${scrapeText}</button>` : ''}
 
-                    <div class="gj-control-row">
-                        <span style="color:var(--gj-text-sec);font-size:12px;">刷新间隔</span>
-                        <div style="display:flex;align-items:center;">
-                            <input type="number" id="gj-input-interval" value="${state.refreshInterval}" class="gj-input-mini">
-                            <button id="gj-btn-set" class="gj-btn-icon">🆗</button>
-                        </div>
+                <div class="gj-control-row">
+                    <span style="color:var(--gj-text-sec);font-size:12px;">刷新间隔</span>
+                    <div style="display:flex;align-items:center;">
+                        <input type="number" id="gj-input-interval" value="${state.refreshInterval}" class="gj-input-mini">
+                        <button id="gj-btn-set" class="gj-btn-icon">🆗</button>
                     </div>
+                </div>
 
-                    <!-- [新增] 调试与消单配置 -->
-                    <div class="gj-control-row" style="margin-top:8px;border-top:1px dashed var(--gj-border);padding-top:8px; flex-wrap:wrap; gap:4px;">
-                         <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;margin-right:8px;">
-                            <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
-                            🐛 调试模式
-                         </label>
-                         <div style="display:flex;align-items:center;gap:4px;" title="当状态列包含'乘客取消'时自动删除电话">
-                            <span style="font-size:12px;">🚫 消单列</span>
-                            <input type="number" id="gj-input-cancel-col" value="${cancelColValue}" placeholder="无" class="gj-input-mini" style="width:30px;">
-                         </div>
-                    </div>
-                    ${debugPanelHtml}
-    
-                    <div class="gj-control-row" style="margin-top:10px; border-top:1px dashed var(--gj-border); padding-top:10px; justify-content: space-around;">
-                        <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
-                        <span class="btn-icon-circle" id="btn-cloud-pull" title="⬇️ 覆盖下载(以云端为准)" style="background:rgba(230,162,60,0.6)">⬇</span>
-                        <span class="btn-icon-circle" id="btn-cloud-push" title="⬆️ 上传本地数据" style="background:rgba(245,108,108,0.6)">⬆</span>
-                        <label class="btn-icon-circle" title="导入本地文件(txt/csv)" style="background:rgba(103,194,58,0.6)">
-                            📂<input type="file" id="gj-file-import" style="display:none" accept=".txt,.csv">
-                        </label>
-                    </div>
-                `;
+                ${isOrderPage() ? `
+                <!-- [新增] 调试与消单配置 -->
+                <div class="gj-control-row" style="margin-top:8px;border-top:1px dashed var(--gj-border);padding-top:8px; flex-wrap:wrap; gap:4px;">
+                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;margin-right:8px;">
+                        <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
+                        🐛 调试模式
+                     </label>
+                     <div style="display:flex;align-items:center;gap:4px;" title="当状态列包含'乘客取消'时自动删除电话">
+                        <span style="font-size:12px;">🚫 消单列</span>
+                        <input type="number" id="gj-input-cancel-col" value="${cancelColValue}" placeholder="无" class="gj-input-mini" style="width:30px;">
+                     </div>
+                </div>
+                ${debugPanelHtml}
+                ` : ''}
+
+                <div class="gj-control-row" style="margin-top:10px; border-top:1px dashed var(--gj-border); padding-top:10px; justify-content: space-around;">
+                    <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
+                    <span class="btn-icon-circle" id="btn-cloud-pull" title="⬇️ 覆盖下载(以云端为准)" style="background:rgba(230,162,60,0.6)">⬇</span>
+                    <span class="btn-icon-circle" id="btn-cloud-push" title="⬆️ 上传本地数据" style="background:rgba(245,108,108,0.6)">⬆</span>
+                    <label class="btn-icon-circle" title="导入本地文件(txt/csv)" style="background:rgba(103,194,58,0.6)">
+                        📂<input type="file" id="gj-file-import" style="display:none" accept=".txt,.csv">
+                    </label>
+                </div>
+            `;
             }
         } else if (isDispatchPage()) {
             const buttonsHtml = CONFIG.DISPATCH.PRESETS.map(num =>
@@ -1424,6 +1431,23 @@
         document.getElementById('btn-cloud-pull')?.addEventListener('click', () => pullFromCloud(false));
         document.getElementById('btn-cloud-push')?.addEventListener('click', pushToCloud);
         document.getElementById('gj-file-import')?.addEventListener('change', handleFileImport);
+
+        // [新增] 司机调度页面主题按键代理：触发官方按钮的点击
+        if (isDriverPage()) {
+            const triggerAmapTheme = (themeName) => {
+                // 查询页面中包含 name="{themeName}" 的原版按钮
+                const officalBtn = document.querySelector(`button[name="amap://styles/${themeName}"]`);
+                if (officalBtn) {
+                    officalBtn.click();
+                    log(`已切换至官方【${themeName === 'dark' ? '黑夜' : '标准'}】模式`, 'success');
+                } else {
+                    log(`未在页面找到官方的主题切换按钮 (尝试匹配 amap://styles/${themeName})`, 'warning');
+                }
+            };
+            document.getElementById('gj-btn-theme-dark')?.addEventListener('click', () => triggerAmapTheme('dark'));
+            document.getElementById('gj-btn-theme-light')?.addEventListener('click', () => triggerAmapTheme('normal'));
+        }
+
         if (isDispatchPage()) {
             document.querySelectorAll('.btn-preset').forEach(btn =>
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
