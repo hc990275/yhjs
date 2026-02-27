@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v15.9.2 独立刷新版)
+// @name          代驾调度系统助手 (v2.0.0 独立刷新版)
 // @namespace     http://tampermonkey.net/
-// @version       15.9.2
-// @description   【v15.9.2】新增：抓取按钮和调试选项仅在订单管理页面显示，避免干扰。
+// @version       2.0.0
+// @description   【v2.0.0】优化司机调度界面，增强订单指派搜索，增加调试支持。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -930,10 +930,13 @@
             const textColor = isPausedPage ? '#F56C6C' : '#67C23A'; // 停止红/运行绿
 
             pauseHtml = `
-                <div id="gj-header-pause" title="${pauseTitle}" style="cursor:pointer; display:flex; align-items:center; gap:4px;">
-                    <span style="color:${iconColor};font-size:16px;font-weight:bold;">${pauseIcon}</span>
-                    <span style="font-weight:bold;font-size:14px;">启停</span>
-                    <span style="font-size:12px;color:${textColor};transform:scale(0.9);">${statusText}</span>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <span id="gj-header-timer" style="font-weight:bold; color:${textColor}; font-size:14px; min-width:24px; text-align:right;">${isPausedPage ? '停' : state.countdown + 's'}</span>
+                    <div id="gj-header-pause" title="${pauseTitle}" style="cursor:pointer; display:flex; align-items:center; gap:4px;">
+                        <span id="gj-header-pause-icon" style="color:${iconColor};font-size:16px;font-weight:bold;">${pauseIcon}</span>
+                        <span style="font-weight:bold;font-size:14px;">启停</span>
+                        <span id="gj-header-pause-text" style="font-size:12px;color:${textColor};transform:scale(0.9);">${statusText}</span>
+                    </div>
                 </div>
             `;
         }
@@ -1079,13 +1082,18 @@
             const textColor = isPausedPage ? '#F56C6C' : '#67C23A';
 
             headerPauseBtn.title = pauseTitle;
-            headerPauseBtn.innerHTML = `
-                <span style="color:${iconColor};font-size:16px;font-weight:bold;">${pauseIcon}</span>
-                <span style="font-weight:bold;font-size:14px;">启停</span>
-                <span style="font-size:12px;color:${textColor};transform:scale(0.9);">${statusText}</span>
-            `;
+            mainWidget.querySelector('#gj-header-pause-icon').textContent = pauseIcon;
+            mainWidget.querySelector('#gj-header-pause-icon').style.color = iconColor;
+            mainWidget.querySelector('#gj-header-pause-text').textContent = statusText;
+            mainWidget.querySelector('#gj-header-pause-text').style.color = textColor;
+
+            const headerTimer = mainWidget.querySelector('#gj-header-timer');
+            if (headerTimer) {
+                headerTimer.textContent = isPausedPage ? '停' : state.countdown + 's';
+                headerTimer.style.color = textColor;
+            }
         } else if (headerPauseBtn && !isOrderPage() && !isDriverPage()) {
-            headerPauseBtn.style.display = 'none'; // 非相关页面隐藏
+            headerPauseBtn.parentElement.style.display = 'none'; // 非相关页面隐藏
         }
 
         let addrWidget = document.getElementById('gj-widget-addr');
@@ -1144,47 +1152,57 @@
             const scrapeText = state.isScrapingEnabled ? '👁️ 自动抓取: 开启' : '🙈 自动抓取: 关闭';
             const scrapeStyle = state.isScrapingEnabled ? 'border:1px solid #e1f3d8;background:#f0f9eb;color:#67c23a;' : 'border:1px solid var(--gj-border);background:var(--gj-bg-sec);color:var(--gj-text-mute);';
 
-            html = `
-                <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
-                    <span class="gj-timer-text" style="color:${statusColor}">${paused ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
-                </div>
-                
-                <button id="gj-btn-toggle" class="gj-btn ${btnClass}">${btnText}</button>
-                
-                ${isOrderPage() ? `<button id="gj-btn-scrape" class="gj-btn" style="margin-top:8px; ${scrapeStyle}">${scrapeText}</button>` : ''}
-
-                <div class="gj-control-row">
-                    <span style="color:var(--gj-text-sec);font-size:12px;">刷新间隔</span>
-                    <div style="display:flex;align-items:center;">
-                        <input type="number" id="gj-input-interval" value="${state.refreshInterval}" class="gj-input-mini">
-                        <button id="gj-btn-set" class="gj-btn-icon">🆗</button>
+            if (isDriverPage()) {
+                html = `
+                    <div class="gj-control-row">
+                        <span style="color:var(--gj-text-sec);font-size:12px;">刷新间隔</span>
+                        <div style="display:flex;align-items:center;">
+                            <input type="number" id="gj-input-interval" value="${state.refreshInterval}" class="gj-input-mini">
+                            <button id="gj-btn-set" class="gj-btn-icon">🆗</button>
+                        </div>
                     </div>
-                </div>
+                `;
+            } else {
+                html = `
+                    <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
+                        <span class="gj-timer-text" style="color:${statusColor}">${paused ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
+                    </div>
+                    
+                    <button id="gj-btn-toggle" class="gj-btn ${btnClass}">${btnText}</button>
+                    
+                    <button id="gj-btn-scrape" class="gj-btn" style="margin-top:8px; ${scrapeStyle}">${scrapeText}</button>
 
-                ${isOrderPage() ? `
-                <!-- [新增] 调试与消单配置 -->
-                <div class="gj-control-row" style="margin-top:8px;border-top:1px dashed var(--gj-border);padding-top:8px; flex-wrap:wrap; gap:4px;">
-                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;margin-right:8px;">
-                        <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
-                        🐛 调试模式
-                     </label>
-                     <div style="display:flex;align-items:center;gap:4px;" title="当状态列包含'乘客取消'时自动删除电话">
-                        <span style="font-size:12px;">🚫 消单列</span>
-                        <input type="number" id="gj-input-cancel-col" value="${cancelColValue}" placeholder="无" class="gj-input-mini" style="width:30px;">
-                     </div>
-                </div>
-                ${debugPanelHtml}
-                ` : ''}
+                    <div class="gj-control-row">
+                        <span style="color:var(--gj-text-sec);font-size:12px;">刷新间隔</span>
+                        <div style="display:flex;align-items:center;">
+                            <input type="number" id="gj-input-interval" value="${state.refreshInterval}" class="gj-input-mini">
+                            <button id="gj-btn-set" class="gj-btn-icon">🆗</button>
+                        </div>
+                    </div>
 
-                <div class="gj-control-row" style="margin-top:10px; border-top:1px dashed var(--gj-border); padding-top:10px; justify-content: space-around;">
-                    <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
-                    <span class="btn-icon-circle" id="btn-cloud-pull" title="⬇️ 覆盖下载(以云端为准)" style="background:rgba(230,162,60,0.6)">⬇</span>
-                    <span class="btn-icon-circle" id="btn-cloud-push" title="⬆️ 上传本地数据" style="background:rgba(245,108,108,0.6)">⬆</span>
-                    <label class="btn-icon-circle" title="导入本地文件(txt/csv)" style="background:rgba(103,194,58,0.6)">
-                        📂<input type="file" id="gj-file-import" style="display:none" accept=".txt,.csv">
-                    </label>
-                </div>
-            `;
+                    <!-- [新增] 调试与消单配置 -->
+                    <div class="gj-control-row" style="margin-top:8px;border-top:1px dashed var(--gj-border);padding-top:8px; flex-wrap:wrap; gap:4px;">
+                         <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;margin-right:8px;">
+                            <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
+                            🐛 调试模式
+                         </label>
+                         <div style="display:flex;align-items:center;gap:4px;" title="当状态列包含'乘客取消'时自动删除电话">
+                            <span style="font-size:12px;">🚫 消单列</span>
+                            <input type="number" id="gj-input-cancel-col" value="${cancelColValue}" placeholder="无" class="gj-input-mini" style="width:30px;">
+                         </div>
+                    </div>
+                    ${debugPanelHtml}
+    
+                    <div class="gj-control-row" style="margin-top:10px; border-top:1px dashed var(--gj-border); padding-top:10px; justify-content: space-around;">
+                        <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
+                        <span class="btn-icon-circle" id="btn-cloud-pull" title="⬇️ 覆盖下载(以云端为准)" style="background:rgba(230,162,60,0.6)">⬇</span>
+                        <span class="btn-icon-circle" id="btn-cloud-push" title="⬆️ 上传本地数据" style="background:rgba(245,108,108,0.6)">⬆</span>
+                        <label class="btn-icon-circle" title="导入本地文件(txt/csv)" style="background:rgba(103,194,58,0.6)">
+                            📂<input type="file" id="gj-file-import" style="display:none" accept=".txt,.csv">
+                        </label>
+                    </div>
+                `;
+            }
         } else if (isDispatchPage()) {
             const buttonsHtml = CONFIG.DISPATCH.PRESETS.map(num =>
                 `<button class="btn-preset" data-val="${num}">${num}</button>`
@@ -1196,19 +1214,23 @@
                     <div id="gj-user-check-result" style="display:none; margin-top:6px; font-size:12px; text-align:center; padding:4px; border-radius:4px;"></div>
                 </div>
                 <!-- [移动] 自动备注开关到指派页面 -->
-                <div class="gj-control-row" style="margin-top:6px; justify-content:center;">
+                <div class="gj-control-row" style="margin-top:6px; justify-content:center; gap:10px;">
                      <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;color:var(--gj-text-sec);" title="新客户自动备注拉群">
                         <input type="checkbox" id="gj-chk-auto-remark" ${state.autoRemark ? 'checked' : ''} style="margin-right:4px;">
-                        📝 新客户自动备注"拉群"
+                        📝 自动备注
+                     </label>
+                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;color:var(--gj-text-sec);" title="启用调试面板">
+                        <input type="checkbox" id="gj-chk-debug-dispatch" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
+                        🐛 调试开关
                      </label>
                 </div>
+                ${state.debugMode ? `<div id="gj-debug-dispatch-panel" style="margin-top:6px;padding:4px;background:#333;color:#fff;font-size:11px;border-radius:4px;text-align:center;">开发预留: 提取官方主题等逻辑</div>` : ''}
                 <div class="gj-divider">
                     <span class="gj-label-sm">AI 距离 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</span>
                 </div>
                 <div class="gj-grid-btns">${buttonsHtml}</div>
                 
-                <div class="gj-bottom-controls">
-                    <button id="btn-sync-cloud" class="gj-btn-text">☁️ 手动同步</button>
+                <div class="gj-bottom-controls" style="justify-content: flex-end;">
                     <span style="font-size:10px;color:var(--gj-text-mute);">缩放: ${(state.uiScale * 100).toFixed(0)}%</span>
                 </div>
             `;
@@ -1222,13 +1244,22 @@
     const updateListsUI = () => {
         const addrBody = document.getElementById('list-addr-body');
         if (!addrBody) return;
-        const isPhone = state.viewTab === 'phone';
-        const sourceList = isPhone ? state.db.phones : state.db.addrs;
-        const filteredList = (sourceList || []).filter(item => isMatch(item, state.searchText, isPhone ? 'phone' : 'address'));
+
+        let filteredList = [];
+        if (state.searchText) {
+            const pList = (state.db.phones || []).filter(item => isMatch(item, state.searchText, 'phone')).map(item => ({ val: item, type: 'phone', icon: '📞' }));
+            const aList = (state.db.addrs || []).filter(item => isMatch(item, state.searchText, 'address')).map(item => ({ val: item, type: 'address', icon: '📍' }));
+            filteredList = [...pList, ...aList];
+        } else {
+            const isPhone = state.viewTab === 'phone';
+            const sourceList = isPhone ? state.db.phones : state.db.addrs;
+            filteredList = (sourceList || []).map(item => ({ val: item, type: isPhone ? 'phone' : 'address', icon: isPhone ? '📞' : '📍' }));
+        }
+
         const renderItem = (item) => {
-            return `<div class="gj-list-item" title="${item}" data-val="${item}" data-type="${isPhone ? 'phone' : 'address'}">
-                ${isPhone ? '📞' : ''}
-                <span class="gj-item-text">${item}</span>
+            return `<div class="gj-list-item" title="${item.val}" data-val="${item.val}" data-type="${item.type}">
+                <span style="margin-right:4px;">${item.icon}</span>
+                <span class="gj-item-text">${item.val}</span>
             </div>`;
         };
 
@@ -1405,9 +1436,7 @@
                 processClipboard('phone');
             });
 
-            document.getElementById('btn-sync-cloud')?.addEventListener('click', () => {
-                fetchOnlineBlacklist(false);
-            });
+            // btn-sync-cloud 按钮已移除，无需绑定事件
 
             // 回收旧的 observer
             if (window._gjDispatchObserver) {
@@ -1463,6 +1492,14 @@
                 chkAutoRemark.addEventListener('change', (e) => {
                     state.autoRemark = e.target.checked;
                     GM_setValue('autoRemark', state.autoRemark);
+                });
+            }
+
+            const chkDebugDispatch = document.getElementById('gj-chk-debug-dispatch');
+            if (chkDebugDispatch) {
+                chkDebugDispatch.addEventListener('change', (e) => {
+                    state.debugMode = e.target.checked;
+                    updateUI(); // 重新渲染时显示或隐藏面板
                 });
             }
 
@@ -1540,14 +1577,25 @@
 
     const updateStatusText = () => {
         const text = document.querySelector('.gj-timer-text');
+        const headerTimer = document.getElementById('gj-header-timer');
+        const paused = isPaused();
         if (text) {
-            if (isPaused()) { // [修改] 使用统一暂停判断
+            if (paused) {
                 text.textContent = "暂停";
                 text.style.color = "var(--gj-text-sec)";
             }
             else {
                 text.innerHTML = `${state.countdown}<span style="font-size:16px;margin-left:2px;opacity:0.6">s</span>`;
                 text.style.color = state.countdown <= 3 ? "#F56C6C" : "#409EFF";
+            }
+        }
+        if (headerTimer) {
+            if (paused) {
+                headerTimer.textContent = "停";
+                headerTimer.style.color = "var(--gj-text-sec)";
+            } else {
+                headerTimer.textContent = state.countdown + "s";
+                headerTimer.style.color = state.countdown <= 3 ? "#F56C6C" : "#67C23A";
             }
         }
     };
