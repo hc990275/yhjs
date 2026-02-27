@@ -1466,8 +1466,25 @@
                 // 查询页面中包含 name="{themeName}" 的原版按钮
                 const officalBtn = document.querySelector(`button[name="amap://styles/${themeName}"]`);
                 if (officalBtn) {
-                    officalBtn.click();
-                    log(`已切换至官方【${themeName === 'dark' ? '黑夜' : '标准'}】模式`, 'success');
+                    try {
+                        // 构造原生的鼠标点击事件以触发 Vue/React 的绑定逻辑
+                        const eventDown = new MouseEvent('mousedown', { view: window, bubbles: true, cancelable: true });
+                        const eventUp = new MouseEvent('mouseup', { view: window, bubbles: true, cancelable: true });
+                        const eventClick = new MouseEvent('click', { view: window, bubbles: true, cancelable: true });
+                        const eventPointerObj = window.PointerEvent ? new PointerEvent('pointerdown', { bubbles: true, cancelable: true }) : null;
+                        const eventPointerObjUp = window.PointerEvent ? new PointerEvent('pointerup', { bubbles: true, cancelable: true }) : null;
+
+                        if (eventPointerObj) officalBtn.dispatchEvent(eventPointerObj);
+                        officalBtn.dispatchEvent(eventDown);
+                        if (eventPointerObjUp) officalBtn.dispatchEvent(eventPointerObjUp);
+                        officalBtn.dispatchEvent(eventUp);
+                        officalBtn.dispatchEvent(eventClick);
+
+                        log(`已派发原生事件至官方【${themeName === 'dark' ? '黑夜' : '标准'}】模式按钮`, 'success');
+                    } catch (e) {
+                        officalBtn.click(); // fallback
+                        log(`采用基础click触发【${themeName}】`, 'warning');
+                    }
                 } else {
                     log(`未在页面找到官方的主题切换按钮 (尝试匹配 amap://styles/${themeName})`, 'warning');
                 }
