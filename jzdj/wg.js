@@ -1166,13 +1166,39 @@
                             <button id="gj-btn-set" class="gj-btn-icon">🆗</button>
                         </div>
                     </div>
-                `;
+                
+                <!-- [移动] 调试与消单配置至公共区域（Order与Driver都可见） -->
+                <div class="gj-control-row" style="margin-top:8px;border-top:1px dashed var(--gj-border);padding-top:8px; flex-wrap:wrap; gap:4px;">
+                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;margin-right:8px;" title="开启后会在此收集页面变化进行分析">
+                        <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
+                        🐛 调试模式(持续记录)
+                     </label>
+                     ${isOrderPage() ? `
+                     <div style="display:flex;align-items:center;gap:4px;" title="当状态列包含'乘客取消'时自动删除电话">
+                        <span style="font-size:12px;">🚫 消单列</span>
+                        <input type="number" id="gj-input-cancel-col" value="${cancelColValue}" placeholder="无" class="gj-input-mini" style="width:30px;">
+                     </div>
+                     ` : ''}
+                </div>
+                ${state.debugMode ? `<div id="gj-debug-panel" style="margin-top:6px;padding:6px;background:#2c2c2c;color:#a6e22e;font-size:10px;border-radius:4px;max-height:200px;overflow-y:auto;word-wrap:break-word;font-family:monospace;white-space:pre-wrap;text-align:left;-webkit-user-select:all;user-select:all;" title="您可以直接选中复制这里的全部内容发给我">等待提取结构变化...</div>` : ''}
+
+                ${isOrderPage() ? `
+                <div class="gj-control-row" style="margin-top:10px; border-top:1px dashed var(--gj-border); padding-top:10px; justify-content: space-around;">
+                    <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
+                    <span class="btn-icon-circle" id="btn-cloud-pull" title="⬇️ 覆盖下载(以云端为准)" style="background:rgba(230,162,60,0.6)">⬇</span>
+                    <span class="btn-icon-circle" id="btn-cloud-push" title="⬆️ 上传本地数据" style="background:rgba(245,108,108,0.6)">⬆</span>
+                    <label class="btn-icon-circle" title="导入本地文件(txt/csv)" style="background:rgba(103,194,58,0.6)">
+                        📂<input type="file" id="gj-file-import" style="display:none" accept=".txt,.csv">
+                    </label>
+                </div>
+                ` : ''}
+            `;
             } else { // This block handles isOrderPage()
                 html = `
                     <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
                         <span class="gj-timer-text" style="color:${statusColor}">${paused ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
                     </div>
-                    
+                
                     <button id="gj-btn-toggle" class="gj-btn ${btnClass}">${btnText}</button>
                     
                   ${isOrderPage() ? `<button id="gj-btn-scrape" class="gj-btn" style="margin-top:8px; ${scrapeStyle}">${scrapeText}</button>` : ''}
@@ -1185,21 +1211,22 @@
                     </div>
                 </div>
 
-                ${isOrderPage() ? `
-                <!-- [新增] 调试与消单配置 -->
+                <!-- [移动] 调试与消单配置至公共区域（Order与Driver都可见） -->
                 <div class="gj-control-row" style="margin-top:8px;border-top:1px dashed var(--gj-border);padding-top:8px; flex-wrap:wrap; gap:4px;">
-                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;margin-right:8px;">
+                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;margin-right:8px;" title="开启后会在此收集页面变化进行分析">
                         <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
-                        🐛 调试模式
+                        🐛 调试模式(持续记录)
                      </label>
+                     ${isOrderPage() ? `
                      <div style="display:flex;align-items:center;gap:4px;" title="当状态列包含'乘客取消'时自动删除电话">
                         <span style="font-size:12px;">🚫 消单列</span>
                         <input type="number" id="gj-input-cancel-col" value="${cancelColValue}" placeholder="无" class="gj-input-mini" style="width:30px;">
                      </div>
+                     ` : ''}
                 </div>
-                ${debugPanelHtml}
-                ` : ''}
-
+                ${state.debugMode ? `<div id="gj-debug-panel" style="margin-top:6px;padding:6px;background:#2c2c2c;color:#a6e22e;font-size:10px;border-radius:4px;max-height:200px;overflow-y:auto;word-wrap:break-word;font-family:monospace;white-space:pre-wrap;text-align:left;-webkit-user-select:all;user-select:all;" title="您可以直接选中复制这里的全部内容发给我">等待提取结构变化...</div>` : ''}
+                
+                ${isOrderPage() ? `
                 <div class="gj-control-row" style="margin-top:10px; border-top:1px dashed var(--gj-border); padding-top:10px; justify-content: space-around;">
                     <span class="btn-icon-circle" id="btn-cloud-setting" title="配置云端Worker" style="background:rgba(64,158,255,0.6)">⚙️</span>
                     <span class="btn-icon-circle" id="btn-cloud-pull" title="⬇️ 覆盖下载(以云端为准)" style="background:rgba(230,162,60,0.6)">⬇</span>
@@ -1208,6 +1235,7 @@
                         📂<input type="file" id="gj-file-import" style="display:none" accept=".txt,.csv">
                     </label>
                 </div>
+                ` : ''}
             `;
             }
         } else if (isDispatchPage()) {
@@ -1517,71 +1545,77 @@
                 });
             }
 
-            const chkDebugDispatch = document.getElementById('gj-chk-debug-dispatch');
-            if (chkDebugDispatch) {
-                chkDebugDispatch.addEventListener('change', (e) => {
+            const chkDebug = document.getElementById('gj-chk-debug');
+            if (chkDebug) {
+                chkDebug.addEventListener('change', (e) => {
                     state.debugMode = e.target.checked;
                     GM_setValue('debugMode', state.debugMode);
                     updateUI(); // 重新渲染时显示或隐藏面板
                 });
             }
 
-            // [新增] 动态提取官方“黑夜/标准”主题按钮信息
+            // [新增] 动态追加变化记录的调试分析面板
             if (state.debugMode) {
+                let lastDebugHash = ''; // 用于对比 HTML 变化
+                let recordCounter = 1;
+
                 const updateDebugPanel = () => {
-                    if (!isDispatchPage() || !state.debugMode) return;
-                    const panel = document.getElementById('gj-debug-dispatch-panel');
+                    if (!state.debugMode) return;
+                    const panel = document.getElementById('gj-debug-panel');
                     if (panel) {
                         try {
-                            // 扩大选取范围，防止类名不标准
-                            let possibleHeader = document.querySelector('.el-header') || document.querySelector('.header') || document.querySelector('.navbar') || document.querySelector('header');
-                            // 如果还是找不到结构，直接抓取 body 下第一层级类似头部区域的 div
+                            const possibleHeader = document.querySelector('.el-header') || document.querySelector('.header') || document.querySelector('.navbar') || document.querySelector('header');
+                            let debugHtml = '';
+                            let fallbacks = '';
+
                             if (!possibleHeader) {
-                                const allDivs = document.querySelectorAll('body > div, #app > div');
-                                for (let d of allDivs) {
-                                    if (d.clientHeight > 30 && d.clientHeight < 120 && d.innerText.includes('系统')) {
-                                        possibleHeader = d;
-                                        break;
+                                // 备选查找整个页面的主题按钮
+                                fallbacks = Array.from(document.querySelectorAll('.el-switch, .el-radio-group, button')).map(el => {
+                                    if (el.innerText.includes('黑夜') || el.innerText.includes('主题') || el.innerText.includes('标准') || (el.name && el.name.includes('amap'))) {
+                                        return `\n疑似按钮: "${el.innerText.trim()}" | class: "${el.className}" | html: ${el.outerHTML}`;
                                     }
-                                }
-                            }
-                            // 如果实在没有，抓全页面的 button 和图标相关的元素作为备选
-                            if (!possibleHeader) {
-                                const fallbacks = Array.from(document.querySelectorAll('.el-switch, .el-radio-group, button')).map(el => {
-                                    if (el.innerText.includes('黑夜') || el.innerText.includes('主题') || el.innerText.includes('标准')) {
-                                        return `<br/>疑似按钮: "${el.innerText.trim()}" | class: "${el.className}" | html: ${el.outerHTML.substring(0, 200)}`;
+                                    return '';
+                                }).filter(Boolean).join('');
+                            } else {
+                                const allTexts = Array.from(possibleHeader.querySelectorAll('div, span, i, button, li')).map(el => {
+                                    if (el.children.length === 0 && el.textContent.trim().length > 0 && el.textContent.trim().length < 10) {
+                                        return `\n文字: "${el.textContent.trim()}" | class: "${el.className.trim()}" | html: ${el.outerHTML}`;
+                                    }
+                                    if (el.name && el.name.includes('amap')) {
+                                        return `\n地图底图切换特征: name="${el.name}" | class: "${el.className}" | html: ${el.outerHTML}`;
                                     }
                                     return '';
                                 }).filter(Boolean).join('');
 
-                                panel.innerHTML = fallbacks ? `[未找到标准顶部导航栏，但找到了相关按钮特征:]\n${fallbacks.replace(/</g, '&lt;').replace(/>/g, '&gt;')}` : `[未找到顶部导航栏或带“主题/黑夜”字样的按钮元素，请确认该页面内是否真的存在这个按钮]`;
-                                return;
+                                debugHtml = `[Header节点特征]:${allTexts || '无独立文字'}`;
                             }
 
-                            let debugHtml = '';
-                            if (possibleHeader) {
-                                const allTexts = Array.from(possibleHeader.querySelectorAll('div, span, i, button, li')).map(el => {
-                                    if (el.children.length === 0 && el.textContent.trim().length > 0 && el.textContent.trim().length < 10) {
-                                        return `\n文字: "${el.textContent.trim()}" | class: "${el.className.trim()}"`;
-                                    }
-                                    return '';
-                                }).filter(Boolean).slice(0, 10).join('');
+                            const currentHtmlStr = (debugHtml + fallbacks).replace(/</g, '&lt;').replace(/>/g, '&gt;').trim();
 
-                                debugHtml = `[Header分析]\n完整高:${possibleHeader.clientHeight}px\n节点特征:${allTexts || '无独立文字'}\n\n[Header全量精简HTML]:\n<br/>${possibleHeader.innerHTML.replace(/<svg[\s\S]*?<\/svg>/gi, '<svg>...</svg>').replace(/<path[\s\S]*?>/gi, '').substring(0, 1500)}`;
+                            // 判断当前抓取到的特征是否变动，有变动则向顶部继续追加（不覆盖原来内容）
+                            if (currentHtmlStr !== lastDebugHash && currentHtmlStr.length > 0) {
+                                lastDebugHash = currentHtmlStr;
+                                const timeStr = new Date().toLocaleTimeString();
+                                const newRecord = `==========\n⏰ [${recordCounter}] 时间: ${timeStr} 👇发生变动👇\n${currentHtmlStr}\n\n`;
+
+                                // 追加，保证最新记录在最上面
+                                if (recordCounter === 1) {
+                                    panel.innerHTML = `⚠️ 请在这个面板出现信息后，去【点击官方的主题按钮】，有任何内容追加出来，都可以全选复制发给我：\n\n` + newRecord;
+                                } else {
+                                    panel.innerHTML = newRecord + panel.innerHTML;
+                                }
+                                recordCounter++;
                             }
-                            panel.innerHTML = `⚠️ 请长按全选下面框内内容并复制发给我：\n============\n${debugHtml.replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/&lt;br\/?&gt;/g, '<br/>')}`;
                         } catch (e) {
-                            panel.innerText = `提取错误: ${e.message}`;
+                            if (recordCounter === 1) panel.innerText = `提取错误: ${e.message}`;
                         }
                     }
                 };
 
                 if (window._gjDebugDispatchLoop) clearInterval(window._gjDebugDispatchLoop);
-                window._gjDebugDispatchLoop = setInterval(updateDebugPanel, 3000);
-                setTimeout(updateDebugPanel, 800);
+                window._gjDebugDispatchLoop = setInterval(updateDebugPanel, 1500); // 提升频率快速捕捉变化
+                setTimeout(updateDebugPanel, 500);
             }
-
-            // 循环检测司机数据和表单重置状态
             if (window._gjDispatchLoop) clearInterval(window._gjDispatchLoop);
             window._gjDispatchLoop = setInterval(() => {
                 if (!isDispatchPage()) return;
