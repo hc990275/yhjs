@@ -1463,30 +1463,46 @@
         // [新增] 司机调度页面主题按键代理：触发官方按钮的点击
         if (isDriverPage()) {
             const triggerAmapTheme = (themeName) => {
-                // 查询页面中包含 name="{themeName}" 的原版按钮
-                const officalBtn = document.querySelector(`button[name="amap://styles/${themeName}"]`);
-                if (officalBtn) {
-                    try {
-                        // 构造原生的鼠标点击事件以触发 Vue/React 的绑定逻辑
-                        const eventDown = new MouseEvent('mousedown', { view: window, bubbles: true, cancelable: true });
-                        const eventUp = new MouseEvent('mouseup', { view: window, bubbles: true, cancelable: true });
-                        const eventClick = new MouseEvent('click', { view: window, bubbles: true, cancelable: true });
-                        const eventPointerObj = window.PointerEvent ? new PointerEvent('pointerdown', { bubbles: true, cancelable: true }) : null;
-                        const eventPointerObjUp = window.PointerEvent ? new PointerEvent('pointerup', { bubbles: true, cancelable: true }) : null;
+                const targetText = themeName === 'dark' ? '黑夜' : '标准';
+                let found = false;
 
-                        if (eventPointerObj) officalBtn.dispatchEvent(eventPointerObj);
-                        officalBtn.dispatchEvent(eventDown);
-                        if (eventPointerObjUp) officalBtn.dispatchEvent(eventPointerObjUp);
-                        officalBtn.dispatchEvent(eventUp);
-                        officalBtn.dispatchEvent(eventClick);
+                // 检索页面上不是我们自己添加的所有 button 与 span
+                document.querySelectorAll('button').forEach(btn => {
+                    // 忽略助手面板内的控件
+                    if (btn.id.includes('gj-btn') || btn.closest('#gj-widget-main')) return;
 
-                        log(`已派发原生事件至官方【${themeName === 'dark' ? '黑夜' : '标准'}】模式按钮`, 'success');
-                    } catch (e) {
-                        officalBtn.click(); // fallback
-                        log(`采用基础click触发【${themeName}】`, 'warning');
+                    if (btn.name === `amap://styles/${themeName}` || btn.innerText.includes(targetText)) {
+                        found = true;
+                        // 暴力触发法：原生点击 + 模拟鼠标事件 + 对其内部元素同样触发
+                        try {
+                            btn.click();
+
+                            const spans = btn.querySelectorAll('span');
+                            spans.forEach(span => span.click());
+
+                            const mousedown = new MouseEvent('mousedown', { view: window, bubbles: true, cancelable: true });
+                            const mouseup = new MouseEvent('mouseup', { view: window, bubbles: true, cancelable: true });
+                            const clickEv = new MouseEvent('click', { view: window, bubbles: true, cancelable: true });
+
+                            btn.dispatchEvent(mousedown);
+                            btn.dispatchEvent(mouseup);
+                            btn.dispatchEvent(clickEv);
+
+                            if (spans.length > 0) {
+                                spans[0].dispatchEvent(mousedown);
+                                spans[0].dispatchEvent(mouseup);
+                                spans[0].dispatchEvent(clickEv);
+                            }
+                        } catch (e) {
+                            // 静默处理
+                        }
                     }
+                });
+
+                if (found) {
+                    log(`已强制触发官方的【${targetText}】主题切换`, 'success');
                 } else {
-                    log(`未在页面找到官方的主题切换按钮 (尝试匹配 amap://styles/${themeName})`, 'warning');
+                    log(`未在页面找到官方的主题切换按钮特征 (amap://styles/${themeName} 或文本匹配)`, 'warning');
                 }
             };
             document.getElementById('gj-btn-theme-dark')?.addEventListener('click', () => triggerAmapTheme('dark'));
