@@ -944,36 +944,75 @@
             if (styleCss) styleCss.remove();
         }
 
-        // 抽取搜寻地图真正的实例引用的核心逻辑
+        // 极致抽取真正的地图实例逻辑 (针对 AMap V2 / Vue)
         const findMapInstance = () => {
-            if (window.amapManager && window.amapManager.getMap) {
-                return window.amapManager.getMap();
+            // 1. 全局寻址
+            if (window.amapManager && window.amapManager.getMap) return window.amapManager.getMap();
+            if (window.AMap && window.amap) return window.amap;
+
+            for (let key in window) {
+                if (window[key] && typeof window[key].setMapStyle === 'function') return window[key];
             }
-            if (window.AMap && window.amap) {
-                return window.amap;
-            }
-            const mapContainers = document.querySelectorAll('.amap-maps, .amap-container, .el-vue-amap, #map');
+
+            // 2. DOM 节点全盘深度解剖法
+            // 首先查找最有可能包含地图的父级元素
+            const mapContainers = document.querySelectorAll('.amap-container, .amap-maps, .el-vue-amap, #map, [class*="map"], body');
             for (let container of mapContainers) {
-                const vueInstance = container.__vue__ || (container.parentNode ? container.parentNode.__vue__ : null);
+                let vueInstance = container.__vue__ || (container.parentNode ? container.parentNode.__vue__ : null);
+                if (!vueInstance && container.children.length > 0) {
+                    vueInstance = container.children[0].__vue__;
+                }
+
                 if (vueInstance) {
+                    // 深度优先递归探测 __vue__ 对象内部的所有嵌套对象
+                    let found = null;
                     const findMap = (obj, depth = 0) => {
-                        if (depth > 5 || !obj) return null;
+                        if (depth > 10 || !obj || typeof obj !== 'object') return null; // 倍增深度至 10 级
+
+                        // 目标特征匹配
                         if (obj.setMapStyle && typeof obj.setMapStyle === 'function') return obj;
                         if (obj.map && typeof obj.map.setMapStyle === 'function') return obj.map;
                         if (obj.$amap && typeof obj.$amap.setMapStyle === 'function') return obj.$amap;
                         if (obj.amapManager && obj.amapManager.getMap) return obj.amapManager.getMap();
-                        if (obj.$children) {
+
+                        // 向下遍历 Vue 内部组件树
+                        if (obj.$children && Array.isArray(obj.$children)) {
                             for (let child of obj.$children) {
                                 const res = findMap(child, depth + 1);
                                 if (res) return res;
                             }
                         }
+
+                        // 暴力寻找常规对象内部名为 map 的属性或类似对象
+                        try {
+                            for (let k in obj) {
+                                if (k.startsWith('$') || k === 'constructor' || k.startsWith('_')) continue;
+                                const innerObj = obj[k];
+                                if (innerObj && innerObj.setMapStyle && typeof innerObj.setMapStyle === 'function') {
+                                    return innerObj;
+                                }
+                            }
+                        } catch (e) { }
+
                         return null;
                     };
-                    const mapInstance = findMap(vueInstance);
-                    if (mapInstance) return mapInstance;
+
+                    found = findMap(vueInstance);
+                    if (found) return found;
                 }
             }
+
+            // 3. 落底终极兜底扫描：若以上策略全空，直接遍历页面上所有挂载了 __vue__ 的标签！
+            const allEls = document.querySelectorAll('*');
+            for (let el of allEls) {
+                if (el.__vue__) {
+                    const v = el.__vue__;
+                    if (v.map && typeof v.map.setMapStyle === 'function') return v.map;
+                    if (v.$amap && typeof v.$amap.setMapStyle === 'function') return v.$amap;
+                    if (v.amapManager && v.amapManager.getMap) return v.amapManager.getMap();
+                }
+            }
+
             return null;
         };
 
@@ -983,13 +1022,14 @@
         if (state.driverApiDark) {
             if (mapInstance && typeof mapInstance.setMapStyle === 'function') {
                 try {
+                    // 订单指派页面中的黑夜代码为 amap://styles/dark 或是自定义的 ID
                     mapInstance.setMapStyle('amap://styles/dark');
-                    log('✅ 成功接管 AMap 实例并调用原生 API 改变为 API 极夜黑', 'success');
+                    log('✅ 成功接管 AMap V2.0 实例并调用原生 API 施加极夜黑', 'success');
                 } catch (e) {
                     log(`❌ 原生极夜黑调用异常: ${e.message}`, 'error');
                 }
             } else {
-                log('⚠️ API 提取失败，如果无法显示可直接使用 CSS 黑夜', 'warning');
+                log('⚠️ AMap V2.0 API 提取失败，请关闭该选项，转用旁边的 【CSS 黑夜】。', 'warning');
             }
         }
         // 切回标准模式 (当两个都没选中)
