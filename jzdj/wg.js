@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v2.1.0)
+// @name          代驾调度系统助手 (v2.1.1)
 // @namespace     http://tampermonkey.net/
-// @version       2.1.0
-// @description   【v2.1.0】新增地址库拼音全拼/首字母正则支持，优化调试面板隐藏，修补指派界面UI覆盖问题。
+// @version       2.1.1
+// @description   【v2.1.1】修复全量拉取404，增强拼音匹配在沙盒环境下的兼容性。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -490,7 +490,7 @@
             return;
         }
 
-        const targetUrl = isAuto ? `${url.replace(/\/$/, '')}/txt?token=${token}` : `${url.replace(/\/$/, '')}/api/pull?token=${token}`;
+        const targetUrl = `${url.replace(/\/$/, '')}/txt?token=${token}`;
         if (!isAuto) log('正在全量拉取(覆盖模式)...', 'info');
         GM_xmlhttpRequest({
             method: "GET",
@@ -894,10 +894,16 @@
 
         const keywords = cleanKey.split(/\s+/);
         return keywords.every(k => {
-            const pm = (typeof PinyinMatch !== 'undefined' ? PinyinMatch : null)
+            const pm = (typeof globalThis !== 'undefined' && globalThis.PinyinMatch)
+                || (typeof PinyinMatch !== 'undefined' ? PinyinMatch : null)
                 || (typeof window !== 'undefined' ? window.PinyinMatch : null)
                 || (typeof unsafeWindow !== 'undefined' ? unsafeWindow.PinyinMatch : null);
-            if (pm && pm.match && pm.match(dbItem, k)) return true;
+            try {
+                if (pm && typeof pm.match === 'function') {
+                    const matchResult = pm.match(dbItem, k);
+                    if (matchResult && matchResult.length > 0) return true;
+                }
+            } catch (e) { }
             try {
                 if (new RegExp(k, 'i').test(dbItem)) return true;
             } catch (e) { }
