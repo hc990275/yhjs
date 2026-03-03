@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v2.0.0 独立刷新版)
+// @name          代驾调度系统助手 (v2.1.0)
 // @namespace     http://tampermonkey.net/
-// @version       2.0.0
-// @description   【v2.0.0】优化司机调度界面，增强订单指派搜索，增加调试支持。
+// @version       2.1.0
+// @description   【v2.1.0】新增地址库拼音全拼/首字母正则支持，优化调试面板隐藏，修补指派界面UI覆盖问题。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -15,6 +15,7 @@
 // @grant         GM_info
 // @grant         GM_openInTab
 // @grant         unsafeWindow
+// @require       https://cdn.jsdelivr.net/npm/pinyin-match/dist/main.js
 // ==/UserScript==
 
 (function () {
@@ -879,6 +880,14 @@
         if (!inputKey) return true;
         const cleanKey = inputKey.trim();
         if (!cleanKey) return true;
+
+        if (/[.*+?^${}()|[\]\\]/.test(cleanKey)) {
+            try {
+                const re = new RegExp(cleanKey, 'i');
+                if (re.test(dbItem)) return true;
+            } catch (e) { }
+        }
+
         if (type === 'phone') {
             if (dbItem.includes(cleanKey)) return true;
             if (cleanKey.includes(dbItem)) return true;
@@ -888,6 +897,11 @@
             }
             return false;
         }
+
+        if (typeof PinyinMatch !== 'undefined' && PinyinMatch.match) {
+            if (PinyinMatch.match(dbItem, cleanKey)) return true;
+        }
+
         const keywords = cleanKey.split(/\s+/);
         return keywords.every(k => dbItem.includes(k));
     };
@@ -1345,18 +1359,18 @@
             // Common debug and cloud settings for Order and Driver pages
             html += `
                 <div class="gj-control-row" style="margin-top:8px;border-top:1px dashed var(--gj-border);padding-top:8px; flex-wrap:wrap; gap:4px;">
+                     ${isOrderPage() ? `
                      <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;margin-right:8px;" title="开启后会在此收集页面变化进行分析">
                         <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
                         🐛 调试模式(持续记录)
                      </label>
-                     ${isOrderPage() ? `
                      <div style="display:flex;align-items:center;gap:4px;" title="当状态列包含'乘客取消'时自动删除电话">
                         <span style="font-size:12px;">🚫 消单列</span>
                         <input type="number" id="gj-input-cancel-col" value="${cancelColValue}" placeholder="无" class="gj-input-mini" style="width:30px;">
                      </div>
                      ` : ''}
                 </div>
-                ${debugPanelHtml}
+                ${isOrderPage() ? debugPanelHtml : ''}
 
                 ${isOrderPage() ? `
                 <div class="gj-control-row" style="margin-top:10px; border-top:1px dashed var(--gj-border); padding-top:10px; justify-content: space-around;">
@@ -1380,10 +1394,10 @@
                     <button id="gj-btn-theme-light" class="gj-btn-icon" style="flex:1; background:#f5f5f5; color:#333; border:1px solid #ddd; border-radius:4px; padding:4px;" title="切换为高德标准底图">☀️ 标准</button>
                 </div>
                 
-                <div style="display:flex;gap:10px;margin-bottom:10px;height:40px;">
+                <div style="display:flex;gap:10px;margin-bottom:10px;height:40px;position:relative;">
                     <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
                     <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
-                    <div id="gj-user-check-result" style="display:none; margin-top:6px; font-size:12px; text-align:center; padding:4px; border-radius:4px;"></div>
+                    <div id="gj-user-check-result" style="display:none; position:absolute; left:-230px; top: 0px; width: 210px; padding: 10px; font-size:13px; text-align:center; border-radius:8px; box-shadow:0 4px 12px var(--gj-shadow); z-index:99999;"></div>
                 </div>
                 <!-- [移动] 自动备注开关到指派页面 -->
                 <div class="gj-control-row" style="margin-top:6px; justify-content:center; gap:10px;">
@@ -1391,12 +1405,7 @@
                         <input type="checkbox" id="gj-chk-auto-remark" ${state.autoRemark ? 'checked' : ''} style="margin-right:4px;">
                         📝 自动备注
                      </label>
-                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;color:var(--gj-text-sec);" title="开启后会在此收集页面变化进行分析">
-                        <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
-                        🐛 调试模式(持续记录)
-                     </label>
                 </div>
-                ${state.debugMode ? `<div id="gj-debug-panel" style="margin-top:6px;padding:6px;background:#2c2c2c;color:#a6e22e;font-size:10px;border-radius:4px;max-height:120px;overflow-y:auto;word-wrap:break-word;font-family:monospace;white-wrap;text-align:left;-webkit-user-select:all;user-select:all;" title="您可以直接选中复制这里的全部内容发给我">点击上方空白处或等待刷新提取元素...</div>` : ''}
                 <div class="gj-divider">
                     <span class="gj-label-sm">AI 距离 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</span>
                 </div>
