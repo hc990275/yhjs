@@ -490,7 +490,7 @@
             return;
         }
 
-        const targetUrl = `${url.replace(/\/$/, '')}/txt?token=${token}`;
+        const targetUrl = isAuto ? `${url.replace(/\/$/, '')}/txt?token=${token}` : `${url.replace(/\/$/, '')}/api/pull?token=${token}`;
         if (!isAuto) log('正在全量拉取(覆盖模式)...', 'info');
         GM_xmlhttpRequest({
             method: "GET",
@@ -881,29 +881,28 @@
         const cleanKey = inputKey.trim();
         if (!cleanKey) return true;
 
-        if (/[.*+?^${}()|[\]\\]/.test(cleanKey)) {
-            try {
-                const re = new RegExp(cleanKey, 'i');
-                if (re.test(dbItem)) return true;
-            } catch (e) { }
-        }
-
         if (type === 'phone') {
-            if (dbItem.includes(cleanKey)) return true;
-            if (cleanKey.includes(dbItem)) return true;
-            if (/^\d+$/.test(cleanKey) && cleanKey.length >= 4) {
-                const pattern = cleanKey.split('').join('.*');
-                try { const re = new RegExp(pattern); return re.test(dbItem); } catch (e) { }
+            const cleanPhoneKey = cleanKey.replace(/\s+/g, '');
+            if (dbItem.includes(cleanPhoneKey)) return true;
+            if (cleanPhoneKey.includes(dbItem)) return true;
+            if (/^\d+$/.test(cleanPhoneKey) && cleanPhoneKey.length >= 4) {
+                const pattern = cleanPhoneKey.split('').join('.*');
+                try { return new RegExp(pattern).test(dbItem); } catch (e) { }
             }
             return false;
         }
 
-        if (typeof PinyinMatch !== 'undefined' && PinyinMatch.match) {
-            if (PinyinMatch.match(dbItem, cleanKey)) return true;
-        }
-
         const keywords = cleanKey.split(/\s+/);
-        return keywords.every(k => dbItem.includes(k));
+        return keywords.every(k => {
+            const pm = (typeof PinyinMatch !== 'undefined' ? PinyinMatch : null)
+                || (typeof window !== 'undefined' ? window.PinyinMatch : null)
+                || (typeof unsafeWindow !== 'undefined' ? unsafeWindow.PinyinMatch : null);
+            if (pm && pm.match && pm.match(dbItem, k)) return true;
+            try {
+                if (new RegExp(k, 'i').test(dbItem)) return true;
+            } catch (e) { }
+            return dbItem.includes(k);
+        });
     };
     const applyLayout = () => {
         const addrWidget = document.getElementById('gj-widget-addr');
@@ -1364,10 +1363,6 @@
                         <input type="checkbox" id="gj-chk-debug" ${state.debugMode ? 'checked' : ''} style="margin-right:4px;">
                         🐛 调试模式(持续记录)
                      </label>
-                     <div style="display:flex;align-items:center;gap:4px;" title="当状态列包含'乘客取消'时自动删除电话">
-                        <span style="font-size:12px;">🚫 消单列</span>
-                        <input type="number" id="gj-input-cancel-col" value="${cancelColValue}" placeholder="无" class="gj-input-mini" style="width:30px;">
-                     </div>
                      ` : ''}
                 </div>
                 ${isOrderPage() ? debugPanelHtml : ''}
@@ -1397,7 +1392,7 @@
                 <div style="display:flex;gap:10px;margin-bottom:10px;height:40px;position:relative;">
                     <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
                     <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
-                    <div id="gj-user-check-result" style="display:none; position:absolute; left:-230px; top: 0px; width: 210px; padding: 10px; font-size:13px; text-align:center; border-radius:8px; box-shadow:0 4px 12px var(--gj-shadow); z-index:99999;"></div>
+                    <div id="gj-user-check-result" style="display:none; position:absolute; left:-240px; top: 0px; width: 220px; padding: 10px; font-size:13px; text-align:center; border-radius:8px; box-shadow:0 4px 12px var(--gj-shadow); z-index:99999; background:#fff;"></div>
                 </div>
                 <!-- [移动] 自动备注开关到指派页面 -->
                 <div class="gj-control-row" style="margin-top:6px; justify-content:center; gap:10px;">
