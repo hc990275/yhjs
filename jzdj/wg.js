@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v2.1.1)
+// @name          代驾调度系统助手 (v2.1.2)
 // @namespace     http://tampermonkey.net/
-// @version       2.1.1
-// @description   【v2.1.1】修复全量拉取404，增强拼音匹配在沙盒环境下的兼容性。
+// @version       2.1.2
+// @description   【v2.1.2】彻底解决第三方库受沙盒影响导致拼音检索失效的问题。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -853,6 +853,18 @@
         }
     };
 
+    // --- 动态加载拼音库 (规避 @require 偶尔失效或无刷新的问题) ---
+    const ensurePinyinLib = () => {
+        const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+        if (win.PinyinMatch) return;
+        const script = document.createElement('script');
+        script.src = 'https://cdn.jsdelivr.net/npm/pinyin-match/dist/main.js';
+        script.onload = () => log('PinyinMatch 库动态加载成功', 'success');
+        script.onerror = () => log('PinyinMatch 库动态加载失败', 'error');
+        document.head.appendChild(script);
+    };
+
+
     const setSliderValue = (targetValue) => {
         const MAX_VAL = 20;
         const calibrationMap = { 2: 1, 3: 2, 5: 4, 10: 10, 20: 20 };
@@ -894,10 +906,8 @@
 
         const keywords = cleanKey.split(/\s+/);
         return keywords.every(k => {
-            const pm = (typeof globalThis !== 'undefined' && globalThis.PinyinMatch)
-                || (typeof PinyinMatch !== 'undefined' ? PinyinMatch : null)
-                || (typeof window !== 'undefined' ? window.PinyinMatch : null)
-                || (typeof unsafeWindow !== 'undefined' ? unsafeWindow.PinyinMatch : null);
+            const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
+            const pm = win.PinyinMatch || (typeof PinyinMatch !== 'undefined' ? PinyinMatch : null) || (typeof globalThis !== 'undefined' ? globalThis.PinyinMatch : null);
             try {
                 if (pm && typeof pm.match === 'function') {
                     const matchResult = pm.match(dbItem, k);
