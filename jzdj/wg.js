@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       2.4.0
-// @description   【拼音搜索就绪】用 GM_xmlhttpRequest+eval 彻底修复了 TM 沙盒隔离导致的拼音匹配失效；封存为 v2 稳定备份。
+// @version       2.5.0
+// @description   【三界面独立面板】订单管理默认收起，指派/司机界面默认展开，三界面独立存储互不干扰。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -70,7 +70,10 @@
     };
     let state = {
         currentHash: window.location.hash,
-        isCollapsed: GM_getValue('uiCollapsed', false),
+        // [修改] 三界面独立的面板折叠状态，互不干扰
+        orderCollapsed: GM_getValue('orderCollapsed', true),   // 订单管理：默认收起
+        dispatchCollapsed: GM_getValue('dispatchCollapsed', false),  // 订单指派：默认展开
+        driverCollapsed: GM_getValue('driverCollapsed', false),  // 司机调度：默认展开
         manualPause: GM_getValue('manualPause', false),
         driverManualPause: GM_getValue('driverManualPause', false), // [新增] 司机调度独立暂停状态
         isScrapingEnabled: GM_getValue('scrapeEnabled', false),
@@ -198,6 +201,20 @@
         if (isOrderPage()) return state.manualPause;
         if (isDriverPage()) return state.driverManualPause;
         return false;
+    };
+
+    // [新增] 返回当前界面的面板折叠状态
+    const getCollapsed = () => {
+        if (isOrderPage()) return state.orderCollapsed;
+        if (isDispatchPage()) return state.dispatchCollapsed;
+        if (isDriverPage()) return state.driverCollapsed;
+        return false;
+    };
+    // [新增] 设置当前界面的面板折叠状态并持久化
+    const setCollapsed = (val) => {
+        if (isOrderPage()) { state.orderCollapsed = val; GM_setValue('orderCollapsed', val); }
+        else if (isDispatchPage()) { state.dispatchCollapsed = val; GM_setValue('dispatchCollapsed', val); }
+        else if (isDriverPage()) { state.driverCollapsed = val; GM_setValue('driverCollapsed', val); }
     };
 
     // ==============================================
@@ -1203,7 +1220,7 @@
 
         widget.innerHTML = `
             <div class="gj-header"></div>
-            <div id="gj-main-content" style="display: ${state.isCollapsed ? 'none' : 'block'}"></div>
+            <div id="gj-main-content" style="display: ${getCollapsed() ? 'none' : 'block'}"></div>
             <div id="gj-scale-handle" class="gj-resize-handle" title="拖拽缩放"></div>
         `;
         document.body.appendChild(widget);
@@ -1296,8 +1313,7 @@
         if (toggleBtn) {
             toggleBtn.onclick = (e) => {
                 e.stopPropagation();
-                state.isCollapsed = !state.isCollapsed;
-                GM_setValue('uiCollapsed', state.isCollapsed);
+                setCollapsed(!getCollapsed());
                 updateUI();
             };
         }
@@ -1340,7 +1356,7 @@
 
         const header = mainWidget.querySelector('.gj-header');
         if (header) {
-            const toggleIcon = state.isCollapsed ? '➕' : '➖';
+            const toggleIcon = getCollapsed() ? '➕' : '➖';
             if (isDriverPage()) {
                 const lampText = state.driverCssDark ? '☀️ 开灯' : '🌙 关灯';
                 const lampColor = state.driverCssDark ? '#ffd700' : '#fff';
@@ -1401,8 +1417,8 @@
 
         const mainContent = document.getElementById('gj-main-content');
         const scaleHandle = document.getElementById('gj-scale-handle');
-        if (mainContent) mainContent.style.display = state.isCollapsed ? 'none' : 'block';
-        if (scaleHandle) scaleHandle.style.display = state.isCollapsed ? 'none' : 'block';
+        if (mainContent) mainContent.style.display = getCollapsed() ? 'none' : 'block';
+        if (scaleHandle) scaleHandle.style.display = getCollapsed() ? 'none' : 'block';
         if (mainContent) renderMainContent(mainContent);
         updateStatusText();
     };
