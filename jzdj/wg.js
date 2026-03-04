@@ -639,24 +639,16 @@
         const checkHasDispatchInput = () => {
             let hasVal = false;
 
-            // 1. 根据扩展抓取的精准特征：寻找电话输入框
-            const phoneInput = document.querySelector('input[placeholder="请输入用户电话"]');
-            if (phoneInput && phoneInput.value && phoneInput.value.trim().length > 0) {
-                hasVal = true;
-            }
-
-            // 2. 根据扩展抓取的精准特征：寻找出发地/目的地输入框
-            if (!hasVal) {
-                const addressInputs = document.querySelectorAll('.input-place input.el-input__inner');
-                for (let el of addressInputs) {
-                    if (el.value && el.value.trim().length > 0) {
-                        hasVal = true;
-                        break;
-                    }
+            // 1. 根据扩展抓取的精准特征：寻找出发地/目的地输入框
+            const addressInputs = document.querySelectorAll('.input-place input.el-input__inner');
+            for (let el of addressInputs) {
+                if (el.value && el.value.trim().length > 0) {
+                    hasVal = true;
+                    break;
                 }
             }
 
-            // 3. 保底兼容原生地图组件
+            // 2. 保底兼容原生地图组件
             if (!hasVal) {
                 const tipInput = document.getElementById('tipinput');
                 if (tipInput && tipInput.value && tipInput.value.trim().length > 0) hasVal = true;
