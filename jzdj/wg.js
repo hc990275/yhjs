@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v2.1.2)
+// @name          代驾调度系统助手 (v2.1.4)
 // @namespace     http://tampermonkey.net/
-// @version       2.1.2
-// @description   【v2.1.2】彻底解决第三方库受沙盒影响导致拼音检索失效的问题。
+// @version       2.1.4
+// @description   【v2.1.4】将地图夜间模式替换为 wgfz.js 的 canvas 精准反色方案。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -946,38 +946,35 @@
 
     // [新增] 司机调度页地图主题控制
     const applyDriverMapTheme = () => {
-        if (!isDriverPage()) return;
+        if (!isDriverPage()) {
+            document.body.classList.remove('dark-map-active');
+            return;
+        }
 
-        // CSS 滤镜强控模式 - 移除硬绑，改用动态 Style
+        // CSS 滤镜强控模式 - 采用 wgfz.js 的精准 canvas 反色方案
         let styleCss = document.getElementById('gj-driver-theme-css');
         if (state.driverCssDark) {
+            document.body.classList.add('dark-map-active');
             if (!styleCss) {
                 styleCss = document.createElement('style');
                 styleCss.id = 'gj-driver-theme-css';
-                // 使用 !important 并选择最关键的底图层，避免污染所有 UI
                 styleCss.innerHTML = `
-                    /* 1. 对整个地图容器进行基础反色 */
-                    .amap-layer, .amap-maps {
-                        filter: invert(90%) hue-rotate(180deg) brightness(85%) contrast(110%) !important;
-                        -webkit-filter: invert(90%) hue-rotate(180deg) brightness(85%) contrast(110%) !important;
+                    /* 核心：只针对 canvas (高德地图) 及其容器应用反色滤镜 */
+                    body.dark-map-active canvas {
+                        filter: invert(0.9) hue-rotate(180deg) brightness(0.85) contrast(1.1) !important;
+                        -webkit-filter: invert(0.9) hue-rotate(180deg) brightness(0.85) contrast(1.1) !important;
                     }
-
-                    /* 2. 【关键】对司机图标、标记盒子、区域多边形叠加物等，再进行一次"反反色"，恢复它们原本鲜艳的颜色！ */
-                    .amap-markers,
-                    .amap-marker,
-                    .amap-overlay,
-                    .amap-labels,
-                    .amap-info,
-                    .amap-logo, 
-                    .amap-copyright {
-                        filter: invert(100%) hue-rotate(180deg) brightness(115%) contrast(90%) !important; 
-                        -webkit-filter: invert(100%) hue-rotate(180deg) brightness(115%) contrast(90%) !important;
+                    /* 防止地图底层的白色div漏出来刺眼 */
+                    body.dark-map-active .amap-container,
+                    body.dark-map-active .amap-layer {
+                        background-color: #111 !important;
                     }
                 `;
                 document.head.appendChild(styleCss);
-                log('🕶️ 已挂载强制 CSS 滤镜获取黑夜模式 (水系等非主干道颜色可能失真)', 'success');
+                log('🕶️ 已应用 wgfz 版地图反色夜间模式', 'success');
             }
         } else {
+            document.body.classList.remove('dark-map-active');
             if (styleCss) styleCss.remove();
         }
 
