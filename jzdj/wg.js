@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name          代驾调度系统助手 (v2.1.2)
 // @namespace     http://tampermonkey.net/
-// @version       2.3.0
-// @description   【重置升级版】融合 wgfz 纯净黑夜与精简调度面板；废除实验性接口黑夜功能。使用最新 2.3 架构。
+// @version       2.3.1
+// @description   【重置升级版】融合 wgfz 纯净黑夜与精简调度面板；新增智能指派模式切换判定。使用最新 2.3 架构。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -613,11 +613,73 @@
         };
         const startVal = parseTime(state.timeConfig.start);
         const endVal = parseTime(state.timeConfig.end);
-        let targetKm = 3;
+        let defaultTargetKm = 3;
         if (currentVal >= startVal && currentVal < endVal) {
-            targetKm = 2;
+            defaultTargetKm = 2;
         }
-        setSliderValue(targetKm);
+
+        // ============================================
+        // 智能派单模式切换逻辑 (AI智能指派 vs 普通指派)
+        // ============================================
+
+        // 寻找包含特定文字的 DOM 节点来模拟击打切换模式
+        const setDispatchMode = (modeKeywords) => {
+            const els = document.querySelectorAll('label, span, div, button');
+            for (let el of els) {
+                const txt = el.innerText || '';
+                if (modeKeywords.some(k => txt.includes(k)) && txt.length < 15) {
+                    if (el.tagName === 'LABEL' || !el.querySelector('input[type="radio"]')) {
+                        try { el.click(); } catch (e) { }
+                        break;
+                    }
+                }
+            }
+        };
+
+        const tipInput = document.getElementById('tipinput');
+        const hasAddress = tipInput && tipInput.value && tipInput.value.trim().length > 0;
+
+        if (!hasAddress) {
+            // 场景 1: 没有输入地址时 -> 改回 AI 智能指派，恢复默认距离
+            setDispatchMode(['AI智能指派', '智能指派', 'AI指派']);
+            setSliderValue(defaultTargetKm);
+        } else {
+            // 场景 2: 已输入地址 -> 判定有没有司机
+            let hasDriver = false;
+            const bodyText = document.body.innerText || '';
+
+            // 基础启发式判定：如果页面直接写了“暂无数据”或“找不到符合条件的司机”则无司机
+            if (bodyText.includes('暂无相关司机') || bodyText.includes('没有符合条件的司机') || bodyText.includes('暂无数据')) {
+                hasDriver = false;
+            } else {
+                // 深度扫描可能存在的司机列表结构（含手机号 1[3-9] / 距离 km标识）
+                const items = document.querySelectorAll('div, li, tr');
+                for (let el of items) {
+                    const t = el.innerText || '';
+                    if ((t.includes('距') && t.includes('km')) || /1[3-9]\d{9}/.test(t)) {
+                        // 排除自己系统UI造成的文字错判
+                        if (!t.includes('自动备注') && el.children.length > 0) {
+                            hasDriver = true;
+                            break;
+                        }
+                    }
+                }
+
+                // 备选地图判定：地图上不仅有原点，还有多个标记时（大于2，可能包含终点起点外加司机）
+                if (!hasDriver && document.querySelectorAll('.amap-marker').length > 2) {
+                    hasDriver = true;
+                }
+            }
+
+            if (!hasDriver) {
+                // 无司机 -> 改为普通指派，更改距离扩大到最大 (例如 20km)
+                setDispatchMode(['普通指派', '常规指派']);
+                setSliderValue(20);
+            } else {
+                // 有司机 -> 保持当前模式与距离，或者重置到默认
+                setSliderValue(defaultTargetKm);
+            }
+        }
     };
 
     const fetchOnlineBlacklist = (silent = false) => {
