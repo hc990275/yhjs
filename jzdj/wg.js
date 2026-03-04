@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v2.1.4)
+// @name          代驾调度系统助手 (v2.2.0)
 // @namespace     http://tampermonkey.net/
-// @version       2.1.4
-// @description   【v2.1.4】将地图夜间模式替换为 wgfz.js 的 canvas 精准反色方案。
+// @version       2.2.0
+// @description   【v2.2.0】司机调度页 UI 重构：采用 wgfz.js 监控浮窗风格，新增实时统计与超时报警功能。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -126,6 +126,55 @@
     };
 
     // --------------- 3. 核心逻辑 ---------------
+
+    let justAcceptedTracker = {};
+    const excludeWords = ["未服务", "听单中", "抢单中", "刚接单", "前往接驾", "等待中", "途中", "中途等待", "支付方式", "当前在线", "实时监控", "空闲师傅", "干活中", "即将完成"];
+
+    const getVal = (text) => {
+        const regex = new RegExp(text + "\\s*-\\s*(\\d+)");
+        const match = document.body.innerText.match(regex);
+        return match ? parseInt(match[1]) : 0;
+    };
+
+    const scanDrivers = () => {
+        if (!isDriverPage()) return [];
+        let currentScan = {};
+        const now = Date.now();
+        const candidates = document.querySelectorAll('div, li, tr');
+
+        for (let el of candidates) {
+            let text = el.innerText || "";
+            text = text.trim();
+            // 特征匹配：包含"刚接单"但不包含数量后缀，长度适中且不含关键词"当前在线"
+            if (text.includes("刚接单") && !text.includes("刚接单 -") && !text.includes("当前在线") && text.length > 5 && text.length < 100) {
+                let phoneMatch = text.match(/1[3-9]\d{9}/);
+                let phone = phoneMatch ? phoneMatch[0] : "";
+                let name = "未知";
+                let nameMatches = text.match(/[\u4e00-\u9fa5]{2,4}/g);
+                if (nameMatches) {
+                    for (let n of nameMatches) {
+                        if (!excludeWords.includes(n)) { name = n; break; }
+                    }
+                }
+                let key = name + phone;
+                if (key !== "未知") currentScan[key] = { name: name, phone: phone };
+            }
+        }
+
+        // 维护追踪器
+        for (let key in currentScan) {
+            if (!justAcceptedTracker[key]) justAcceptedTracker[key] = { name: currentScan[key].name, phone: currentScan[key].phone, startTime: now };
+        }
+        for (let key in justAcceptedTracker) {
+            if (!currentScan[key]) delete justAcceptedTracker[key];
+        }
+
+        let overtimeDrivers = [];
+        for (let key in justAcceptedTracker) {
+            if ((now - justAcceptedTracker[key].startTime) > 5000) overtimeDrivers.push(justAcceptedTracker[key]);
+        }
+        return overtimeDrivers;
+    };
 
     const reloadDB = () => {
         const oldLenAddr = state.db.addrs.length;
@@ -1325,29 +1374,48 @@
             const scrapeStyle = state.isScrapingEnabled ? 'border:1px solid #e1f3d8;background:#f0f9eb;color:#67c23a;' : 'border:1px solid var(--gj-border);background:var(--gj-bg-sec);color:var(--gj-text-mute);';
 
             if (isDriverPage()) {
-                const apiDarkStyle = state.driverApiDark ? 'color:#a6e22e; font-weight:bold;' : 'color:var(--gj-text-sec);';
-                const cssDarkStyle = state.driverCssDark ? 'color:#a6e22e; font-weight:bold;' : 'color:var(--gj-text-sec);';
+                const overtimeDrivers = scanDrivers();
+                const tingDan = getVal("听单中");
+                const daiXuan = getVal("待选支付方式");
+                const working = getVal("抢单中") + getVal("刚接单") + getVal("前往接驾") + getVal("等待中") + getVal("途中") + getVal("中途等待");
+                const totalOnline = tingDan + working + daiXuan;
 
                 html = `
-                    <div style="display:flex; justify-content:center; align-items:center; margin-bottom:10px; gap: 8px;">
-                        <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;${apiDarkStyle}" title="尝试通过底层实例控制地图黑夜">
-                            <input type="checkbox" id="gj-chk-api-dark" ${state.driverApiDark ? 'checked' : ''} style="margin-right:4px;">
-                            🌌 API 黑夜
-                        </label>
-                        <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;${cssDarkStyle}" title="通过强力CSS滤镜使地图反色">
-                            <input type="checkbox" id="gj-chk-css-dark" ${state.driverCssDark ? 'checked' : ''} style="margin-right:4px;">
-                            🕶️ CSS 黑夜
-                        </label>
-                    </div>
-
-                    <div class="gj-control-row">
-                        <span style="color:var(--gj-text-sec);font-size:12px;">刷新间隔</span>
-                        <div style="display:flex;align-items:center;">
-                            <input type="number" id="gj-input-interval" value="${state.refreshInterval}" class="gj-input-mini">
-                            <button id="gj-btn-set" class="gj-btn-icon">🆗</button>
+                    <div style="padding:10px; line-height:1.8;">
+                        <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                            <span style="color:var(--gj-text-sec);">🟢 空闲师傅:</span>
+                            <b style="color:#67c23a; font-size:16px;">${tingDan}</b>
                         </div>
-                    </div>
+                        <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                            <span style="color:var(--gj-text-sec);">🔵 即将完成:</span>
+                            <b style="color:#409eff;">${daiXuan}</b>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
+                            <span style="color:var(--gj-text-sec);">🔴 干活中:</span>
+                            <b style="color:#f56c6c;">${working}</b>
+                        </div>
+                        <div style="margin-top:8px; padding-top:8px; border-top:1px dashed var(--gj-border); font-size:11px; color:var(--gj-text-mute); display:flex; justify-content:space-between;">
+                            <span>总上线(活跃):</span>
+                            <span>${totalOnline} 人</span>
+                        </div>
                 `;
+
+                if (overtimeDrivers.length > 0) {
+                    html += `
+                        <div style="margin-top:10px; border-top:2px solid #f56c6c; padding-top:8px;">
+                            <div style="color:#f56c6c; font-weight:bold; font-size:12px; margin-bottom:6px;">⚠️ 刚接单未动 (>5s):</div>
+                    `;
+                    overtimeDrivers.forEach(d => {
+                        let displayStr = d.name + (d.phone ? ` (${d.phone})` : '');
+                        html += `
+                            <div style="color:#fff; font-size:12px; padding:4px 6px; margin-bottom:5px; border-radius:4px; animation: alertBlink 1.5s infinite; text-align:center; box-shadow:0 0 5px rgba(245,108,108,0.5); background:#f56c6c;">
+                                ${displayStr}
+                            </div>
+                        `;
+                    });
+                    html += `</div>`;
+                }
+                html += `</div>`;
             } else { // This block handles isOrderPage()
                 html = `
                     <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
@@ -1872,34 +1940,12 @@
                 });
             }
 
-            // [新增] 司机页地图主题切换监听
-            const chkApiDark = document.getElementById('gj-chk-api-dark');
+            // [新增] 司机页地图主题切换监听：废除旧有 API 模式，统一使用精简 Canvas 滤镜
             const chkCssDark = document.getElementById('gj-chk-css-dark');
-
-            if (chkApiDark) {
-                chkApiDark.addEventListener('change', (e) => {
-                    state.driverApiDark = e.target.checked;
-                    GM_setValue('driverApiDark', state.driverApiDark);
-                    // 互斥逻辑
-                    if (state.driverApiDark && state.driverCssDark) {
-                        state.driverCssDark = false;
-                        GM_setValue('driverCssDark', false);
-                        if (chkCssDark) chkCssDark.checked = false; // 同步UI状态
-                    }
-                    applyDriverMapTheme();
-                });
-            }
-
             if (chkCssDark) {
                 chkCssDark.addEventListener('change', (e) => {
                     state.driverCssDark = e.target.checked;
                     GM_setValue('driverCssDark', state.driverCssDark);
-                    // 互斥逻辑
-                    if (state.driverCssDark && state.driverApiDark) {
-                        state.driverApiDark = false;
-                        GM_setValue('driverApiDark', false);
-                        if (chkApiDark) chkApiDark.checked = false; // 同步UI状态
-                    }
                     applyDriverMapTheme();
                 });
             }
@@ -1944,6 +1990,12 @@
                 headerTimer.textContent = state.countdown + "s";
                 headerTimer.style.color = state.countdown <= 3 ? "#F56C6C" : "#67C23A";
             }
+        }
+
+        // [新增] 司机页数据实时重绘
+        if (isDriverPage() && !state.driverManualPause && !state.isCollapsed) {
+            const mainContent = document.getElementById('gj-main-content');
+            if (mainContent) renderMainContent(mainContent);
         }
     };
     const applyPos = (el, pos) => {
@@ -2059,6 +2111,11 @@
 
     const addStyles = () => {
         GM_addStyle(`
+            @keyframes alertBlink {
+                0% { opacity: 1; background-color: rgba(255,0,0,0.8); }
+                50% { opacity: 0.5; background-color: rgba(150,0,0,0.8); }
+                100% { opacity: 1; background-color: rgba(255,0,0,0.8); }
+            }
             html.gj-global-dark {
                 filter: invert(0.92) hue-rotate(180deg) !important;
                 background-color: #111 !important;
