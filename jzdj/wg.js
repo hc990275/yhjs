@@ -659,10 +659,19 @@
 
         const hasDispatchTarget = checkHasDispatchInput();
 
+        // [新增] 状态锁，防止在定时器内被高频无限重复点击 DOM
+        if (typeof window._gjDispatchState === 'undefined') {
+            window._gjDispatchState = { lastMode: '' }; // 可为 'Idle', 'NoDriverSwitch', 'HasDriver'
+        }
+
         if (!hasDispatchTarget) {
             // 场景 1: 既没有输入地址也没有输入电话时 -> 改回 AI 智能指派，恢复默认距离
-            setDispatchMode(['AI智能指派', '智能指派', 'AI指派']);
-            setSliderValue(defaultTargetKm);
+            if (window._gjDispatchState.lastMode !== 'Idle') {
+                setDispatchMode(['AI智能指派', '智能指派', 'AI指派']);
+                setSliderValue(defaultTargetKm);
+                log('🧹 检测到关键表单为空，已自动恢复 [AI智能] 模式和默认距离', 'success');
+                window._gjDispatchState.lastMode = 'Idle';
+            }
         } else {
             // 场景 2: 已输入地址 -> 判定有没有司机
             let hasDriver = false;
@@ -693,11 +702,22 @@
 
             if (!hasDriver) {
                 // 无司机 -> 改为普通指派，更改距离扩大到最大 (例如 20km)
-                setDispatchMode(['普通指派', '常规指派']);
-                setSliderValue(20);
+                if (window._gjDispatchState.lastMode !== 'NoDriverSwitch') {
+                    setDispatchMode(['普通指派', '常规指派']);
+                    setSliderValue(20);
+                    log('👀 检测到暂无司机数据，执行自动改派: [普通指派] + [20公里] + [实际距离]', 'warning');
+                    window._gjDispatchState.lastMode = 'NoDriverSwitch';
+
+                    // 模拟点击“实际距离”（针对一些版本自带的特殊距离按钮）
+                    setTimeout(() => {
+                        document.querySelectorAll('button, span, th, .el-button').forEach(btn => {
+                            if (btn.textContent.trim() === '实际距离') btn.click();
+                        });
+                    }, 500);
+                }
             } else {
-                // 有司机 -> 保持当前模式与距离，或者重置到默认
-                setSliderValue(defaultTargetKm);
+                // 有司机 -> 维持当前人工或默认操作
+                window._gjDispatchState.lastMode = 'HasDriver';
             }
         }
     };
