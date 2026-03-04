@@ -1,5 +1,5 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v2.1.2)
+// @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
 // @version       2.3.1
 // @description   【重置升级版】融合 wgfz 纯净黑夜与精简调度面板；新增智能指派模式切换判定。使用最新 2.3 架构。
@@ -636,11 +636,34 @@
             }
         };
 
-        const tipInput = document.getElementById('tipinput');
-        const hasAddress = tipInput && tipInput.value && tipInput.value.trim().length > 0;
+        const checkHasDispatchInput = () => {
+            let hasVal = false;
+            // 优先检查已知的地址大框
+            const tipInput = document.getElementById('tipinput');
+            if (tipInput && tipInput.value && tipInput.value.trim().length > 0) hasVal = true;
 
-        if (!hasAddress) {
-            // 场景 1: 没有输入地址时 -> 改回 AI 智能指派，恢复默认距离
+            // 深度遍历全页面寻找电话或其它地址输入框
+            const allInputs = document.querySelectorAll('input');
+            for (let el of allInputs) {
+                if (el.closest('.gj-window')) continue; // 排除助手UI内的输入框
+                const ph = (el.placeholder || '').toLowerCase();
+
+                // 判断是否是电话框
+                if (ph.includes('电话') || ph.includes('手机') || el.type === 'tel') {
+                    if (el.value && el.value.trim().length > 0) hasVal = true;
+                }
+                // 判断是否是其它潜在的地址/搜索框
+                if (ph.includes('起点') || ph.includes('出发') || ph.includes('搜索') || ph.includes('目的地') || ph.includes('地址') || ph.includes('关键字') || (!el.closest('.el-form-item') && el.type === 'text')) {
+                    if (el.value && el.value.trim().length > 0) hasVal = true;
+                }
+            }
+            return hasVal;
+        };
+
+        const hasDispatchTarget = checkHasDispatchInput();
+
+        if (!hasDispatchTarget) {
+            // 场景 1: 既没有输入地址也没有输入电话时 -> 改回 AI 智能指派，恢复默认距离
             setDispatchMode(['AI智能指派', '智能指派', 'AI指派']);
             setSliderValue(defaultTargetKm);
         } else {
