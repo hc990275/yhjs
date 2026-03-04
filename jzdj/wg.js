@@ -1042,15 +1042,34 @@
         }
     };
 
-    // --- 动态加载拼音库 (规避 @require 偶尔失效或无刷新的问题) ---
-    const ensurePinyinLib = () => {
-        const win = typeof unsafeWindow !== 'undefined' ? unsafeWindow : window;
-        if (win.PinyinMatch) return;
-        const script = document.createElement('script');
-        script.src = 'https://cdn.jsdelivr.net/npm/pinyin-match/dist/main.js';
-        script.onload = () => log('PinyinMatch 库动态加载成功', 'success');
-        script.onerror = () => log('PinyinMatch 库动态加载失败', 'error');
-        document.head.appendChild(script);
+    // --- 拼音库加载 (GM_xmlhttpRequest + eval 方案，彻底绕过 TM 沙盒隔离) ---
+    // 原因: @require 的库在 TM 沙盒内无法通过 window 暴露，script 标签注入是异步且不可靠的。
+    // 方案: 用 GM_xmlhttpRequest 拉取库文件，用 new Function() 在私有作用域 eval，存入 _PM。
+    let _PM = null; // 模块级私有变量，isMatch 可同步访问
+    const loadPinyinMatch = () => {
+        // Step 1: 优先尝试 @require 在沙盒里注册的直接变量
+        try { if (typeof PinyinMatch !== 'undefined') { _PM = PinyinMatch; log('✅ PinyinMatch 来自 @require 沙盒', 'success'); return; } } catch (e) { }
+        // Step 2: 尝试 unsafeWindow（页面上已有注入）
+        try { const uw = typeof unsafeWindow !== 'undefined' ? unsafeWindow : null; if (uw?.PinyinMatch) { _PM = uw.PinyinMatch; log('✅ PinyinMatch 来自 unsafeWindow', 'success'); return; } } catch (e) { }
+        // Step 3: GM_xmlhttpRequest 拉取 + eval 到私有作用域（最可靠）
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: 'https://cdn.jsdelivr.net/npm/pinyin-match/dist/main.js',
+            onload: (res) => {
+                try {
+                    const mod = { exports: {} };
+                    // NOTE: new Function() 在独立作用域执行，不污染页面全局
+                    new Function('module', 'exports', res.responseText)(mod, mod.exports);
+                    _PM = mod.exports;
+                    if (_PM && typeof _PM.match === 'function') {
+                        log('✅ PinyinMatch 已通过 GM_xmlhttpRequest+eval 加载，拼音搜索就绪', 'success');
+                    } else {
+                        log('⚠️ PinyinMatch eval 完成但 match 不可用，请检查库版本', 'warning');
+                    }
+                } catch (e) { log('❌ PinyinMatch eval 失败: ' + e.message, 'error'); }
+            },
+            onerror: () => log('❌ PinyinMatch CDN 拉取失败，拼音搜索退为中文包含匹配', 'error')
+        });
     };
 
 
@@ -1077,10 +1096,7 @@
             } catch (e) { }
         }
     };
-    // [重写] 拼音 + 汉字双重匹配函数
-    // 修复：Tampermonkey 沙盒中 window.PinyinMatch 经常拿不到。
-    // 策略：通过 unsafeWindow 桥接 + @require 共享 + 动态脚本注入三层保险获取库。
-    // 降级：若库确实不在，则用正则首字母缩写模拟拼音匹配，最终兜底中文 includes。
+    // 拼音 + 汉字双重匹配（依赖模块级 _PM，由 init 时的 loadPinyinMatch 填充）
     const isMatch = (dbItem, inputKey, type) => {
         if (!inputKey) return true;
         const cleanKey = inputKey.trim();
@@ -1100,34 +1116,19 @@
         // --- 地址类型匹配 ---
         const keywords = cleanKey.split(/\s+/);
         return keywords.every(k => {
-            // 1. 优先中文直接包含（最快速）
+            // 1. 中文直接包含（最快，无库依赖）
             if (dbItem.includes(k)) return true;
-
-            // 2. 尝试 PinyinMatch 库
-            // 三层保险：unsafeWindow -> 全局 -> globalThis（应对不同 TM 版本的沙盒策略）
-            let pm = null;
-            try { pm = (typeof unsafeWindow !== 'undefined' ? unsafeWindow : null)?.PinyinMatch; } catch (e) { }
-            if (!pm) { try { pm = (typeof PinyinMatch !== 'undefined' ? PinyinMatch : null); } catch (e) { } }
-            if (!pm) { try { pm = (typeof globalThis !== 'undefined' ? globalThis.PinyinMatch : null); } catch (e) { } }
-
-            if (pm && typeof pm.match === 'function') {
+            // 2. PinyinMatch 拼音匹配（_PM 由 init 时异步填充）
+            if (_PM && typeof _PM.match === 'function') {
                 try {
-                    // pinyin-match 参数: match(汉字, 拼音/关键词)
-                    const res = pm.match(dbItem, k);
+                    const res = _PM.match(dbItem, k); // match(汉字文本, 拼音/关键词)
                     if (res && res.length > 0) return true;
                 } catch (e) { }
             }
-
-            // 3. 降级：纯字母输入时，用正则检查首字母缩写（如 "cq" 匹配 "重庆"）
+            // 3. 降级：纯字母时不区分大小写正则兜底
             if (/^[a-zA-Z]+$/.test(k)) {
-                // 从数据库条目提取汉字部分，通过检查同音字缩写来模拟
-                // 简化版：逐字符检查 dbItem 中每个字的常见拼音首字母
-                // 这里做最轻量降级：检查搜索词是否匹配条目的某段子串（不区分大小写）
-                try {
-                    if (new RegExp(k, 'i').test(dbItem)) return true;
-                } catch (e) { }
+                try { if (new RegExp(k, 'i').test(dbItem)) return true; } catch (e) { }
             }
-
             return false;
         });
     };
@@ -2280,6 +2281,7 @@
         `);
     };
     const init = () => {
+        loadPinyinMatch(); // 在 init 最早时加载拼音库到 _PM（异步，不阻塞页面）
         migrateOldData();
         addStyles();
         checkPage();
