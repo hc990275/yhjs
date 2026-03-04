@@ -1586,95 +1586,8 @@
         }
     };
 
-    const checkNoDriverAndSwitch = () => {
-        if (!isDispatchPage() || window._gjDispatchAutoSwitched) return;
+    // 本处已删除老旧残余的 checkNoDriverAndSwitch 和 watchDispatchFormClear
 
-        let noData = false;
-        document.querySelectorAll('.el-table__empty-text, .el-table__empty-block, td, div').forEach(el => {
-            const txt = el.textContent || '';
-            if (txt.includes('暂无数据') || txt.includes('暂无服务人员')) {
-                if (!el.closest('#gj-widget-main') && !el.closest('#gj-widget-addr')) {
-                    noData = true;
-                }
-            }
-        });
-
-        let hasInput = false;
-        document.querySelectorAll('input').forEach(input => {
-            // 需要忽略系统隐藏的或不相关的输入框
-            if (input.type === 'hidden' || input.style.display === 'none') return;
-            const val = input.value ? input.value.trim() : '';
-            if (val.length >= 2) {
-                // 如果父级包含这些关键词也算
-                const parentText = (input.closest('.el-form-item') ? input.closest('.el-form-item').textContent : '').toLowerCase();
-                const ph = (input.placeholder || '').toLowerCase();
-                if (ph.includes('电话') || input.type === 'tel' || ph.includes('起点') || ph.includes('地址') || parentText.includes('电话') || parentText.includes('起点')) {
-                    hasInput = true;
-                }
-            }
-        });
-
-        if (noData && hasInput) {
-            log('👀 检测到暂无司机数据，执行自动改派: [普通指派] + [20公里] + [实际距离]', 'warning');
-            window._gjDispatchAutoSwitched = true;
-
-            let clickedNormal = false;
-            document.querySelectorAll('span, label, button, .el-radio-button__inner').forEach(span => {
-                if (!clickedNormal && span.textContent.trim() === '普通指派') {
-                    span.click();
-                    clickedNormal = true;
-                }
-            });
-
-            setTimeout(() => {
-                setSliderValue(20);
-                setTimeout(() => {
-                    let clickedDist = false;
-                    document.querySelectorAll('button, span, th, .el-button').forEach(btn => {
-                        if (!clickedDist && btn.textContent.trim() === '实际距离') {
-                            btn.click();
-                            clickedDist = true;
-                        }
-                    });
-                }, 800);
-            }, 800);
-        }
-    };
-
-    const watchDispatchFormClear = () => {
-        if (!isDispatchPage() || !window._gjDispatchAutoSwitched) return;
-
-        let hasInput = false;
-        document.querySelectorAll('input').forEach(input => {
-            if (input.type === 'hidden' || input.style.display === 'none') return;
-            const val = input.value ? input.value.trim() : '';
-            if (val.length >= 2) {
-                const parentText = (input.closest('.el-form-item') ? input.closest('.el-form-item').textContent : '').toLowerCase();
-                const ph = (input.placeholder || '').toLowerCase();
-                if (ph.includes('电话') || input.type === 'tel' || ph.includes('起点') || ph.includes('地址') || parentText.includes('电话') || parentText.includes('起点')) {
-                    hasInput = true;
-                }
-            }
-        });
-
-        // 只有当所有的关键输入框（电话、起点等）都为空，且之前改派过，才判定为派单并复原
-        if (!hasInput) {
-            log('🧹 检测到关键表单已清空，且存在曾改派记录，开始恢复 [AI智能] 模式和默认距离', 'success');
-            window._gjDispatchAutoSwitched = false;
-
-            let clickedAi = false;
-            document.querySelectorAll('span, label, button, .el-radio-button__inner').forEach(span => {
-                if (!clickedAi && span.textContent.trim() === 'AI智能') {
-                    span.click();
-                    clickedAi = true;
-                }
-            });
-
-            setTimeout(() => {
-                applyDistanceByTime();
-            }, 800);
-        }
-    };
 
     const bindEvents = () => {
         document.getElementById('btn-cloud-setting')?.addEventListener('click', setupCloudConfig);
@@ -1889,8 +1802,7 @@
             if (window._gjDispatchLoop) clearInterval(window._gjDispatchLoop);
             window._gjDispatchLoop = setInterval(() => {
                 if (!isDispatchPage()) return;
-                checkNoDriverAndSwitch();
-                watchDispatchFormClear();
+                applyDistanceByTime();
             }, 1000);
         }
 
