@@ -638,25 +638,30 @@
 
         const checkHasDispatchInput = () => {
             let hasVal = false;
-            // 优先检查已知的地址大框
-            const tipInput = document.getElementById('tipinput');
-            if (tipInput && tipInput.value && tipInput.value.trim().length > 0) hasVal = true;
 
-            // 深度遍历全页面寻找电话或其它地址输入框
-            const allInputs = document.querySelectorAll('input');
-            for (let el of allInputs) {
-                if (el.closest('.gj-window')) continue; // 排除助手UI内的输入框
-                const ph = (el.placeholder || '').toLowerCase();
+            // 1. 根据扩展抓取的精准特征：寻找电话输入框
+            const phoneInput = document.querySelector('input[placeholder="请输入用户电话"]');
+            if (phoneInput && phoneInput.value && phoneInput.value.trim().length > 0) {
+                hasVal = true;
+            }
 
-                // 判断是否是电话框
-                if (ph.includes('电话') || ph.includes('手机') || el.type === 'tel') {
-                    if (el.value && el.value.trim().length > 0) hasVal = true;
-                }
-                // 判断是否是其它潜在的地址/搜索框
-                if (ph.includes('起点') || ph.includes('出发') || ph.includes('搜索') || ph.includes('目的地') || ph.includes('地址') || ph.includes('关键字') || (!el.closest('.el-form-item') && el.type === 'text')) {
-                    if (el.value && el.value.trim().length > 0) hasVal = true;
+            // 2. 根据扩展抓取的精准特征：寻找出发地/目的地输入框
+            if (!hasVal) {
+                const addressInputs = document.querySelectorAll('.input-place input.el-input__inner');
+                for (let el of addressInputs) {
+                    if (el.value && el.value.trim().length > 0) {
+                        hasVal = true;
+                        break;
+                    }
                 }
             }
+
+            // 3. 保底兼容原生地图组件
+            if (!hasVal) {
+                const tipInput = document.getElementById('tipinput');
+                if (tipInput && tipInput.value && tipInput.value.trim().length > 0) hasVal = true;
+            }
+
             return hasVal;
         };
 
