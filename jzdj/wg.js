@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name          代驾调度系统助手 (v2.2.1)
+// @name          代驾调度系统助手 (v2.1.2)
 // @namespace     http://tampermonkey.net/
-// @version       2.2.4
-// @description   利用 GitHub API 实现基于文本的简易双向数据存储，添加来电/离线订单抓取，支持全局与局部地图黑夜模式完美兼容，独立调度刷新逻辑，修复多余包裹与DOM丢失问题。
+// @version       2.3.0
+// @description   【重置升级版】融合 wgfz 纯净黑夜与精简调度面板；废除实验性接口黑夜功能。使用最新 2.3 架构。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -127,55 +127,6 @@
 
     // --------------- 3. 核心逻辑 ---------------
 
-    let justAcceptedTracker = {};
-    const excludeWords = ["未服务", "听单中", "抢单中", "刚接单", "前往接驾", "等待中", "途中", "中途等待", "支付方式", "当前在线", "实时监控", "空闲师傅", "干活中", "即将完成"];
-
-    const getVal = (text) => {
-        const regex = new RegExp(text + "\\s*-\\s*(\\d+)");
-        const match = document.body.innerText.match(regex);
-        return match ? parseInt(match[1]) : 0;
-    };
-
-    const scanDrivers = () => {
-        if (!isDriverPage()) return [];
-        let currentScan = {};
-        const now = Date.now();
-        const candidates = document.querySelectorAll('div, li, tr');
-
-        for (let el of candidates) {
-            let text = el.innerText || "";
-            text = text.trim();
-            // 特征匹配：包含"刚接单"但不包含数量后缀，长度适中且不含关键词"当前在线"
-            if (text.includes("刚接单") && !text.includes("刚接单 -") && !text.includes("当前在线") && text.length > 5 && text.length < 100) {
-                let phoneMatch = text.match(/1[3-9]\d{9}/);
-                let phone = phoneMatch ? phoneMatch[0] : "";
-                let name = "未知";
-                let nameMatches = text.match(/[\u4e00-\u9fa5]{2,4}/g);
-                if (nameMatches) {
-                    for (let n of nameMatches) {
-                        if (!excludeWords.includes(n)) { name = n; break; }
-                    }
-                }
-                let key = name + phone;
-                if (key !== "未知") currentScan[key] = { name: name, phone: phone };
-            }
-        }
-
-        // 维护追踪器
-        for (let key in currentScan) {
-            if (!justAcceptedTracker[key]) justAcceptedTracker[key] = { name: currentScan[key].name, phone: currentScan[key].phone, startTime: now };
-        }
-        for (let key in justAcceptedTracker) {
-            if (!currentScan[key]) delete justAcceptedTracker[key];
-        }
-
-        let overtimeDrivers = [];
-        for (let key in justAcceptedTracker) {
-            if ((now - justAcceptedTracker[key].startTime) > 5000) overtimeDrivers.push(justAcceptedTracker[key]);
-        }
-        return overtimeDrivers;
-    };
-
     const reloadDB = () => {
         const oldLenAddr = state.db.addrs.length;
         state.db.addrs = safeParse('dbAddrs', '[]');
@@ -198,12 +149,27 @@
         }
 
         if (isDriverPage()) {
+            let saved = GM_getValue('driverInterval');
+            if (!saved) saved = CONFIG.DRIVER.DEFAULT_INTERVAL;
+            state.refreshInterval = saved;
+
+            // 修复初次加载时互相冲突的状态
+            if (state.driverApiDark && state.driverCssDark) {
+                state.driverApiDark = false;
+                GM_setValue('driverApiDark', false);
+            }
+
             applyDriverMapTheme(); // 应用司机页地图主题
         }
 
         if (isDispatchPage()) {
             state.refreshInterval = CONFIG.DISPATCH.RAPID_INTERVAL / 1000;
+            log('进入派单界面 (终极修正版)', 'info');
             setTimeout(applyDistanceByTime, 1500);
+        }
+
+        updateUI();
+        if (isDispatchPage()) {
             if (!state.manualPause) startRapidRefresh();
         } else {
             stopRapidRefresh();
@@ -221,8 +187,6 @@
         } else {
             stopCountdown();
         }
-
-        updateUI();
     };
 
     const isOrderPage = () => state.currentHash.includes(CONFIG.ORDER.HASH);
@@ -739,37 +703,6 @@
         }, CONFIG.DISPATCH.RAPID_INTERVAL);
     };
     const stopRapidRefresh = () => { if (state.rapidTimer) { clearInterval(state.rapidTimer); state.rapidTimer = null; } };
-
-    let driverTimer = null;
-    const startDriverRefresh = () => {
-        if (driverTimer) return;
-        driverTimer = setInterval(() => {
-            if (isDriverPage() && !state.driverManualPause) {
-                let refreshBtn = document.querySelector('i[class*="refresh"], button[class*="refresh"]');
-                if (!refreshBtn) {
-                    const elements = document.querySelectorAll('i, span, div, button');
-                    for (let el of elements) {
-                        if (el.innerText && el.innerText.trim() === '') {
-                            refreshBtn = el;
-                            break;
-                        }
-                    }
-                }
-                if (refreshBtn) refreshBtn.click();
-
-                // 实时重绘 UI (wgfz.js 逻辑)
-                setTimeout(() => {
-                    if (!state.isCollapsed && document.getElementById('gj-main-content')) {
-                        renderMainContent(document.getElementById('gj-main-content'));
-                    }
-                }, 400);
-            }
-        }, 1000);
-    };
-    const stopDriverRefresh = () => {
-        if (driverTimer) { clearInterval(driverTimer); driverTimer = null; }
-    };
-
     const performAction = () => {
         if (isPaused()) return; // [修改] 使用统一暂停判断
         let selector = null;
@@ -799,6 +732,85 @@
         }, 1000);
     };
     const stopCountdown = () => { if (state.timerId) { clearInterval(state.timerId); state.timerId = null; } updateStatusText(); };
+
+    // ==============================================
+    //        司机调度页专有扫描与刷新引擎 (由 wgfz 迁移)
+    // ==============================================
+    let justAcceptedTracker = {};
+    const excludeWords = ["未服务", "听单中", "抢单中", "刚接单", "前往接驾", "等待中", "途中", "中途等待", "支付方式", "当前在线", "实时监控", "空闲师傅", "干活中", "即将完成"];
+
+    const getVal = (text) => {
+        const regex = new RegExp(text + "\\s*-\\s*(\\d+)");
+        const match = document.body.innerText.match(regex);
+        return match ? parseInt(match[1]) : 0;
+    };
+
+    const scanDrivers = () => {
+        let currentScan = {};
+        const now = Date.now();
+        const candidates = document.querySelectorAll('div, li, tr');
+
+        for (let el of candidates) {
+            let text = el.innerText || "";
+            text = text.trim();
+            if (text.includes("刚接单") && !text.includes("刚接单 -") && !text.includes("当前在线") && text.length > 5 && text.length < 100) {
+                let phoneMatch = text.match(/1[3-9]\d{9}/);
+                let phone = phoneMatch ? phoneMatch[0] : "";
+                let name = "未知";
+                let nameMatches = text.match(/[\u4e00-\u9fa5]{2,4}/g);
+                if (nameMatches) {
+                    for (let n of nameMatches) {
+                        if (!excludeWords.includes(n)) { name = n; break; }
+                    }
+                }
+                let key = name + phone;
+                if (key !== "未知") currentScan[key] = { name: name, phone: phone };
+            }
+        }
+
+        for (let key in currentScan) {
+            if (!justAcceptedTracker[key]) justAcceptedTracker[key] = { name: currentScan[key].name, phone: currentScan[key].phone, startTime: now };
+        }
+        for (let key in justAcceptedTracker) {
+            if (!currentScan[key]) delete justAcceptedTracker[key];
+        }
+
+        let overtimeDrivers = [];
+        for (let key in justAcceptedTracker) {
+            if ((now - justAcceptedTracker[key].startTime) > 5000) overtimeDrivers.push(justAcceptedTracker[key]);
+        }
+        return overtimeDrivers;
+    };
+
+    const startDriverRefresh = () => {
+        if (state.driverTimerId) return;
+        state.driverTimerId = setInterval(() => {
+            if (state.driverManualPause || !isDriverPage()) return;
+
+            let refreshBtn = document.querySelector('i[class*="refresh"], button[class*="refresh"]');
+            if (!refreshBtn) {
+                const elements = document.querySelectorAll('i, span, div, button');
+                for (let el of elements) {
+                    if (el.innerText && el.innerText.trim() === '') {
+                        refreshBtn = el;
+                        break;
+                    }
+                }
+            }
+            if (refreshBtn) refreshBtn.click();
+            setTimeout(() => {
+                const mainContent = document.getElementById('gj-main-content');
+                if (mainContent) renderMainContent(mainContent);
+            }, 400);
+        }, 1000);
+    };
+
+    const stopDriverRefresh = () => {
+        if (state.driverTimerId) {
+            clearInterval(state.driverTimerId);
+            state.driverTimerId = null;
+        }
+    };
 
     // 处理剪贴板文本
     const parseTextToDB = (fullText) => {
@@ -1012,21 +1024,22 @@
     };
     const applyGlobalTheme = () => {
         const doc = document.documentElement;
-        if (state.theme === 'dark' && !isDriverPage()) {
+        if (state.theme === 'dark') {
             doc.classList.add('gj-global-dark');
         } else {
             doc.classList.remove('gj-global-dark');
         }
     };
 
-    // [新增] 司机调度页地图主题控制
+    // [新增] 司机调度页地图主题控制 (仅黑化地图版)
     const applyDriverMapTheme = () => {
         if (!isDriverPage()) {
             document.body.classList.remove('dark-map-active');
+            let styleCss = document.getElementById('gj-driver-theme-css');
+            if (styleCss) styleCss.remove();
             return;
         }
 
-        // CSS 滤镜强控模式 - 采用 wgfz.js 的精准 canvas 反色方案
         let styleCss = document.getElementById('gj-driver-theme-css');
         if (state.driverCssDark) {
             document.body.classList.add('dark-map-active');
@@ -1034,10 +1047,9 @@
                 styleCss = document.createElement('style');
                 styleCss.id = 'gj-driver-theme-css';
                 styleCss.innerHTML = `
-                    /* 核心：只针对 canvas (高德地图) 及其容器应用反色滤镜 */
+                    /* 核心修改：只针对 canvas (高德地图) 及其容器应用反色滤镜 */
                     body.dark-map-active canvas {
                         filter: invert(0.9) hue-rotate(180deg) brightness(0.85) contrast(1.1) !important;
-                        -webkit-filter: invert(0.9) hue-rotate(180deg) brightness(0.85) contrast(1.1) !important;
                     }
                     /* 防止地图底层的白色div漏出来刺眼 */
                     body.dark-map-active .amap-container,
@@ -1046,112 +1058,34 @@
                     }
                 `;
                 document.head.appendChild(styleCss);
-                log('🕶️ 已应用 wgfz 版地图反色夜间模式', 'success');
+                log('🕶️ 已挂载强制 CSS 滤镜获取纯净黑夜模式', 'success');
             }
         } else {
             document.body.classList.remove('dark-map-active');
             if (styleCss) styleCss.remove();
         }
-
-        // 极致抽取真正的地图实例逻辑 (针对 AMap V2 / Vue)
-        const findMapInstance = () => {
-            // 1. 全局寻址
-            if (window.amapManager && window.amapManager.getMap) return window.amapManager.getMap();
-            if (window.AMap && window.amap) return window.amap;
-
-            for (let key in window) {
-                if (window[key] && typeof window[key].setMapStyle === 'function') return window[key];
-            }
-
-            // 2. DOM 节点全盘深度解剖法
-            // 首先查找最有可能包含地图的父级元素
-            const mapContainers = document.querySelectorAll('.amap-container, .amap-maps, .el-vue-amap, #map, [class*="map"], body');
-            for (let container of mapContainers) {
-                let vueInstance = container.__vue__ || (container.parentNode ? container.parentNode.__vue__ : null);
-                if (!vueInstance && container.children.length > 0) {
-                    vueInstance = container.children[0].__vue__;
-                }
-
-                if (vueInstance) {
-                    // 深度优先递归探测 __vue__ 对象内部的所有嵌套对象
-                    let found = null;
-                    const findMap = (obj, depth = 0) => {
-                        if (depth > 10 || !obj || typeof obj !== 'object') return null; // 倍增深度至 10 级
-
-                        // 目标特征匹配
-                        if (obj.setMapStyle && typeof obj.setMapStyle === 'function') return obj;
-                        if (obj.map && typeof obj.map.setMapStyle === 'function') return obj.map;
-                        if (obj.$amap && typeof obj.$amap.setMapStyle === 'function') return obj.$amap;
-                        if (obj.amapManager && obj.amapManager.getMap) return obj.amapManager.getMap();
-
-                        // 向下遍历 Vue 内部组件树
-                        if (obj.$children && Array.isArray(obj.$children)) {
-                            for (let child of obj.$children) {
-                                const res = findMap(child, depth + 1);
-                                if (res) return res;
-                            }
-                        }
-
-                        // 暴力寻找常规对象内部名为 map 的属性或类似对象
-                        try {
-                            for (let k in obj) {
-                                if (k.startsWith('$') || k === 'constructor' || k.startsWith('_')) continue;
-                                const innerObj = obj[k];
-                                if (innerObj && innerObj.setMapStyle && typeof innerObj.setMapStyle === 'function') {
-                                    return innerObj;
-                                }
-                            }
-                        } catch (e) { }
-
-                        return null;
-                    };
-
-                    found = findMap(vueInstance);
-                    if (found) return found;
-                }
-            }
-
-            // 3. 落底终极兜底扫描：若以上策略全空，直接遍历页面上所有挂载了 __vue__ 的标签！
-            const allEls = document.querySelectorAll('*');
-            for (let el of allEls) {
-                if (el.__vue__) {
-                    const v = el.__vue__;
-                    if (v.map && typeof v.map.setMapStyle === 'function') return v.map;
-                    if (v.$amap && typeof v.$amap.setMapStyle === 'function') return v.$amap;
-                    if (v.amapManager && v.amapManager.getMap) return v.amapManager.getMap();
-                }
-            }
-
-            return null;
-        };
-
-        const mapInstance = findMapInstance();
-
-        // API 模式处理
-        if (state.driverApiDark) {
-            if (mapInstance && typeof mapInstance.setMapStyle === 'function') {
-                try {
-                    // 订单指派页面中的黑夜代码为 amap://styles/dark 或是自定义的 ID
-                    mapInstance.setMapStyle('amap://styles/dark');
-                    log('✅ 成功接管 AMap V2.0 实例并调用原生 API 施加极夜黑', 'success');
-                } catch (e) {
-                    log(`❌ 原生极夜黑调用异常: ${e.message}`, 'error');
-                }
-            } else {
-                log('⚠️ AMap V2.0 API 提取失败，请关闭该选项，转用旁边的 【CSS 黑夜】。', 'warning');
-            }
-        }
-        // 切回标准模式 (当两个都没选中)
-        else if (!state.driverApiDark && !state.driverCssDark) {
-            if (mapInstance && typeof mapInstance.setMapStyle === 'function') {
-                try {
-                    mapInstance.setMapStyle('amap://styles/normal');
-                } catch (e) { }
-            }
-        }
     };
 
+    const createMainWidget = () => {
+        let widget = document.getElementById('gj-widget-main');
+        if (widget) widget.remove();
+        widget = document.createElement('div');
+        widget.id = 'gj-widget-main';
+        widget.className = state.theme === 'dark' ? 'gj-dark gj-window' : 'gj-light gj-window';
+        applyPos(widget, state.posMain);
+        widget.style.transform = `scale(${state.uiScale})`;
+        widget.style.transformOrigin = 'top left';
 
+        widget.innerHTML = `
+            <div class="gj-header"></div>
+            <div id="gj-main-content" style="display: ${state.isCollapsed ? 'none' : 'block'}"></div>
+            <div id="gj-scale-handle" class="gj-resize-handle" title="拖拽缩放"></div>
+        `;
+        document.body.appendChild(widget);
+        setupDrag(widget, 'posMain');
+        setupScaleDrag(widget);
+        return widget;
+    };
 
     const createAddrWidget = () => {
         let widget = document.getElementById('gj-widget-addr');
@@ -1180,19 +1114,16 @@
                 <input type="text" id="gj-search-input" placeholder="输入搜索..." value="${state.searchText}">
                 <span id="gj-btn-clear" class="btn-clear" title="清空搜索" style="display:${state.searchText ? 'block' : 'none'}">✕</span>
             </div>
-            
-            <div style="padding:4px 8px; display:flex; align-items:center; background:var(--gj-bg-sec); border-bottom:1px solid var(--gj-border);">
-                <span style="font-size:11px; color:var(--gj-text-mute); margin-right:5px;">列宽:</span>
-                <input type="range" id="gj-col-slider" min="60" max="200" value="${state.colWidth}" style="flex:1; height:4px;">
-            </div>
 
             <div class="gj-list-body" id="list-addr-body" style="height:${state.layout.height}px;"></div>
             
-            <div style="padding:5px 8px; font-size:11px; display:flex; align-items:center; gap:5px; border-top:1px dashed var(--gj-border);">
-                <span style="color:var(--gj-text-mute);">数量: <b id="gj-count-display">0</b></span>
-                <div style="flex:1"></div>
-                <div id="gj-size-handle" class="gj-resize-handle" title="拖拽调整宽高"></div>
+            <div style="padding:5px 8px;
+            font-size:11px; display:flex; align-items:center; gap:5px; border-top:1px dashed var(--gj-border);">
+                <span style="color:var(--gj-text-mute);white-space:nowrap;">列宽:</span>
+                <input type="range" id="gj-col-slider" min="50" max="250" value="${state.colWidth}" style="flex:1;" title="拖动改变显示字数">
             </div>
+
+            <div id="gj-size-handle" class="gj-resize-handle" title="拖拽调整宽高"></div>
         `;
 
         document.body.appendChild(widget);
@@ -1235,25 +1166,47 @@
         return widget;
     };
 
-    const createMainWidget = () => {
-        let widget = document.getElementById('gj-widget-main');
-        if (widget) widget.remove();
-        widget = document.createElement('div');
-        widget.id = 'gj-widget-main';
-        widget.className = state.theme === 'dark' ? 'gj-dark gj-window' : 'gj-light gj-window';
-        applyPos(widget, state.posMain);
-        widget.style.transform = `scale(${state.uiScale})`;
-        widget.style.transformOrigin = 'top left';
-
-        widget.innerHTML = `
-            <div class="gj-header"></div>
-            <div id="gj-main-content" style="display: ${state.isCollapsed ? 'none' : 'block'}"></div>
-            <div id="gj-scale-handle" class="gj-resize-handle" title="拖拽缩放"></div>
-        `;
-        document.body.appendChild(widget);
-        setupDrag(widget, 'posMain');
-        setupScaleDrag(widget);
-        return widget;
+    const bindHeaderEvents = (widget) => {
+        const toggleBtn = widget.querySelector('.gj-toggle');
+        if (toggleBtn) {
+            toggleBtn.onclick = (e) => {
+                e.stopPropagation();
+                state.isCollapsed = !state.isCollapsed;
+                GM_setValue('uiCollapsed', state.isCollapsed);
+                updateUI();
+            };
+        }
+        const darkBtn = widget.querySelector('#gj-btn-lamp');
+        if (darkBtn) {
+            darkBtn.onclick = (e) => {
+                e.stopPropagation();
+                state.driverCssDark = !state.driverCssDark;
+                GM_setValue('driverCssDark', state.driverCssDark);
+                applyDriverMapTheme();
+                updateUI();
+            };
+        }
+        const themeIcon = widget.querySelector('#gj-theme-toggle');
+        if (themeIcon) {
+            themeIcon.onclick = (e) => {
+                e.stopPropagation();
+                toggleTheme();
+            };
+        }
+        const headerPauseBtn = widget.querySelector('#gj-header-pause');
+        if (headerPauseBtn) {
+            headerPauseBtn.onclick = (e) => {
+                e.stopPropagation();
+                if (isOrderPage()) {
+                    state.manualPause = !state.manualPause;
+                    GM_setValue('manualPause', state.manualPause);
+                } else if (isDriverPage()) {
+                    state.driverManualPause = !state.driverManualPause;
+                    GM_setValue('driverManualPause', state.driverManualPause);
+                }
+                updateUI();
+            };
+        }
     };
 
     const updateUI = () => {
@@ -1272,7 +1225,7 @@
                         <span style="font-size:13px; font-weight:bold; color:#ffd700;">🚕 实时监控</span>
                     </div>
                     <div style="display:flex; align-items:center; gap:8px;">
-                         <button class="dark-mode-btn" id="gj-btn-lamp" style="color:${lampColor}">${lampText}</button>
+                         <button class="dark-mode-btn" id="gj-btn-lamp" style="background:#444; color:${lampColor}; border:1px solid #666; border-radius:4px; padding:2px 6px; font-size:12px; cursor:pointer; outline:none;">${lampText}</button>
                     </div>
                 `;
             } else {
@@ -1281,18 +1234,18 @@
                 const pauseIcon = isPausedPage ? '▶' : '⏸';
                 const textColor = isPausedPage ? '#F56C6C' : '#67C23A';
 
-                let title = "代驾助手";
+                let title = "助手待机";
                 if (isOrderPage()) title = CONFIG.ORDER.TITLE;
                 else if (isDispatchPage()) title = CONFIG.DISPATCH.TITLE;
 
                 header.innerHTML = `
                     <div style="display:flex; align-items:center; cursor:grab;">
                         <span class="gj-toggle" style="margin-right:10px; cursor:pointer;">${toggleIcon}</span>
-                        <span style="font-weight:bold;">${title}</span>
+                        <span style="font-weight:bold;font-size:15px;">🤖 ${title}</span>
                     </div>
                     <div style="display:flex; align-items:center; gap:8px;">
                         ${isOrderPage() ? `<span id="gj-header-timer" style="font-weight:bold; color:${textColor}; font-size:13px; min-width:24px; text-align:right;">${isPausedPage ? '停' : state.countdown + 's'}</span>` : ''}
-                        ${(isOrderPage() || isDriverPage()) ? `<span id="gj-header-pause" style="cursor:pointer; font-size:14px; color:${textColor}; font-weight:bold;">${pauseIcon} 启停</span>` : ''}
+                        ${(isOrderPage()) ? `<div id="gj-header-pause" style="cursor:pointer; display:flex; align-items:center; gap:4px; margin-right:6px;"><span style="color:${isPausedPage ? '#909399' : '#67C23A'};font-size:16px;font-weight:bold;">${pauseIcon}</span><span style="font-weight:bold;font-size:13px;color:${textColor};">启停</span></div>` : ''}
                         <span id="gj-theme-toggle" style="cursor:pointer; font-size:14px;">${themeIcon}</span>
                         <span class="gj-v-tag" style="font-size:10px; opacity:0.5;">v${state.currentVersion}</span>
                     </div>
@@ -1301,62 +1254,32 @@
             bindHeaderEvents(mainWidget);
         }
 
-        // 样式类切换
-        mainWidget.className = (state.theme === 'dark' ? 'gj-dark gj-window' : 'gj-light gj-window') + (isDriverPage() ? ' gj-driver-style' : '');
-
         let addrWidget = document.getElementById('gj-widget-addr');
         if (isDispatchPage()) {
             if (!addrWidget) {
                 addrWidget = createAddrWidget();
                 updateListsUI();
                 applyLayout();
+            } else {
+                addrWidget.querySelectorAll('.gj-tab').forEach(el => {
+                    if (el.dataset.tab === state.viewTab) el.classList.add('active-tab');
+                    else el.classList.remove('active-tab');
+                });
             }
-        } else if (addrWidget) addrWidget.remove();
+        } else if (!isDispatchPage() && addrWidget) {
+            addrWidget.remove();
+        }
+
+        const cls = state.theme === 'dark' ? 'gj-dark gj-window' : 'gj-light gj-window';
+        if (mainWidget) mainWidget.className = cls + (isDriverPage() ? ' gj-driver-style' : '');
+        if (addrWidget) addrWidget.className = cls;
 
         const mainContent = document.getElementById('gj-main-content');
-        if (mainContent) {
-            mainContent.style.display = state.isCollapsed ? 'none' : 'block';
-            renderMainContent(mainContent);
-        }
+        const scaleHandle = document.getElementById('gj-scale-handle');
+        if (mainContent) mainContent.style.display = state.isCollapsed ? 'none' : 'block';
+        if (scaleHandle) scaleHandle.style.display = state.isCollapsed ? 'none' : 'block';
+        if (mainContent) renderMainContent(mainContent);
         updateStatusText();
-    };
-
-    const bindHeaderEvents = (widget) => {
-        widget.querySelector('.gj-toggle')?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            state.isCollapsed = !state.isCollapsed;
-            GM_setValue('uiCollapsed', state.isCollapsed);
-            updateUI();
-        });
-        widget.querySelector('#gj-theme-toggle')?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            state.theme = state.theme === 'dark' ? 'light' : 'dark';
-            GM_setValue('theme', state.theme);
-            applyGlobalTheme();
-            updateUI();
-        });
-        widget.querySelector('#gj-btn-lamp')?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            state.driverCssDark = !state.driverCssDark;
-            GM_setValue('driverCssDark', state.driverCssDark);
-            applyDriverMapTheme();
-            updateUI();
-        });
-        widget.querySelector('#gj-header-pause')?.addEventListener('click', (e) => {
-            e.stopPropagation();
-            if (isOrderPage()) {
-                state.manualPause = !state.manualPause;
-                GM_setValue('manualPause', state.manualPause);
-                if (state.manualPause) stopCountdown();
-                else startCountdown();
-            } else if (isDriverPage()) {
-                state.driverManualPause = !state.driverManualPause;
-                GM_setValue('driverManualPause', state.driverManualPause);
-                if (state.driverManualPause) stopDriverRefresh();
-                else startDriverRefresh();
-            }
-            updateUI();
-        });
     };
 
     const renderMainContent = (container) => {
@@ -1377,48 +1300,40 @@
             const scrapeStyle = state.isScrapingEnabled ? 'border:1px solid #e1f3d8;background:#f0f9eb;color:#67c23a;' : 'border:1px solid var(--gj-border);background:var(--gj-bg-sec);color:var(--gj-text-mute);';
 
             if (isDriverPage()) {
-                const overtimeDrivers = scanDrivers();
                 const tingDan = getVal("听单中");
                 const daiXuan = getVal("待选支付方式");
                 const working = getVal("抢单中") + getVal("刚接单") + getVal("前往接驾") + getVal("等待中") + getVal("途中") + getVal("中途等待");
                 const totalOnline = tingDan + working + daiXuan;
+                const overtimeDrivers = scanDrivers();
 
                 html = `
-                    <div style="padding:10px; line-height:1.8;">
-                        <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                            <span style="color:var(--gj-text-sec);">🟢 空闲师傅:</span>
-                            <b style="color:#67c23a; font-size:16px;">${tingDan}</b>
-                        </div>
-                        <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                            <span style="color:var(--gj-text-sec);">🔵 即将完成:</span>
-                            <b style="color:#409eff;">${daiXuan}</b>
-                        </div>
-                        <div style="display:flex; justify-content:space-between; margin-bottom:4px;">
-                            <span style="color:var(--gj-text-sec);">🔴 干活中:</span>
-                            <b style="color:#f56c6c;">${working}</b>
-                        </div>
-                        <div style="margin-top:8px; padding-top:8px; border-top:1px dashed var(--gj-border); font-size:11px; color:var(--gj-text-mute); display:flex; justify-content:space-between;">
-                            <span>总上线(活跃):</span>
-                            <span>${totalOnline} 人</span>
-                        </div>
+                    <style>
+                        @keyframes alertBlink {
+                            0% { opacity: 1; background-color: rgba(255,0,0,0.8); }
+                            50% { opacity: 0.5; background-color: rgba(150,0,0,0.8); }
+                            100% { opacity: 1; background-color: rgba(255,0,0,0.8); }
+                        }
+                    </style>
+                    <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>🟢 空闲师傅:</span><b style="color:#00ff00; font-size:16px;">${tingDan}</b></div>
+                    <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>🔵 即将完成:</span><b style="color:#00ffff;">${daiXuan}</b></div>
+                    <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>🔴 干活中:</span><b style="color:#ff4444;">${working}</b></div>
+                    <div style="margin-top:8px; padding-top:8px; border-top:1px dashed #555; font-size:11px; color:#aaa; text-align:left;">
+                        总上线(活跃): ${totalOnline} 人
+                    </div>
                 `;
 
                 if (overtimeDrivers.length > 0) {
-                    html += `
-                        <div style="margin-top:10px; border-top:2px solid #f56c6c; padding-top:8px;">
-                            <div style="color:#f56c6c; font-weight:bold; font-size:12px; margin-bottom:6px;">⚠️ 刚接单未动 (>5s):</div>
-                    `;
+                    html += `<div style="margin-top:10px; border-top:2px solid #ff0000; padding-top:8px;">
+                        <div style="color:#ff4444; font-weight:bold; font-size:12px; margin-bottom:5px; text-align:left;">⚠️ 刚接单未动 (>5秒):</div>`;
                     overtimeDrivers.forEach(d => {
-                        let displayStr = d.name + (d.phone ? ` (${d.phone})` : '');
-                        html += `
-                            <div style="color:#fff; font-size:12px; padding:4px 6px; margin-bottom:5px; border-radius:4px; animation: alertBlink 1.5s infinite; text-align:center; box-shadow:0 0 5px rgba(245,108,108,0.5); background:#f56c6c;">
-                                ${displayStr}
-                            </div>
-                        `;
+                        let displayStr = d.name;
+                        if (d.phone) displayStr += ` (${d.phone})`;
+                        html += `<div style="color:#fff; font-size:12px; padding:4px 6px; margin-bottom:4px; border-radius:4px; animation: alertBlink 1.5s infinite; text-align:center; box-shadow:0 0 5px red;">
+                            ${displayStr}
+                        </div>`;
                     });
                     html += `</div>`;
                 }
-                html += `</div>`;
             } else { // This block handles isOrderPage()
                 html = `
                     <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
@@ -1679,126 +1594,56 @@
         }
     };
 
-    document.getElementById('gj-theme-toggle')?.addEventListener('click', () => {
-        state.theme = state.theme === 'dark' ? 'light' : 'dark';
-        GM_setValue('theme', state.theme);
-        applyGlobalTheme();
-        updateUI();
-    });
-
-    document.getElementById('gj-btn-lamp')?.addEventListener('click', () => {
-        state.driverCssDark = !state.driverCssDark;
-        GM_setValue('driverCssDark', state.driverCssDark);
-        applyDriverMapTheme();
-        updateUI();
-    });
-
     const bindEvents = () => {
         document.getElementById('btn-cloud-setting')?.addEventListener('click', setupCloudConfig);
         document.getElementById('btn-cloud-pull')?.addEventListener('click', () => pullFromCloud(false));
         document.getElementById('btn-cloud-push')?.addEventListener('click', pushToCloud);
         document.getElementById('gj-file-import')?.addEventListener('change', handleFileImport);
 
+        // [新增] 订单指派页面主题按键代理：触发官方按钮的点击
         if (isDispatchPage()) {
-            let lastDebugHash = '';
-            let recordCounter = 1;
-            const updateDebugPanel = () => {
-                if (!state.debugMode) return;
-                const panel = document.getElementById('gj-debug-panel') || document.getElementById('gj-debug-console');
-                if (panel) {
-                    try {
-                        const possibleHeader = document.querySelector('.el-header') || document.querySelector('.header') || document.querySelector('.navbar') || document.querySelector('header');
-                        let debugHtml = '';
-                        let fallbacks = '';
-
-                        if (!possibleHeader) {
-                            fallbacks = Array.from(document.querySelectorAll('.el-switch, .el-radio-group, button')).map(el => {
-                                if (el.innerText.includes('黑夜') || el.innerText.includes('主题') || el.innerText.includes('标准') || (el.name && el.name.includes('amap'))) {
-                                    return `\n疑似按钮: "${el.innerText.trim()}" | class: "${el.className}" | html: ${el.outerHTML}`;
-                                }
-                                return '';
-                            }).filter(Boolean).join('');
-                            if (!fallbacks) {
-                                const textWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-                                let node;
-                                let texts = [];
-                                while (node = textWalker.nextNode()) {
-                                    if (node.nodeValue.includes('黑夜') || node.nodeValue.includes('标准')) {
-                                        let parent = node.parentElement;
-                                        if (parent) {
-                                            texts.push(`\n文本节点: "${node.nodeValue.trim()}" | 父级class: "${parent.className}" | html: ${parent.outerHTML.substring(0, 150)}`);
-                                        }
-                                    }
-                                }
-                                fallbacks = texts.slice(0, 10).join('');
-                            }
-                        } else {
-                            const allTexts = Array.from(possibleHeader.querySelectorAll('div, span, i, button, li')).map(el => {
-                                if (el.children.length === 0 && el.textContent.trim().length > 0 && el.textContent.trim().length < 10) {
-                                    return `\n文字: "${el.textContent.trim()}" | class: "${el.className.trim()}" | html: ${el.outerHTML}`;
-                                }
-                                if (el.name && el.name.includes('amap')) {
-                                    return `\n地图切换特征: name="${el.name}" | class: "${el.className}" | html: ${el.outerHTML}`;
-                                }
-                                return '';
-                            }).filter(Boolean).join('');
-
-                            debugHtml = `[Header节点特征]:${allTexts || '无独立文字'}`;
-                        }
-
-                        const currentHtmlStr = (debugHtml + fallbacks).replace(/</g, '&lt;').replace(/>/g, '&gt;').trim();
-
-                        if (currentHtmlStr !== lastDebugHash && currentHtmlStr.length > 0) {
-                            lastDebugHash = currentHtmlStr;
-                            const timeStr = new Date().toLocaleTimeString();
-                            const newRecord = `==========\n⏰ [${recordCounter}] 时间: ${timeStr} 👇发生变动👇\n${currentHtmlStr}\n\n`;
-
-                            if (recordCounter === 1) {
-                                panel.innerHTML = `⚠️ 请在这个面板出现信息后，去【点击官方的主题按钮】，有任何内容追加出来，都可以全选复制发给我：\n\n` + newRecord;
-                            } else {
-                                panel.innerHTML = newRecord + panel.innerHTML;
-                            }
-                            recordCounter++;
-                        } else if (recordCounter === 1 && currentHtmlStr.length === 0) {
-                            panel.innerHTML = `⚠️ 未找到任何特征信息，请确认页面是否已完全加载，或者您是否在带有地图和【官方黑夜】主题按钮的页面中。`;
-                        }
-                    } catch (e) {
-                        if (recordCounter === 1) panel.innerText = `提取错误: ${e.message}`;
-                    }
-                }
-            };
-
-            if (window._gjDebugDispatchLoop) clearInterval(window._gjDebugDispatchLoop);
-            window._gjDebugDispatchLoop = setInterval(updateDebugPanel, 1500);
-            setTimeout(updateDebugPanel, 500);
-
             const triggerAmapTheme = (themeName) => {
                 const targetText = themeName === 'dark' ? '黑夜' : '标准';
                 let found = false;
+
+                // 检索页面上不是我们自己添加的所有 button 与 span
                 document.querySelectorAll('button').forEach(btn => {
+                    // 忽略助手面板内的控件
                     if (btn.id.includes('gj-btn') || btn.closest('#gj-widget-main')) return;
+
                     if (btn.name === `amap://styles/${themeName}` || btn.innerText.includes(targetText)) {
                         found = true;
+                        // 暴力触发法：原生点击 + 模拟鼠标事件 + 对其内部元素同样触发
                         try {
                             btn.click();
+
                             const spans = btn.querySelectorAll('span');
                             spans.forEach(span => span.click());
+
                             const mousedown = new MouseEvent('mousedown', { view: window, bubbles: true, cancelable: true });
                             const mouseup = new MouseEvent('mouseup', { view: window, bubbles: true, cancelable: true });
                             const clickEv = new MouseEvent('click', { view: window, bubbles: true, cancelable: true });
+
                             btn.dispatchEvent(mousedown);
                             btn.dispatchEvent(mouseup);
                             btn.dispatchEvent(clickEv);
+
                             if (spans.length > 0) {
                                 spans[0].dispatchEvent(mousedown);
                                 spans[0].dispatchEvent(mouseup);
                                 spans[0].dispatchEvent(clickEv);
                             }
-                        } catch (e) { }
+                        } catch (e) {
+                            // 静默处理
+                        }
                     }
                 });
-                if (found) log(`已强制触发官方的【${targetText}】主题切换`, 'success');
-                else log(`未在页面找到官方的主题切换按钮特征 (amap://styles/${themeName} 或文本匹配)`, 'warning');
+
+                if (found) {
+                    log(`已强制触发官方的【${targetText}】主题切换`, 'success');
+                } else {
+                    log(`未在页面找到官方的主题切换按钮特征 (amap://styles/${themeName} 或文本匹配)`, 'warning');
+                }
             };
             document.getElementById('gj-btn-theme-dark')?.addEventListener('click', () => triggerAmapTheme('dark'));
             document.getElementById('gj-btn-theme-light')?.addEventListener('click', () => triggerAmapTheme('normal'));
@@ -1807,21 +1652,30 @@
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
             );
 
-            document.getElementById('btn-auto-addr')?.addEventListener('click', () => processClipboard('address'));
-            document.getElementById('btn-auto-phone')?.addEventListener('click', () => processClipboard('phone'));
+            document.getElementById('btn-auto-addr')?.addEventListener('click', () => {
+                processClipboard('address');
+            });
+            document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
+                processClipboard('phone');
+            });
 
+            // 回收旧的 observer
             if (window._gjDispatchObserver) {
                 window._gjDispatchObserver.disconnect();
                 window._gjDispatchObserver = null;
             }
+
+            // 自动检测 "收用户信息" 生成的用户表格
             const targetNode = document.body;
             const config = { childList: true, subtree: true };
             let autoCheckTimeout = null;
 
             window._gjDispatchObserver = new MutationObserver((mutationsList) => {
+                if (!isDispatchPage()) return;
                 let hasTableChange = false;
                 for (let mutation of mutationsList) {
                     if (mutation.type === 'childList') {
+                        // 寻找新增的表格或行
                         if (mutation.target.classList &&
                             (mutation.target.classList.contains('el-table__row') ||
                                 mutation.target.nodeName === 'TBODY' ||
@@ -1839,10 +1693,12 @@
             window._gjDispatchObserver.observe(targetNode, config);
 
             const watchDispatchPhone = () => {
-                document.querySelectorAll('input').forEach(el => {
+                const phoneInputs = document.querySelectorAll('input');
+                phoneInputs.forEach(el => {
                     const ph = (el.placeholder || '');
                     if (ph.includes('用户电话') || ph.includes('电话')) {
                         el.addEventListener('input', () => {
+                            // 当输入内容改变时，清空上一次的查询结果，避免残留
                             const resultDiv = document.getElementById('gj-user-check-result');
                             if (resultDiv) resultDiv.style.display = 'none';
                         });
@@ -1851,6 +1707,7 @@
             };
             setTimeout(watchDispatchPhone, 1500);
 
+            // [新增/移动] 自动备注切换绑定 (指派页面)
             const chkAutoRemark = document.getElementById('gj-chk-auto-remark');
             if (chkAutoRemark) {
                 chkAutoRemark.addEventListener('change', (e) => {
@@ -1858,78 +1715,196 @@
                     GM_setValue('autoRemark', state.autoRemark);
                 });
             }
-        }
 
-        if (window._gjDispatchLoop) clearInterval(window._gjDispatchLoop);
-        window._gjDispatchLoop = setInterval(() => {
-            if (!isDispatchPage()) return;
-            checkNoDriverAndSwitch();
-            watchDispatchFormClear();
-        }, 1000);
-
-        document.getElementById('gj-btn-toggle')?.addEventListener('click', () => {
-            if (isOrderPage()) {
-                state.manualPause = !state.manualPause;
-                GM_setValue('manualPause', state.manualPause);
-            } else if (isDriverPage()) {
-                state.driverManualPause = !state.driverManualPause;
-                GM_setValue('driverManualPause', state.driverManualPause);
+            const chkDebug = document.getElementById('gj-chk-debug');
+            if (chkDebug) {
+                chkDebug.addEventListener('change', (e) => {
+                    state.debugMode = e.target.checked;
+                    GM_setValue('debugMode', state.debugMode);
+                    updateUI(); // 重新渲染时显示或隐藏面板
+                });
             }
-            updateUI();
-        });
 
-        const scrapeBtn = document.getElementById('gj-btn-scrape');
-        if (scrapeBtn) {
-            scrapeBtn.addEventListener('click', () => {
-                state.isScrapingEnabled = !state.isScrapingEnabled;
-                GM_setValue('scrapeEnabled', state.isScrapingEnabled);
-                updateUI();
-                if (state.isScrapingEnabled) scanOrderPage();
-            });
-        }
+            // [新增] 动态追加变化记录的调试分析面板
+            if (state.debugMode) {
+                let lastDebugHash = ''; // 用于对比 HTML 变化
+                let recordCounter = 1;
 
-        document.getElementById('gj-btn-set')?.addEventListener('click', () => {
-            const val = parseInt(document.getElementById('gj-input-interval').value);
-            if (val > 0) {
-                state.refreshInterval = val;
-                if (isOrderPage()) GM_setValue('orderInterval', val);
-                if (isDriverPage()) GM_setValue('driverInterval', val);
-                performAction(); startCountdown();
+                const updateDebugPanel = () => {
+                    if (!state.debugMode) return;
+                    const panel = document.getElementById('gj-debug-panel') || document.getElementById('gj-debug-console');
+                    if (panel) {
+                        try {
+                            const possibleHeader = document.querySelector('.el-header') || document.querySelector('.header') || document.querySelector('.navbar') || document.querySelector('header');
+                            let debugHtml = '';
+                            let fallbacks = '';
+
+                            if (!possibleHeader) {
+                                // 备选查找整个页面的主题按钮
+                                fallbacks = Array.from(document.querySelectorAll('.el-switch, .el-radio-group, button')).map(el => {
+                                    if (el.innerText.includes('黑夜') || el.innerText.includes('主题') || el.innerText.includes('标准') || (el.name && el.name.includes('amap'))) {
+                                        return `\n疑似按钮: "${el.innerText.trim()}" | class: "${el.className}" | html: ${el.outerHTML}`;
+                                    }
+                                    return '';
+                                }).filter(Boolean).join('');
+                                if (!fallbacks) {
+                                    // 第三层暴力查找所有包含相关文本的任意元素
+                                    const textWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
+                                    let node;
+                                    let texts = [];
+                                    while (node = textWalker.nextNode()) {
+                                        if (node.nodeValue.includes('黑夜') || node.nodeValue.includes('标准')) {
+                                            let parent = node.parentElement;
+                                            if (parent) {
+                                                texts.push(`\n文本节点: "${node.nodeValue.trim()}" | 父级class: "${parent.className}" | html: ${parent.outerHTML.substring(0, 150)}`);
+                                            }
+                                        }
+                                    }
+                                    fallbacks = texts.slice(0, 10).join('');
+                                }
+                            } else {
+                                const allTexts = Array.from(possibleHeader.querySelectorAll('div, span, i, button, li')).map(el => {
+                                    if (el.children.length === 0 && el.textContent.trim().length > 0 && el.textContent.trim().length < 10) {
+                                        return `\n文字: "${el.textContent.trim()}" | class: "${el.className.trim()}" | html: ${el.outerHTML}`;
+                                    }
+                                    if (el.name && el.name.includes('amap')) {
+                                        return `\n地图切换特征: name="${el.name}" | class: "${el.className}" | html: ${el.outerHTML}`;
+                                    }
+                                    return '';
+                                }).filter(Boolean).join('');
+
+                                debugHtml = `[Header节点特征]:${allTexts || '无独立文字'}`;
+                            }
+
+                            const currentHtmlStr = (debugHtml + fallbacks).replace(/</g, '&lt;').replace(/>/g, '&gt;').trim();
+
+                            // 判断当前抓取到的特征是否变动，有变动则向顶部继续追加（不覆盖原来内容）
+                            if (currentHtmlStr !== lastDebugHash && currentHtmlStr.length > 0) {
+                                lastDebugHash = currentHtmlStr;
+                                const timeStr = new Date().toLocaleTimeString();
+                                const newRecord = `==========\n⏰ [${recordCounter}] 时间: ${timeStr} 👇发生变动👇\n${currentHtmlStr}\n\n`;
+
+                                // 追加，保证最新记录在最上面
+                                if (recordCounter === 1) {
+                                    panel.innerHTML = `⚠️ 请在这个面板出现信息后，去【点击官方的主题按钮】，有任何内容追加出来，都可以全选复制发给我：\n\n` + newRecord;
+                                } else {
+                                    panel.innerHTML = newRecord + panel.innerHTML;
+                                }
+                                recordCounter++;
+                            } else if (recordCounter === 1 && currentHtmlStr.length === 0) {
+                                panel.innerHTML = `⚠️ 未找到任何特征信息，请确认页面是否已完全加载，或者您是否在带有地图和【官方黑夜】主题按钮的页面中。`;
+                            }
+                        } catch (e) {
+                            if (recordCounter === 1) panel.innerText = `提取错误: ${e.message}`;
+                        }
+                    }
+                };
+
+                if (window._gjDebugDispatchLoop) clearInterval(window._gjDebugDispatchLoop);
+                window._gjDebugDispatchLoop = setInterval(updateDebugPanel, 1500); // 提升频率快速捕捉变化
+                setTimeout(updateDebugPanel, 500);
             }
-        });
+            if (window._gjDispatchLoop) clearInterval(window._gjDispatchLoop);
+            window._gjDispatchLoop = setInterval(() => {
+                if (!isDispatchPage()) return;
+                checkNoDriverAndSwitch();
+                watchDispatchFormClear();
+            }, 1000);
+        }
 
-        const chkDebug = document.getElementById('gj-chk-debug');
-        if (chkDebug) {
-            chkDebug.addEventListener('change', (e) => {
-                state.debugMode = e.target.checked;
-                GM_setValue('debugMode', state.debugMode);
+        if (document.getElementById('gj-btn-toggle')) {
+            document.getElementById('gj-btn-toggle').addEventListener('click', () => {
+                // [修改] 根据页面类型切换对应的暂停状态
+                if (isOrderPage()) {
+                    state.manualPause = !state.manualPause;
+                    GM_setValue('manualPause', state.manualPause);
+                } else if (isDriverPage()) {
+                    state.driverManualPause = !state.driverManualPause;
+                    GM_setValue('driverManualPause', state.driverManualPause);
+                }
                 updateUI();
-                if (state.debugMode) scanOrderPage();
             });
-        }
+            const scrapeBtn = document.getElementById('gj-btn-scrape');
+            if (scrapeBtn) {
+                scrapeBtn.addEventListener('click', () => {
+                    state.isScrapingEnabled = !state.isScrapingEnabled;
+                    GM_setValue('scrapeEnabled', state.isScrapingEnabled);
+                    updateUI();
 
-        const chkCssDark = document.getElementById('gj-chk-css-dark');
-        if (chkCssDark) {
-            chkCssDark.addEventListener('change', (e) => {
-                state.driverCssDark = e.target.checked;
-                GM_setValue('driverCssDark', state.driverCssDark);
-                applyDriverMapTheme();
-            });
-        }
+                    if (state.isScrapingEnabled) {
+                        scanOrderPage();
+                    }
+                });
+            }
 
-        const inputCancelCol = document.getElementById('gj-input-cancel-col');
-        if (inputCancelCol) {
-            inputCancelCol.addEventListener('change', (e) => {
-                const val = parseInt(e.target.value);
-                if (!isNaN(val)) {
-                    state.cancelColIndex = val;
-                    GM_setValue('cancelColIndex', val);
-                    log(`🚫 消单列已设置为: ${val}`, 'info');
-                } else {
-                    state.cancelColIndex = -1;
-                    GM_setValue('cancelColIndex', -1);
+            document.getElementById('gj-btn-set').addEventListener('click', () => {
+                const val = parseInt(document.getElementById('gj-input-interval').value);
+                if (val > 0) {
+                    state.refreshInterval = val;
+                    if (isOrderPage()) GM_setValue('orderInterval', val);
+                    if (isDriverPage()) GM_setValue('driverInterval', val);
+                    performAction(); startCountdown();
                 }
             });
+
+            // [新增] 调试模式切换
+            const chkDebug = document.getElementById('gj-chk-debug');
+            if (chkDebug) {
+                chkDebug.addEventListener('change', (e) => {
+                    state.debugMode = e.target.checked;
+                    GM_setValue('debugMode', state.debugMode);
+                    updateUI(); // 触发重绘以显示/隐藏面板
+                    if (state.debugMode) scanOrderPage();
+                });
+            }
+
+            // [新增] 司机页地图主题切换监听
+            const chkApiDark = document.getElementById('gj-chk-api-dark');
+            const chkCssDark = document.getElementById('gj-chk-css-dark');
+
+            if (chkApiDark) {
+                chkApiDark.addEventListener('change', (e) => {
+                    state.driverApiDark = e.target.checked;
+                    GM_setValue('driverApiDark', state.driverApiDark);
+                    // 互斥逻辑
+                    if (state.driverApiDark && state.driverCssDark) {
+                        state.driverCssDark = false;
+                        GM_setValue('driverCssDark', false);
+                        if (chkCssDark) chkCssDark.checked = false; // 同步UI状态
+                    }
+                    applyDriverMapTheme();
+                });
+            }
+
+            if (chkCssDark) {
+                chkCssDark.addEventListener('change', (e) => {
+                    state.driverCssDark = e.target.checked;
+                    GM_setValue('driverCssDark', state.driverCssDark);
+                    // 互斥逻辑
+                    if (state.driverCssDark && state.driverApiDark) {
+                        state.driverApiDark = false;
+                        GM_setValue('driverApiDark', false);
+                        if (chkApiDark) chkApiDark.checked = false; // 同步UI状态
+                    }
+                    applyDriverMapTheme();
+                });
+            }
+
+            // [新增] 消单列号配置
+            const inputCancelCol = document.getElementById('gj-input-cancel-col');
+            if (inputCancelCol) {
+                inputCancelCol.addEventListener('change', (e) => {
+                    const val = parseInt(e.target.value);
+                    if (!isNaN(val)) {
+                        state.cancelColIndex = val;
+                        GM_setValue('cancelColIndex', val);
+                        log(`🚫 消单列已设置为: ${val}`, 'info');
+                    } else {
+                        state.cancelColIndex = -1;
+                        GM_setValue('cancelColIndex', -1);
+                    }
+                });
+            }
         }
     };
 
@@ -2070,18 +2045,16 @@
 
     const addStyles = () => {
         GM_addStyle(`
-            @keyframes alertBlink {
-                0% { opacity: 1; background-color: rgba(255,0,0,0.8); }
-                50% { opacity: 0.5; background-color: rgba(150,0,0,0.8); }
-                100% { opacity: 1; background-color: rgba(255,0,0,0.8); }
-            }
-            html.gj-global-dark canvas {
-                filter: invert(0.92) hue-rotate(180deg) brightness(0.85) contrast(1.1) !important;
-                -webkit-filter: invert(0.92) hue-rotate(180deg) brightness(0.85) contrast(1.1) !important;
-            }
-            html.gj-global-dark .amap-container,
-            html.gj-global-dark .amap-layer {
+            html.gj-global-dark {
+                filter: invert(0.92) hue-rotate(180deg) !important;
                 background-color: #111 !important;
+            }
+            html.gj-global-dark img,
+            html.gj-global-dark video,
+            html.gj-global-dark iframe,
+            html.gj-global-dark .el-image,
+            html.gj-global-dark .gj-window {
+                filter: invert(1) hue-rotate(180deg) !important;
             }
             :root {
                 --gj-bg-main: #ffffff;
@@ -2110,32 +2083,17 @@
                 --gj-header-bg: linear-gradient(135deg, #3a4b8a 0%, #4a2b6e 100%);
             }
             .gj-window {
+                position: fixed;
+                z-index: 99999;
+                display: flex; flex-direction: column;
+                font-family: "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", Arial, sans-serif;
+                font-size: 14px; user-select: none;
+                filter: drop-shadow(0 4px 12px var(--gj-shadow));
+                color: var(--gj-text-main);
                 background: var(--gj-bg-main); 
                 border-radius: 12px; 
                 overflow: hidden;
             }
-            /* 司机页专用强控样式 (wgfz 风格) */
-            .gj-driver-style {
-                background: rgba(0, 0, 0, 0.85) !important;
-                color: #fff !important;
-                border: 1px solid #444 !important;
-                filter: none !important; /* 忽略全局反色 */
-            }
-            .gj-driver-style .gj-header {
-                background: #333 !important;
-                border-bottom: 1px solid #444 !important;
-            }
-            .gj-driver-style .gj-btn-icon, 
-            .gj-driver-style .gj-timer-text,
-            .gj-driver-style .gj-label-sm {
-                color: #aaa !important;
-            }
-            .dark-mode-btn {
-                background: #444; color: #fff; border: 1px solid #666;
-                border-radius: 4px; padding: 2px 6px; font-size: 11px;
-                cursor: pointer; transition: 0.3s;
-            }
-            .dark-mode-btn:hover { background: #666; }
             #gj-widget-main { width: 250px;
             }
             .gj-header {
