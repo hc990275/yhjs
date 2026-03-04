@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       2.3.2
-// @description   【真·修复版】彻底剔除引发无限改派的旧版定时器炸弹；为新版指派引擎装备状态防抖锁及延迟修正。现已被确认为最新稳定版。
+// @version       2.4.0
+// @description   【拼音搜索就绪】用 GM_xmlhttpRequest+eval 彻底修复了 TM 沙盒隔离导致的拼音匹配失效；封存为 v2 稳定备份。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
