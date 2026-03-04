@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name          代驾调度系统助手 (v2.2.1)
 // @namespace     http://tampermonkey.net/
-// @version       2.2.3
-// @description   利用 GitHub API 实现基于文本的简易双向数据存储，添加来电/离线订单抓取，支持全局与局部地图黑夜模式完美兼容，独立调度刷新逻辑，修复多余包裹。
+// @version       2.2.4
+// @description   利用 GitHub API 实现基于文本的简易双向数据存储，添加来电/离线订单抓取，支持全局与局部地图黑夜模式完美兼容，独立调度刷新逻辑，修复多余包裹与DOM丢失问题。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -1180,12 +1180,19 @@
                 <input type="text" id="gj-search-input" placeholder="输入搜索..." value="${state.searchText}">
                 <span id="gj-btn-clear" class="btn-clear" title="清空搜索" style="display:${state.searchText ? 'block' : 'none'}">✕</span>
             </div>
+            
+            <div style="padding:4px 8px; display:flex; align-items:center; background:var(--gj-bg-sec); border-bottom:1px solid var(--gj-border);">
+                <span style="font-size:11px; color:var(--gj-text-mute); margin-right:5px;">列宽:</span>
+                <input type="range" id="gj-col-slider" min="60" max="200" value="${state.colWidth}" style="flex:1; height:4px;">
+            </div>
 
             <div class="gj-list-body" id="list-addr-body" style="height:${state.layout.height}px;"></div>
             
-            <div style="padding:5px 8px;
-            font-size:11px; display:flex; align-items:center; gap:5px; border-top:1px dashed var(--gj-border);">
-            <div id="gj-size-handle" class="gj-resize-handle" title="拖拽调整宽高"></div>
+            <div style="padding:5px 8px; font-size:11px; display:flex; align-items:center; gap:5px; border-top:1px dashed var(--gj-border);">
+                <span style="color:var(--gj-text-mute);">数量: <b id="gj-count-display">0</b></span>
+                <div style="flex:1"></div>
+                <div id="gj-size-handle" class="gj-resize-handle" title="拖拽调整宽高"></div>
+            </div>
         `;
 
         document.body.appendChild(widget);
