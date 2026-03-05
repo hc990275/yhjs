@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       2.5.0
+// @version       2.5.1
 // @description   【三界面独立面板】订单管理默认收起，指派/司机界面默认展开，三界面独立存储互不干扰。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
@@ -733,8 +733,13 @@
                     }, 1000);
                 }
             } else {
-                // 有司机 -> 维持当前人工或默认操作
-                window._gjDispatchState.lastMode = 'HasDriver';
+                // 有司机 -> 维持 AI 智能指派和默认距离
+                if (window._gjDispatchState.lastMode !== 'HasDriver') {
+                    setDispatchMode(['AI智能', 'AI智能指派', '智能指派', 'AI指派']);
+                    setTimeout(() => setSliderValue(defaultTargetKm), 500);
+                    log(`✅ 检测到附近有司机，保持/恢复 [AI智能] 模式和默认距离 ${defaultTargetKm}km`, 'success');
+                    window._gjDispatchState.lastMode = 'HasDriver';
+                }
             }
         }
     };
