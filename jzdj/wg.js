@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       2.5.4
+// @version       2.5.2
 // @description   【三界面独立面板】订单管理默认收起，指派/司机界面默认展开，三界面独立存储互不干扰。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
@@ -620,32 +620,7 @@
     // ... (后续代码：setupCloudConfig, applyDistanceByTime, UI渲染, processClipboard 等保持 v15.6.8 逻辑不变，已包含在上方完整代码中) ...
     // 为节省篇幅，核心修正已在上方完整体现，请直接复制上方完整代码块。
 
-    // [新增] 判断用户是否正在从地图建议列表中选择地址
-    const isAddressSelecting = () => {
-        // 核心：如果输入框正处于焦点状态，直接判定为正在选择 (User Interaction)
-        const activeEl = document.activeElement;
-        const isInputFocus = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA') &&
-            (activeEl.classList.contains('el-input__inner') || activeEl.id === 'tipinput');
-        if (isInputFocus) return true;
 
-        // 高德/百度建议列表探测 (针对下拉 DOM)
-        const amapSugSelectors = ['.amap-sug-result', '.amap-ui-poi-picker-sugg-container', '.poi-list', '.amap_lib_placeSearch', '.amap-ui-poi-picker-sugg-list'];
-        const baiduSugSelectors = ['.tangram-suggestion-main'];
-
-        const allSelectors = [...amapSugSelectors, ...baiduSugSelectors];
-        for (let s of allSelectors) {
-            const el = document.querySelector(s);
-            if (el && window.getComputedStyle(el).display !== 'none' && el.offsetHeight > 0) {
-                return true;
-            }
-        }
-
-        // 针对 ElementUI 下拉建议框
-        const possibleSugList = document.querySelector('.el-autocomplete-suggestion, .el-select-dropdown');
-        if (possibleSugList && window.getComputedStyle(possibleSugList).display !== 'none') return true;
-
-        return false;
-    };
 
     const applyDistanceByTime = () => {
         if (!isDispatchPage()) return;
@@ -716,15 +691,9 @@
         if (currentAddrValue !== window._gjDispatchState.lastAddress) {
             window._gjDispatchState.lastAddress = currentAddrValue;
             window._gjDispatchState.addressStableTime = nowMs; // 重置稳定时间戳
+            window._gjDispatchState = { lastMode: '' }; // 可为 'Idle', 'NoDriverSwitch', 'HasDriver'
         }
-
-        // [核心优化] 深度精度拦截：
-        // 1. 如果正在选择列表 (isAddressSelecting 包含焦点检测)
-        // 2. 或者地址变动后未满 3 秒 (给系统留出联想弹出和数据加载时间)
-        const isStable = (nowMs - window._gjDispatchState.addressStableTime) > 3000;
-
-        if (isAddressSelecting() || !isStable) {
-            // if (!isStable) log('⏳ 地址正在变动，进入 3s 冷却期...', 'info');
+        if (isAddressSelecting()) {
             return;
         }
 
