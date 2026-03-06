@@ -591,8 +591,6 @@
         const token = CONFIG.CLOUD.SYNC_TOKEN;
         if (!url || !token) { alert('请先设置云端'); setupCloudConfig(); return; }
 
-        // 如果是自动调用(无参数)，则跳过确认，否则询问
-        // 这里简化处理，直接上传
         const targetUrl = `${url.replace(/\/$/, '')}/api/sync?token=${token}`;
         const blData = state.blacklist.split(/[,，]/).map(s => s.trim()).filter(s => s).join('\n');
         const addrData = (state.db.addrs || []).join('\n');
@@ -608,7 +606,6 @@
             onload: function (response) {
                 if (response.status === 200) {
                     log('✅ 上传成功！云端已更新为最新清洗版', 'success');
-                    alert('✅ 上传成功！云端数据已清洗。');
                 } else {
                     alert('❌ 上传失败: ' + response.responseText);
                 }
@@ -616,11 +613,6 @@
             onerror: function (e) { alert('❌ 网络错误'); }
         });
     };
-
-    // ... (后续代码：setupCloudConfig, applyDistanceByTime, UI渲染, processClipboard 等保持 v15.6.8 逻辑不变，已包含在上方完整代码中) ...
-    // 为节省篇幅，核心修正已在上方完整体现，请直接复制上方完整代码块。
-
-
 
     const applyDistanceByTime = () => {
         if (!isDispatchPage()) return;
@@ -637,11 +629,6 @@
             defaultTargetKm = 2;
         }
 
-        // ============================================
-        // 智能派单模式切换逻辑 (AI智能指派 vs 普通指派)
-        // ============================================
-
-        // 寻找包含特定文字的 DOM 节点来模拟击打切换模式
         const setDispatchMode = (modeKeywords) => {
             const els = document.querySelectorAll('label, span, div, button');
             for (let el of els) {
@@ -657,8 +644,6 @@
 
         const checkHasDispatchInput = () => {
             let hasVal = false;
-
-            // 1. 根据扩展抓取的精准特征：寻找出发地/目的地输入框
             const addressInputs = document.querySelectorAll('.input-place input.el-input__inner');
             for (let el of addressInputs) {
                 if (el.value && el.value.trim().length > 0) {
@@ -666,39 +651,20 @@
                     break;
                 }
             }
-
-            // 2. 保底兼容原生地图组件
             if (!hasVal) {
                 const tipInput = document.getElementById('tipinput');
                 if (tipInput && tipInput.value && tipInput.value.trim().length > 0) hasVal = true;
             }
-
             return hasVal;
         };
 
         const hasDispatchTarget = checkHasDispatchInput();
 
-        // [新增] 状态锁，防止在定时器内被高频无限重复点击 DOM
         if (typeof window._gjDispatchState === 'undefined') {
-            window._gjDispatchState = { lastMode: '', lastAddress: '', addressStableTime: 0 };
-        }
-
-        // 获取当前输入框中的地址汇总值，用于检测变动
-        const currentAddrValue = Array.from(document.querySelectorAll('.input-place input.el-input__inner, #tipinput')).map(i => i.value).join('|');
-        const nowMs = Date.now();
-
-        // 探测地址是否发生变动
-        if (currentAddrValue !== window._gjDispatchState.lastAddress) {
-            window._gjDispatchState.lastAddress = currentAddrValue;
-            window._gjDispatchState.addressStableTime = nowMs; // 重置稳定时间戳
-            window._gjDispatchState = { lastMode: '' }; // 可为 'Idle', 'NoDriverSwitch', 'HasDriver'
-        }
-        if (isAddressSelecting()) {
-            return;
+            window._gjDispatchState = { lastMode: '' };
         }
 
         if (!hasDispatchTarget) {
-            // 场景 1: 既没有输入地址也没有输入电话时 -> 改回 AI 智能指派，恢复默认距离
             if (window._gjDispatchState.lastMode !== 'Idle') {
                 setDispatchMode(['AI智能', 'AI智能指派', '智能指派', 'AI指派']);
                 setTimeout(() => setSliderValue(defaultTargetKm), 500);
@@ -706,42 +672,32 @@
                 window._gjDispatchState.lastMode = 'Idle';
             }
         } else {
-            // 场景 2: 已输入地址 -> 判定有没有司机
             let hasDriver = false;
             const bodyText = document.body.innerText || '';
-
-            // 基础启发式判定：如果页面直接写了“暂无数据”或“找不到符合条件的司机”则无司机
             if (bodyText.includes('暂无相关司机') || bodyText.includes('没有符合条件的司机') || bodyText.includes('暂无数据')) {
                 hasDriver = false;
             } else {
-                // 深度扫描可能存在的司机列表结构（含手机号 1[3-9] / 距离 km标识）
                 const items = document.querySelectorAll('div, li, tr');
                 for (let el of items) {
                     const t = el.innerText || '';
                     if ((t.includes('距') && t.includes('km')) || /1[3-9]\d{9}/.test(t)) {
-                        // 排除自己系统UI造成的文字错判
                         if (!t.includes('自动备注') && el.children.length > 0) {
                             hasDriver = true;
                             break;
                         }
                     }
                 }
-
-                // 备选地图判定：地图上不仅有原点，还有多个标记时（大于2，可能包含终点起点外加司机）
                 if (!hasDriver && document.querySelectorAll('.amap-marker').length > 2) {
                     hasDriver = true;
                 }
             }
 
             if (!hasDriver) {
-                // 无司机 -> 改为普通指派，更改距离扩大到最大 (例如 20km)
                 if (window._gjDispatchState.lastMode !== 'NoDriverSwitch') {
                     setDispatchMode(['普通指派', '常规指派']);
                     setTimeout(() => setSliderValue(20), 500);
                     log('👀 检测到暂无司机数据，执行自动改派: [普通指派] + [20公里] + [实际距离]', 'warning');
                     window._gjDispatchState.lastMode = 'NoDriverSwitch';
-
-                    // 模拟点击“实际距离”（针对一些版本自带的特殊距离按钮）
                     setTimeout(() => {
                         document.querySelectorAll('button, span, th, .el-button').forEach(btn => {
                             if (btn.textContent.trim() === '实际距离') btn.click();
@@ -749,7 +705,6 @@
                     }, 1000);
                 }
             } else {
-                // 有司机 -> 维持 AI 智能指派和默认距离
                 if (window._gjDispatchState.lastMode !== 'HasDriver') {
                     setDispatchMode(['AI智能', 'AI智能指派', '智能指派', 'AI指派']);
                     setTimeout(() => setSliderValue(defaultTargetKm), 500);
