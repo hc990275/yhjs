@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       3.0.1
+// @version       2.5.1
 // @description   【三界面独立面板】订单管理默认收起，指派/司机界面默认展开，三界面独立存储互不干扰。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
@@ -1067,40 +1067,30 @@
     // --- 拼音库加载 (GM_xmlhttpRequest + eval 方案，彻底绕过 TM 沙盒隔离) ---
     // 原因: @require 的库在 TM 沙盒内无法通过 window 暴露，script 标签注入是异步且不可靠的。
     // 方案: 用 GM_xmlhttpRequest 拉取库文件，用 new Function() 在私有作用域 eval，存入 _PM。
-    let _PM = null; // PinyinMatch 实例
-    let _PP = null; // pinyin-pro 实例
-
-    // 加载 PinyinMatch (用于高效匹配)
+    let _PM = null; // 模块级私有变量，isMatch 可同步访问
     const loadPinyinMatch = () => {
-        try { if (typeof PinyinMatch !== 'undefined') { _PM = PinyinMatch; return; } } catch (e) { }
+        // Step 1: 优先尝试 @require 在沙盒里注册的直接变量
+        try { if (typeof PinyinMatch !== 'undefined') { _PM = PinyinMatch; log('✅ PinyinMatch 来自 @require 沙盒', 'success'); return; } } catch (e) { }
+        // Step 2: 尝试 unsafeWindow（页面上已有注入）
+        try { const uw = typeof unsafeWindow !== 'undefined' ? unsafeWindow : null; if (uw?.PinyinMatch) { _PM = uw.PinyinMatch; log('✅ PinyinMatch 来自 unsafeWindow', 'success'); return; } } catch (e) { }
+        // Step 3: GM_xmlhttpRequest 拉取 + eval 到私有作用域（最可靠）
         GM_xmlhttpRequest({
             method: 'GET',
             url: 'https://cdn.jsdelivr.net/npm/pinyin-match/dist/main.js',
             onload: (res) => {
                 try {
                     const mod = { exports: {} };
+                    // NOTE: new Function() 在独立作用域执行，不污染页面全局
                     new Function('module', 'exports', res.responseText)(mod, mod.exports);
                     _PM = mod.exports;
-                    if (_PM) log('✅ PinyinMatch 加载成功', 'success');
-                } catch (e) { }
-            }
-        });
-    };
-
-    // 加载 pinyin-pro (用于精准汉字转拼音/谐音)
-    const loadPinyinPro = () => {
-        GM_xmlhttpRequest({
-            method: 'GET',
-            url: 'https://cdn.jsdelivr.net/npm/pinyin-pro/dist/index.js',
-            onload: (res) => {
-                try {
-                    const mod = { exports: {} };
-                    // pinyin-pro 导出在 global 上
-                    new Function('exports', res.responseText)(mod.exports);
-                    _PP = mod.exports.pinyinPro || mod.exports;
-                    if (_PP) log('✅ pinyin-pro 加载成功，谐音匹配就绪', 'success');
-                } catch (e) { }
-            }
+                    if (_PM && typeof _PM.match === 'function') {
+                        log('✅ PinyinMatch 已通过 GM_xmlhttpRequest+eval 加载，拼音搜索就绪', 'success');
+                    } else {
+                        log('⚠️ PinyinMatch eval 完成但 match 不可用，请检查库版本', 'warning');
+                    }
+                } catch (e) { log('❌ PinyinMatch eval 失败: ' + e.message, 'error'); }
+            },
+            onerror: () => log('❌ PinyinMatch CDN 拉取失败，拼音搜索退为中文包含匹配', 'error')
         });
     };
 
@@ -1128,39 +1118,7 @@
             } catch (e) { }
         }
     };
-    const FAST_PINYIN = { "a": "阿啊呵腌", "b": "不把拔吧罢波报半办包百", "c": "从才次此草层成长产常场车", "d": "大的地方到第对等当电定动度点", "e": "而二儿尔耳恶额", "f": "发分法方放风非分区反服份", "g": "个国高工公更过感关各给更共", "h": "和话回好后合活会化换还核号行花华", "j": "机经就家进见解加间军界极价记", "k": "看口开科快颗可克服况空间看考", "l": "了来里两老量路利力里理立力历例", "m": "没美面每门民明名马买卖满漫毛", "n": "内你年后能那南男难念您牛农", "o": "哦哦喔", "p": "平朋友片配旁跑泡陪配喷朋捧批", "q": "去起前其全情期气其齐奇起其气", "r": "人日荣誉如让任肉人人热日荣如", "s": "是说上生时事三社山深神什声实", "t": "他天同一体提图太阳通台太叹谈", "w": "我文外物理网五位万王往望微委", "x": "下学小先向系心里现新西希析息", "y": "一有也是样用于以此已由与要也", "z": "在中这就只种主子自最制真张正" };
-
-    const PinyinUtils = {
-        _cache: new Map(),
-        getPinyin: (text) => {
-            if (!text) return "";
-            if (PinyinUtils._cache.has(text)) return PinyinUtils._cache.get(text);
-            let result = "";
-            if (_PP && typeof _PP.pinyin === 'function') {
-                try {
-                    result = _PP.pinyin(text, { toneType: 'none', pattern: 'initial', nonPinyin: 'removed', type: 'array' }).join('');
-                } catch (e) { }
-            }
-            if (!result) {
-                let temp = "";
-                for (let char of text) {
-                    let found = false;
-                    for (let key in FAST_PINYIN) {
-                        if (FAST_PINYIN[key].includes(char)) {
-                            temp += key; found = true; break;
-                        }
-                    }
-                    if (!found) temp += char;
-                }
-                result = temp;
-            }
-            const finalRes = result.toLowerCase();
-            if (text.length < 50) PinyinUtils._cache.set(text, finalRes);
-            return finalRes;
-        }
-    };
-
-    // 拼音 + 汉字双重匹配 + 谐音匹配 (深度优化版)
+    // 拼音 + 汉字双重匹配（依赖模块级 _PM，由 init 时的 loadPinyinMatch 填充）
     const isMatch = (dbItem, inputKey, type) => {
         if (!inputKey) return true;
         const cleanKey = inputKey.trim();
@@ -1177,27 +1135,20 @@
             return false;
         }
 
+        // --- 地址类型匹配 ---
         const keywords = cleanKey.split(/\s+/);
         return keywords.every(k => {
-            // 1. 中文全文直配
+            // 1. 中文直接包含（最快，无库依赖）
             if (dbItem.includes(k)) return true;
-
-            // 2. 谐音转拼音匹配 (如果输入含中文，先转为拼音)
-            let searchTarget = k;
-            if (/[\u4e00-\u9fa5]/.test(k)) {
-                searchTarget = PinyinUtils.getPinyin(k);
-            }
-
-            // 3. PinyinMatch 深度引擎匹配 (识别拼音首字母或全拼)
+            // 2. PinyinMatch 拼音匹配（_PM 由 init 时异步填充）
             if (_PM && typeof _PM.match === 'function') {
                 try {
-                    const res = _PM.match(dbItem, searchTarget);
+                    const res = _PM.match(dbItem, k); // match(汉字文本, 拼音/关键词)
                     if (res && res.length > 0) return true;
                 } catch (e) { }
             }
-
-            // 4. 正则大小写兜底 (处理英文)
-            if (/^[a-zA-Z0-9]+$/.test(k)) {
+            // 3. 降级：纯字母时不区分大小写正则兜底
+            if (/^[a-zA-Z]+$/.test(k)) {
                 try { if (new RegExp(k, 'i').test(dbItem)) return true; } catch (e) { }
             }
             return false;
@@ -2351,8 +2302,7 @@
         `);
     };
     const init = () => {
-        loadPinyinMatch(); // 加载匹配引擎
-        loadPinyinPro();   // 加载拼音转换引擎
+        loadPinyinMatch(); // 在 init 最早时加载拼音库到 _PM（异步，不阻塞页面）
         migrateOldData();
         addStyles();
         checkPage();
