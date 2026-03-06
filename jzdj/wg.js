@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       2.5.1
+// @version       2.5.2
 // @description   【三界面独立面板】订单管理默认收起，指派/司机界面默认展开，三界面独立存储互不干扰。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
@@ -1566,16 +1566,20 @@
         const addrBody = document.getElementById('list-addr-body');
         if (!addrBody) return;
 
-        let filteredList = [];
-        if (state.searchText) {
-            const pList = (state.db.phones || []).filter(item => isMatch(item, state.searchText, 'phone')).map(item => ({ val: item, type: 'phone', icon: '📞' }));
-            const aList = (state.db.addrs || []).filter(item => isMatch(item, state.searchText, 'address')).map(item => ({ val: item, type: 'address', icon: '📍' }));
-            filteredList = [...pList, ...aList];
-        } else {
-            const isPhone = state.viewTab === 'phone';
-            const sourceList = isPhone ? state.db.phones : state.db.addrs;
-            filteredList = (sourceList || []).map(item => ({ val: item, type: isPhone ? 'phone' : 'address', icon: isPhone ? '📞' : '📍' }));
+        // --- 性能优化：只有在搜索时才渲染列表 ---
+        if (!state.searchText) {
+            addrBody.innerHTML = `<div class="gj-empty">请尝试输入汉字或拼音进行搜索<br>(当前库地址: ${state.db.addrs.length} / 电话: ${state.db.phones.length})</div>`;
+            return;
         }
+
+        let filteredList = [];
+        const MAX_ITEMS = 500; // 搜索结果上限，防止 DOM 崩溃
+
+        const pList = (state.db.phones || []).filter(item => isMatch(item, state.searchText, 'phone')).map(item => ({ val: item, type: 'phone', icon: '📞' }));
+        const aList = (state.db.addrs || []).filter(item => isMatch(item, state.searchText, 'address')).map(item => ({ val: item, type: 'address', icon: '📍' }));
+
+        // 合并结果并截断
+        filteredList = [...pList, ...aList].slice(0, MAX_ITEMS);
 
         const renderItem = (item) => {
             return `<div class="gj-list-item" title="${item.val}" data-val="${item.val}" data-type="${item.type}">
@@ -1585,8 +1589,7 @@
         };
 
         if (filteredList.length === 0) {
-            addrBody.innerHTML = `<div class="gj-empty">${state.searchText ?
-                '无匹配结果<br>请尝试其他关键词' : '库为空<br>请导入文件或复制文本'}</div>`;
+            addrBody.innerHTML = `<div class="gj-empty">无匹配结果<br>请尝试其他关键词</div>`;
         } else {
             addrBody.innerHTML = filteredList.map(i => renderItem(i)).join('');
             addrBody.querySelectorAll('.gj-list-item').forEach(el =>
