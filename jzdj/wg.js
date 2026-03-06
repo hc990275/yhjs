@@ -1128,31 +1128,39 @@
             } catch (e) { }
         }
     };
+    const FAST_PINYIN = { "a": "阿啊呵腌", "b": "不把拔吧罢波报半办包百", "c": "从才次此草层成长产常场车", "d": "大的地方到第对等当电定动度点", "e": "而二儿尔耳恶额", "f": "发分法方放风非分区反服份", "g": "个国高工公更过感关各给更共", "h": "和话回好后合活会化换还核号行花华", "j": "机经就家进见解加间军界极价记", "k": "看口开科快颗可克服况空间看考", "l": "了来里两老量路利力里理立力历例", "m": "没美面每门民明名马买卖满漫毛", "n": "内你年后能那南男难念您牛农", "o": "哦哦喔", "p": "平朋友片配旁跑泡陪配喷朋捧批", "q": "去起前其全情期气其齐奇起其气", "r": "人日荣誉如让任肉人人热日荣如", "s": "是说上生时事三社山深神什声实", "t": "他天同一体提图太阳通台太叹谈", "w": "我文外物理网五位万王往望微委", "x": "下学小先向系心里现新西希析息", "y": "一有也是样用于以此已由与要也", "z": "在中这就只种主子自最制真张正" };
+
     const PinyinUtils = {
         _cache: new Map(),
-        // 获取汉字对应的拼音首字母串
         getPinyin: (text) => {
             if (!text) return "";
             if (PinyinUtils._cache.has(text)) return PinyinUtils._cache.get(text);
-
             let result = "";
-            // 如果专业库已加载，使用专业库
             if (_PP && typeof _PP.pinyin === 'function') {
                 try {
                     result = _PP.pinyin(text, { toneType: 'none', pattern: 'initial', nonPinyin: 'removed', type: 'array' }).join('');
                 } catch (e) { }
             }
-
-            // 降级：如果库没加载好，原样返回（由 contains 逻辑处理）
-            if (!result) result = text;
-
+            if (!result) {
+                let temp = "";
+                for (let char of text) {
+                    let found = false;
+                    for (let key in FAST_PINYIN) {
+                        if (FAST_PINYIN[key].includes(char)) {
+                            temp += key; found = true; break;
+                        }
+                    }
+                    if (!found) temp += char;
+                }
+                result = temp;
+            }
             const finalRes = result.toLowerCase();
             if (text.length < 50) PinyinUtils._cache.set(text, finalRes);
             return finalRes;
         }
     };
 
-    // 拼音 + 汉字双重匹配 + 谐音匹配（依赖模块级 _PM）
+    // 拼音 + 汉字双重匹配 + 谐音匹配 (深度优化版)
     const isMatch = (dbItem, inputKey, type) => {
         if (!inputKey) return true;
         const cleanKey = inputKey.trim();
@@ -1169,28 +1177,27 @@
             return false;
         }
 
-        // --- 地址类型匹配 ---
         const keywords = cleanKey.split(/\s+/);
         return keywords.every(k => {
-            // 1. 中文直接包含（最快，无库依赖）
+            // 1. 中文全文直配
             if (dbItem.includes(k)) return true;
 
-            // 2. [新增] 谐音匹配逻辑
-            // 如果搜索词包含中文，将其转为拼音后再让 PinyinMatch 匹配
+            // 2. 谐音转拼音匹配 (如果输入含中文，先转为拼音)
             let searchTarget = k;
             if (/[\u4e00-\u9fa5]/.test(k)) {
                 searchTarget = PinyinUtils.getPinyin(k);
             }
 
-            // 3. PinyinMatch 拼音匹配（_PM 由 init 时异步填充）
+            // 3. PinyinMatch 深度引擎匹配 (识别拼音首字母或全拼)
             if (_PM && typeof _PM.match === 'function') {
                 try {
-                    const res = _PM.match(dbItem, searchTarget); // match(汉字文本, 拼音/关键词)
+                    const res = _PM.match(dbItem, searchTarget);
                     if (res && res.length > 0) return true;
                 } catch (e) { }
             }
-            // 4. 降级：纯字母时不区分大小写正则兜底
-            if (/^[a-zA-Z]+$/.test(k)) {
+
+            // 4. 正则大小写兜底 (处理英文)
+            if (/^[a-zA-Z0-9]+$/.test(k)) {
                 try { if (new RegExp(k, 'i').test(dbItem)) return true; } catch (e) { }
             }
             return false;
