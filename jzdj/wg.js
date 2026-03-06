@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       2.5.3
+// @version       2.5.4
 // @description   【三界面独立面板】订单管理默认收起，指派/司机界面默认展开，三界面独立存储互不干扰。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
@@ -622,9 +622,14 @@
 
     // [新增] 判断用户是否正在从地图建议列表中选择地址
     const isAddressSelecting = () => {
-        // 高德建议列表常用类名
-        const amapSugSelectors = ['.amap-sug-result', '.amap-ui-poi-picker-sugg-container', '.poi-list', '.amap_lib_placeSearch'];
-        // 百度建议列表
+        // 核心：如果输入框正处于焦点状态，直接判定为正在选择 (User Interaction)
+        const activeEl = document.activeElement;
+        const isInputFocus = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA') &&
+            (activeEl.classList.contains('el-input__inner') || activeEl.id === 'tipinput');
+        if (isInputFocus) return true;
+
+        // 高德/百度建议列表探测 (针对下拉 DOM)
+        const amapSugSelectors = ['.amap-sug-result', '.amap-ui-poi-picker-sugg-container', '.poi-list', '.amap_lib_placeSearch', '.amap-ui-poi-picker-sugg-list'];
         const baiduSugSelectors = ['.tangram-suggestion-main'];
 
         const allSelectors = [...amapSugSelectors, ...baiduSugSelectors];
@@ -635,7 +640,7 @@
             }
         }
 
-        // 针对 ElementUI 或自定义建议框的启发式探测 (包含列表项及数字标号)
+        // 针对 ElementUI 下拉建议框
         const possibleSugList = document.querySelector('.el-autocomplete-suggestion, .el-select-dropdown');
         if (possibleSugList && window.getComputedStyle(possibleSugList).display !== 'none') return true;
 
@@ -700,12 +705,26 @@
 
         // [新增] 状态锁，防止在定时器内被高频无限重复点击 DOM
         if (typeof window._gjDispatchState === 'undefined') {
-            window._gjDispatchState = { lastMode: '' }; // 可为 'Idle', 'NoDriverSwitch', 'HasDriver'
+            window._gjDispatchState = { lastMode: '', lastAddress: '', addressStableTime: 0 };
         }
 
-        // [核心优化] 精度拦截：如果用户正在从系统中选择具体的建议地址，不进行任何自动化操作
-        if (isAddressSelecting()) {
-            // log('⏳ 正在选择地址，暂停自动化决策...', 'warning');
+        // 获取当前输入框中的地址汇总值，用于检测变动
+        const currentAddrValue = Array.from(document.querySelectorAll('.input-place input.el-input__inner, #tipinput')).map(i => i.value).join('|');
+        const nowMs = Date.now();
+
+        // 探测地址是否发生变动
+        if (currentAddrValue !== window._gjDispatchState.lastAddress) {
+            window._gjDispatchState.lastAddress = currentAddrValue;
+            window._gjDispatchState.addressStableTime = nowMs; // 重置稳定时间戳
+        }
+
+        // [核心优化] 深度精度拦截：
+        // 1. 如果正在选择列表 (isAddressSelecting 包含焦点检测)
+        // 2. 或者地址变动后未满 3 秒 (给系统留出联想弹出和数据加载时间)
+        const isStable = (nowMs - window._gjDispatchState.addressStableTime) > 3000;
+
+        if (isAddressSelecting() || !isStable) {
+            // if (!isStable) log('⏳ 地址正在变动，进入 3s 冷却期...', 'info');
             return;
         }
 
