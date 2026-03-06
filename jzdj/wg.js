@@ -1067,30 +1067,40 @@
     // --- 拼音库加载 (GM_xmlhttpRequest + eval 方案，彻底绕过 TM 沙盒隔离) ---
     // 原因: @require 的库在 TM 沙盒内无法通过 window 暴露，script 标签注入是异步且不可靠的。
     // 方案: 用 GM_xmlhttpRequest 拉取库文件，用 new Function() 在私有作用域 eval，存入 _PM。
-    let _PM = null; // 模块级私有变量，isMatch 可同步访问
+    let _PM = null; // PinyinMatch 实例
+    let _PP = null; // pinyin-pro 实例
+
+    // 加载 PinyinMatch (用于高效匹配)
     const loadPinyinMatch = () => {
-        // Step 1: 优先尝试 @require 在沙盒里注册的直接变量
-        try { if (typeof PinyinMatch !== 'undefined') { _PM = PinyinMatch; log('✅ PinyinMatch 来自 @require 沙盒', 'success'); return; } } catch (e) { }
-        // Step 2: 尝试 unsafeWindow（页面上已有注入）
-        try { const uw = typeof unsafeWindow !== 'undefined' ? unsafeWindow : null; if (uw?.PinyinMatch) { _PM = uw.PinyinMatch; log('✅ PinyinMatch 来自 unsafeWindow', 'success'); return; } } catch (e) { }
-        // Step 3: GM_xmlhttpRequest 拉取 + eval 到私有作用域（最可靠）
+        try { if (typeof PinyinMatch !== 'undefined') { _PM = PinyinMatch; return; } } catch (e) { }
         GM_xmlhttpRequest({
             method: 'GET',
             url: 'https://cdn.jsdelivr.net/npm/pinyin-match/dist/main.js',
             onload: (res) => {
                 try {
                     const mod = { exports: {} };
-                    // NOTE: new Function() 在独立作用域执行，不污染页面全局
                     new Function('module', 'exports', res.responseText)(mod, mod.exports);
                     _PM = mod.exports;
-                    if (_PM && typeof _PM.match === 'function') {
-                        log('✅ PinyinMatch 已通过 GM_xmlhttpRequest+eval 加载，拼音搜索就绪', 'success');
-                    } else {
-                        log('⚠️ PinyinMatch eval 完成但 match 不可用，请检查库版本', 'warning');
-                    }
-                } catch (e) { log('❌ PinyinMatch eval 失败: ' + e.message, 'error'); }
-            },
-            onerror: () => log('❌ PinyinMatch CDN 拉取失败，拼音搜索退为中文包含匹配', 'error')
+                    if (_PM) log('✅ PinyinMatch 加载成功', 'success');
+                } catch (e) { }
+            }
+        });
+    };
+
+    // 加载 pinyin-pro (用于精准汉字转拼音/谐音)
+    const loadPinyinPro = () => {
+        GM_xmlhttpRequest({
+            method: 'GET',
+            url: 'https://cdn.jsdelivr.net/npm/pinyin-pro/dist/index.js',
+            onload: (res) => {
+                try {
+                    const mod = { exports: {} };
+                    // pinyin-pro 导出在 global 上
+                    new Function('exports', res.responseText)(mod.exports);
+                    _PP = mod.exports.pinyinPro || mod.exports;
+                    if (_PP) log('✅ pinyin-pro 加载成功，谐音匹配就绪', 'success');
+                } catch (e) { }
+            }
         });
     };
 
@@ -1118,51 +1128,27 @@
             } catch (e) { }
         }
     };
-    // --- 极简拼音首字母映射表 (涵盖常用 3000 字) ---
-    const PINYIN_DICT = {
-        "a": "阿啊呵腌嗄吖锕", "b": "把拔吧罢波报半办包百本比并步别变不兵补布备办伴闭贝薄拔补播捕卜博驳伯泊",
-        "c": "从才次此草层成长产常场车持程序出传处磁次差察尝成重陈城程层穿传创磁词此村存寸措",
-        "d": "大的地方到第对等当电定动度点导低道打代单但淡等低底地第点电调丁定订冬动都度端段队对多",
-        "e": "而二儿尔耳恶二额俄饿额俄鹅", "f": "发分法方放风非分区反服份反范方非飞费分份风封夫服复副府负富付复",
-        "g": "个国高工公更过感关各给更共工公功勾姑古骨鼓固故顾挂怪关光广归规贵柜郭果过",
-        "h": "和话回好后合活会化换还核号行何合何和河核合后厚候呼忽户互护花华划画划话怀坏欢还环换黄回会绘惠混合活火获或货获",
-        "j": "机经就家进见解加间军界极价记机积基极级即几技术加家假价间检查简见建讲交角教较阶接节结解今金尽进近京经精景静救就居局举句具据剧决绝均君旧救究聚",
-        "k": "看口开科快颗可克服况空间看考可渴刻客课肯空控口苦块快宽款况扩",
-        "l": "了来里两老量路利力里理立力历例利量良两料列临林霖临雷类累离里理礼历利立力例利联练亮量列临林零流六龙楼路露律率绿乱落",
-        "m": "没美面每门民明名马买卖满漫毛么没每美门们面民明名命莫某木目墓亩幕母亩木目墓幕",
-        "n": "内你年后能那南男难内能你年念鸟您牛农弄奴怒女暖那南难内能你年念鸟您牛农弄女暖",
-        "o": "哦哦喔", "p": "平判断朋友片判定配平旁跑泡陪配喷朋捧批皮篇片飘平评凭瓶平评凭瓶普谱普破铺瀑",
-        "q": "去起前其全情期气其齐奇起其气器千前强抢桥切且亲轻青清情请顷庆穷求球区曲取去趣圈全权泉缺却屈全权泉缺却群",
-        "r": "人日荣誉如让任肉人人热日荣如乳入软若人热日荣如入若",
-        "s": "是说上和生时事三社山深神什声实使世市式视试收手受书术设设备身深神升生声失师十实识时什使世事式试视收手受书术树数率刷双水税说司丝私死思四松送苏俗诉速素算碎岁所缩似色赛散三山杀伤商上少设社射身深神升生声师十实识时什使世事式试视收手受书术树数率刷双水税说死思四送算岁所",
-        "t": "他天同一体提图太阳通台太叹谈谈探铁贴天天调铁贴天听廷停通同统图土团团推脱托通同统图土团推脱托",
-        "w": "我文外物理网五位万王往望微委未文稳问我五午武五午武务物务物误午武物务雾误万王往望未文稳问午务物务误万王往望未文稳问",
-        "x": "下学小先向系心里现新西希析息习隙现场详想向象效些写新心信星行形修须许绪续学寻训练下先显现献线相详响向象效些写新心信行型形修需许选学寻训",
-        "y": "一有也是样用于以此已由与要也一已以亿义意因应影硬永用由右余鱼与语玉于于是样要一已以亿义意因应影硬永用由右余鱼与语玉于于是样药一已以亿义意因应影硬永用由右余鱼与语玉于于是样",
-        "z": "在中这就只种主子自最制真张正战展之支职止只制质治中中终钟种众重主助住注祝转装壮状准子自总走租族组祖作左做坐座在中这就只种主子自最制真张正战展之支职止只制质治中中终钟种众重主助住注祝转装壮状准子自总走租族组祖作左做坐座"
-    };
-
     const PinyinUtils = {
         _cache: new Map(),
-        // 获取汉字拼音首字母串 (带极简缓存)
+        // 获取汉字对应的拼音首字母串
         getPinyin: (text) => {
             if (!text) return "";
             if (PinyinUtils._cache.has(text)) return PinyinUtils._cache.get(text);
-            let res = "";
-            for (let char of text) {
-                let found = false;
-                for (let key in PINYIN_DICT) {
-                    if (PINYIN_DICT[key].includes(char)) {
-                        res += key;
-                        found = true;
-                        break;
-                    }
-                }
-                if (!found) res += char;
+
+            let result = "";
+            // 如果专业库已加载，使用专业库
+            if (_PP && typeof _PP.pinyin === 'function') {
+                try {
+                    result = _PP.pinyin(text, { toneType: 'none', pattern: 'initial', nonPinyin: 'removed', type: 'array' }).join('');
+                } catch (e) { }
             }
-            const result = res.toLowerCase();
-            if (text.length < 20) PinyinUtils._cache.set(text, result);
-            return result;
+
+            // 降级：如果库没加载好，原样返回（由 contains 逻辑处理）
+            if (!result) result = text;
+
+            const finalRes = result.toLowerCase();
+            if (text.length < 50) PinyinUtils._cache.set(text, finalRes);
+            return finalRes;
         }
     };
 
@@ -2358,7 +2344,8 @@
         `);
     };
     const init = () => {
-        loadPinyinMatch(); // 在 init 最早时加载拼音库到 _PM（异步，不阻塞页面）
+        loadPinyinMatch(); // 加载匹配引擎
+        loadPinyinPro();   // 加载拼音转换引擎
         migrateOldData();
         addStyles();
         checkPage();
