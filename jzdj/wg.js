@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       2.5.2
+// @version       2.5.3
 // @description   【三界面独立面板】订单管理默认收起，指派/司机界面默认展开，三界面独立存储互不干扰。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
@@ -620,6 +620,28 @@
     // ... (后续代码：setupCloudConfig, applyDistanceByTime, UI渲染, processClipboard 等保持 v15.6.8 逻辑不变，已包含在上方完整代码中) ...
     // 为节省篇幅，核心修正已在上方完整体现，请直接复制上方完整代码块。
 
+    // [新增] 判断用户是否正在从地图建议列表中选择地址
+    const isAddressSelecting = () => {
+        // 高德建议列表常用类名
+        const amapSugSelectors = ['.amap-sug-result', '.amap-ui-poi-picker-sugg-container', '.poi-list', '.amap_lib_placeSearch'];
+        // 百度建议列表
+        const baiduSugSelectors = ['.tangram-suggestion-main'];
+
+        const allSelectors = [...amapSugSelectors, ...baiduSugSelectors];
+        for (let s of allSelectors) {
+            const el = document.querySelector(s);
+            if (el && window.getComputedStyle(el).display !== 'none' && el.offsetHeight > 0) {
+                return true;
+            }
+        }
+
+        // 针对 ElementUI 或自定义建议框的启发式探测 (包含列表项及数字标号)
+        const possibleSugList = document.querySelector('.el-autocomplete-suggestion, .el-select-dropdown');
+        if (possibleSugList && window.getComputedStyle(possibleSugList).display !== 'none') return true;
+
+        return false;
+    };
+
     const applyDistanceByTime = () => {
         if (!isDispatchPage()) return;
         const now = new Date();
@@ -679,6 +701,12 @@
         // [新增] 状态锁，防止在定时器内被高频无限重复点击 DOM
         if (typeof window._gjDispatchState === 'undefined') {
             window._gjDispatchState = { lastMode: '' }; // 可为 'Idle', 'NoDriverSwitch', 'HasDriver'
+        }
+
+        // [核心优化] 精度拦截：如果用户正在从系统中选择具体的建议地址，不进行任何自动化操作
+        if (isAddressSelecting()) {
+            // log('⏳ 正在选择地址，暂停自动化决策...', 'warning');
+            return;
         }
 
         if (!hasDispatchTarget) {
