@@ -1143,9 +1143,11 @@
     };
 
     const PinyinUtils = {
-        // [新增] 获取汉字拼音首字母串
+        _cache: new Map(),
+        // 获取汉字拼音首字母串 (带极简缓存)
         getPinyin: (text) => {
             if (!text) return "";
+            if (PinyinUtils._cache.has(text)) return PinyinUtils._cache.get(text);
             let res = "";
             for (let char of text) {
                 let found = false;
@@ -1156,9 +1158,11 @@
                         break;
                     }
                 }
-                if (!found) res += char; // 非汉字原样保留
+                if (!found) res += char;
             }
-            return res.toLowerCase();
+            const result = res.toLowerCase();
+            if (text.length < 20) PinyinUtils._cache.set(text, result);
+            return result;
         }
     };
 
