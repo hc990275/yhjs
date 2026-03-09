@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       2.5.2
+// @version       2.5.3
 // @description   【三界面独立面板】订单管理默认收起，指派/司机界面默认展开，三界面独立存储互不干扰。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
@@ -88,6 +88,8 @@
         timerId: null,
         scrapeObserver: null,
 
+        posKey: 'posMain',
+        scaleKey: 'uiScale',
         posMain: safeParse('posMain', '{"top":"80px","left":"20px"}'),
         posAddr: safeParse('posAddr', '{"top":"80px","left":"300px"}'),
         uiScale: parseFloat(GM_getValue('uiScale', '1.0')),
@@ -143,6 +145,12 @@
     const checkPage = () => {
         state.currentHash = window.location.hash;
         reloadDB();
+
+        // [修改] 动态化各界面的面板位置与缩放存储Key
+        state.posKey = isOrderPage() ? 'posMain_order' : isDispatchPage() ? 'posMain_dispatch' : isDriverPage() ? 'posMain_driver' : 'posMain';
+        state.scaleKey = isOrderPage() ? 'uiScale_order' : isDispatchPage() ? 'uiScale_dispatch' : isDriverPage() ? 'uiScale_driver' : 'uiScale';
+        state.posMain = safeParse(state.posKey, '{"top":"80px","left":"20px"}');
+        state.uiScale = parseFloat(GM_getValue(state.scaleKey, '1.0'));
 
         if (isOrderPage()) {
             state.refreshInterval = GM_getValue('orderInterval', CONFIG.ORDER.DEFAULT_INTERVAL);
@@ -616,18 +624,9 @@
 
     const applyDistanceByTime = () => {
         if (!isDispatchPage()) return;
-        const now = new Date();
-        const currentVal = now.getHours() * 60 + now.getMinutes();
-        const parseTime = (str) => {
-            const parts = str.split(':');
-            return parseInt(parts[0]) * 60 + parseInt(parts[1]);
-        };
-        const startVal = parseTime(state.timeConfig.start);
-        const endVal = parseTime(state.timeConfig.end);
+
+        // 现已改为全天默认 3 公里，不再随时间改变
         let defaultTargetKm = 3;
-        if (currentVal >= startVal && currentVal < endVal) {
-            defaultTargetKm = 2;
-        }
 
         const setDispatchMode = (modeKeywords) => {
             const els = document.querySelectorAll('label, span, div, button');
@@ -643,6 +642,12 @@
         };
 
         const checkHasDispatchInput = () => {
+            // [新增] 检查是否存在下拉地址选择框（正在选择中），如果正在选择则视为尚未确定目标
+            const sugBox = document.querySelector('.el-autocomplete-suggestion, .amap-sug-result, .el-select-dropdown');
+            if (sugBox && sugBox.style.display !== 'none' && sugBox.offsetParent !== null) {
+                return false; // 还在选地址中，暂停扫描派单
+            }
+
             let hasVal = false;
             const addressInputs = document.querySelectorAll('.input-place input.el-input__inner');
             for (let el of addressInputs) {
@@ -677,18 +682,77 @@
             if (bodyText.includes('暂无相关司机') || bodyText.includes('没有符合条件的司机') || bodyText.includes('暂无数据')) {
                 hasDriver = false;
             } else {
+                let driverFoundWithin3km = false;
+                let minStraight = 999;
+                let minActual = 999;
+                let minDriverName = '未知';
+
+                // 辅助函数：从文本提取2~4个汉字的姓名
+                const extractName = (text) => {
+                    const matches = text.match(/[\u4e00-\u9fa5]{2,4}/g);
+                    if (matches) {
+                        for (let n of matches) {
+                            if (!["未服务", "听单中", "抢单中", "刚接单", "前往接驾", "等待中", "途中", "中途等待", "支付方式", "当前在线", "实时监控", "空闲师傅", "干活中", "即将完成", "自动备注", "直线", "实际", "距离", "推荐", "服务", "人员", "搜索", "半径", "默认", "全天"].includes(n)) {
+                                return n;
+                            }
+                        }
+                    }
+                    return '未知';
+                };
+
                 const items = document.querySelectorAll('div, li, tr');
                 for (let el of items) {
+                    if (el.closest && el.closest('.gj-window')) continue; // [修复] 排除助手面板自身里的文字干扰
                     const t = el.innerText || '';
-                    if ((t.includes('距') && t.includes('km')) || /1[3-9]\d{9}/.test(t)) {
-                        if (!t.includes('自动备注') && el.children.length > 0) {
-                            hasDriver = true;
-                            break;
+                    if (t.includes('自动备注') || el.children.length === 0) continue;
+
+                    const distMatch = t.match(/([\d.]+)\s*km\s*\/\s*([\d.]+)\s*km/i);
+                    if (distMatch) {
+                        const straight = parseFloat(distMatch[1]);
+                        const actual = parseFloat(distMatch[2]);
+                        if (straight < minStraight || actual < minActual) {
+                            // 距离更近，更新距离和姓名
+                            if (straight < minStraight) minStraight = straight;
+                            if (actual < minActual) minActual = actual;
+                            minDriverName = extractName(t);
+                        }
+                        if (straight < 3 || actual < 3) {
+                            driverFoundWithin3km = true;
+                        }
+                    } else if (t.includes('距') && t.includes('km')) {
+                        const singleMatch = t.match(/([\d.]+)\s*km/);
+                        if (singleMatch) {
+                            const dist = parseFloat(singleMatch[1]);
+                            if (dist < minStraight || dist < minActual) {
+                                if (dist < minStraight) minStraight = dist;
+                                if (dist < minActual) minActual = dist;
+                                minDriverName = extractName(t);
+                            }
+                            if (dist < 3) driverFoundWithin3km = true;
                         }
                     }
                 }
-                if (!hasDriver && document.querySelectorAll('.amap-marker').length > 2) {
-                    hasDriver = true;
+                hasDriver = driverFoundWithin3km;
+
+                // [新增] 将最近司机距离输出到控制台（助手日志栏 / 缩放栏旁边）
+                if (minStraight !== 999) {
+                    const distMsg = `🚖 最优司机: ${minDriverName} - 直线: ${minStraight}km, 实际: ${minActual === 999 ? '--' : minActual}km`;
+                    const label = document.querySelector('#gj-shortest-distance');
+                    if (label) {
+                        label.textContent = distMsg;
+                    } else {
+                        const bottomCtrl = document.querySelector('.gj-bottom-controls');
+                        if (bottomCtrl) {
+                            const newLabel = document.createElement('span');
+                            newLabel.id = 'gj-shortest-distance';
+                            newLabel.style.fontSize = '12px';
+                            newLabel.style.fontWeight = 'bold';
+                            newLabel.style.color = '#F56C6C';
+                            newLabel.style.marginRight = 'auto';
+                            newLabel.textContent = distMsg;
+                            bottomCtrl.insertBefore(newLabel, bottomCtrl.firstChild);
+                        }
+                    }
                 }
             }
 
@@ -699,9 +763,17 @@
                     log('👀 检测到暂无司机数据，执行自动改派: [普通指派] + [20公里] + [实际距离]', 'warning');
                     window._gjDispatchState.lastMode = 'NoDriverSwitch';
                     setTimeout(() => {
-                        document.querySelectorAll('button, span, th, .el-button').forEach(btn => {
-                            if (btn.textContent.trim() === '实际距离') btn.click();
-                        });
+                        const allEls = document.querySelectorAll('button, span, div, label');
+                        for (let el of allEls) {
+                            if (el.innerText && el.innerText.trim() === '实际距离') {
+                                try { el.click(); } catch (e) { }
+                                const parentBtn = el.closest('button, .el-radio-button, .el-button');
+                                if (parentBtn) {
+                                    try { parentBtn.click(); } catch (e) { }
+                                }
+                                break;
+                            }
+                        }
                     }, 1000);
                 }
             } else {
@@ -1200,7 +1272,7 @@
             <div id="gj-scale-handle" class="gj-resize-handle" title="拖拽缩放"></div>
         `;
         document.body.appendChild(widget);
-        setupDrag(widget, 'posMain');
+        setupDrag(widget, state.posKey);
         setupScaleDrag(widget);
         return widget;
     };
@@ -1234,7 +1306,7 @@
             </div>
 
             <div class="gj-list-body" id="list-addr-body" style="height:${state.layout.height}px;"></div>
-            
+
             <div style="padding:5px 8px;
             font-size:11px; display:flex; align-items:center; gap:5px; border-top:1px dashed var(--gj-border);">
                 <span style="color:var(--gj-text-mute);white-space:nowrap;">列宽:</span>
@@ -1431,8 +1503,8 @@
                             100% { opacity: 1; background-color: rgba(255,0,0,0.8); }
                         }
                     </style>
-                    <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>🟢 空闲师傅:</span><b style="color:#00ff00; font-size:16px;">${tingDan}</b></div>
-                    <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>🔵 即将完成:</span><b style="color:#00ffff;">${daiXuan}</b></div>
+                    <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>🟢 空闲师傅:</span><b style="color:#ff4444; font-size:16px;">${tingDan}</b></div>
+                    <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>🔵 即将完成:</span><b style="color:#ff4444;">${daiXuan}</b></div>
                     <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>🔴 干活中:</span><b style="color:#ff4444;">${working}</b></div>
                     <div style="margin-top:8px; padding-top:8px; border-top:1px dashed #555; font-size:11px; color:#aaa; text-align:left;">
                         总上线(活跃): ${totalOnline} 人
@@ -1456,9 +1528,9 @@
                     <div style="display:flex; justify-content:center; align-items:baseline; margin-bottom:10px;">
                         <span class="gj-timer-text" style="color:${statusColor}">${paused ? '暂停' : state.countdown + '<span style="font-size:12px;margin-left:2px">s</span>'}</span>
                     </div>
-                
+
                     <button id="gj-btn-toggle" class="gj-btn ${btnClass}">${btnText}</button>
-                    
+
                   ${isOrderPage() ? `<button id="gj-btn-scrape" class="gj-btn" style="margin-top:8px; ${scrapeStyle}">${scrapeText}</button>` : ''}
 
                 <div class="gj-control-row">
@@ -1504,7 +1576,7 @@
                     <button id="gj-btn-theme-dark" class="gj-btn-icon" style="flex:1; background:#2c2c2c; color:#fff; border:1px solid #444; border-radius:4px; padding:4px;" title="切换为高德黑夜底图">🌙 黑夜</button>
                     <button id="gj-btn-theme-light" class="gj-btn-icon" style="flex:1; background:#f5f5f5; color:#333; border:1px solid #ddd; border-radius:4px; padding:4px;" title="切换为高德标准底图">☀️ 标准</button>
                 </div>
-                
+
                 <div style="display:flex;gap:10px;margin-bottom:10px;height:40px;position:relative;">
                     <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
                     <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
@@ -1518,10 +1590,10 @@
                      </label>
                 </div>
                 <div class="gj-divider">
-                    <span class="gj-label-sm">AI 距离 (${state.timeConfig.start}-${state.timeConfig.end} 2km)</span>
+                    <span class="gj-label-sm">AI 距离 (全天默认 3km)</span>
                 </div>
                 <div class="gj-grid-btns">${buttonsHtml}</div>
-                
+
                 <div class="gj-bottom-controls" style="justify-content: flex-end;">
                     <span style="font-size:10px;color:var(--gj-text-mute);">缩放: ${(state.uiScale * 100).toFixed(0)}%</span>
                 </div>
@@ -2036,7 +2108,7 @@
         document.addEventListener('mouseup', () => {
             if (isResizing) {
                 isResizing = false; document.body.style.cursor = 'default';
-                GM_setValue('uiScale', state.uiScale);
+                GM_setValue(state.scaleKey, state.uiScale);
             }
         });
     };
@@ -2122,8 +2194,8 @@
                 font-size: 14px; user-select: none;
                 filter: drop-shadow(0 4px 12px var(--gj-shadow));
                 color: var(--gj-text-main);
-                background: var(--gj-bg-main); 
-                border-radius: 12px; 
+                background: var(--gj-bg-main);
+                border-radius: 12px;
                 overflow: hidden;
             }
             #gj-widget-main { width: 250px;
@@ -2146,7 +2218,7 @@
             letter-spacing: -1px; }
             .gj-btn {
                 width: 100%;
-                border: none; padding: 10px; border-radius: 8px; 
+                border: none; padding: 10px; border-radius: 8px;
                 cursor: pointer; font-weight: 600; font-size: 14px;
                 transition: all 0.2s; box-shadow: 0 2px 6px rgba(0,0,0,0.1);
                 display:flex; justify-content:center; align-items:center; gap:5px;
@@ -2161,9 +2233,9 @@
             color: #67c23a; border:1px solid #e1f3d8; }
             .gj-dark .btn-resume { background: #1b4a24;
             color: #67c23a; border:1px solid #2b6339; }
-            .btn-preset { 
+            .btn-preset {
                 background: var(--gj-bg-sec);
-                border: 1px solid var(--gj-border); color: var(--gj-text-sec); 
+                border: 1px solid var(--gj-border); color: var(--gj-text-sec);
                 padding: 6px 0; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight:600;
             }
             .btn-preset:hover { background: var(--gj-hover); border-color: #b3d8ff; color: #409EFF;
@@ -2171,12 +2243,12 @@
             .btn-green { background: linear-gradient(135deg, #42e695 0%, #3bb2b8 100%);
             color: white; }
             .btn-blue { background: linear-gradient(135deg, #f56c6c 0%, #f78989 100%);
-            color: white; } 
+            color: white; }
             .gj-control-row { display: flex;
             justify-content: space-between; align-items: center; margin-top: 15px; padding: 0 2px;}
-            .gj-input-mini { 
+            .gj-input-mini {
                 width: 45px;
-                border: 1px solid var(--gj-border); border-radius: 6px; 
+                border: 1px solid var(--gj-border); border-radius: 6px;
                 text-align: center; padding: 4px; font-size:13px; outline:none;
                 background: var(--gj-bg-input); color: var(--gj-text-main); transition: all 0.2s;
             }
@@ -2200,10 +2272,10 @@
             grid-template-columns: repeat(5, 1fr); gap: 5px; }
             .gj-bottom-controls { display:flex;
             justify-content:space-between; align-items:center; margin-top:12px; padding-top:10px; border-top:1px dashed var(--gj-border); }
-            .btn-icon-circle { 
+            .btn-icon-circle {
                 width:22px;
-                height:22px; border-radius:50%; background:rgba(255,255,255,0.2); 
-                display:flex; align-items:center; justify-content:center; 
+                height:22px; border-radius:50%; background:rgba(255,255,255,0.2);
+                display:flex; align-items:center; justify-content:center;
                 cursor:pointer; color:#fff; font-size:12px; transition:0.2s;
             }
             .btn-icon-circle:hover { background:rgba(255,255,255,0.4); transform:scale(1.1);
@@ -2216,10 +2288,10 @@
             }
             .gj-tab.active-tab { opacity:1; font-weight:bold; border-bottom-color:#fff;
             }
-            .gj-toolbar { 
+            .gj-toolbar {
                 padding: 8px;
-                background: var(--gj-bg-sec); 
-                border-bottom: 1px solid var(--gj-border); 
+                background: var(--gj-bg-sec);
+                border-bottom: 1px solid var(--gj-border);
                 display: flex; align-items: center; gap: 5px;
             }
             #gj-search-input {
@@ -2236,7 +2308,7 @@
             line-height: 1; padding: 0 4px; transition: color 0.2s; }
             .btn-clear:hover { color: #F56C6C;
             }
-            .gj-list-body { 
+            .gj-list-body {
                 overflow-y: auto;
                 display: grid;
                 grid-template-columns: repeat(auto-fill, minmax(var(--gj-col-width, 80px), 1fr));
@@ -2249,11 +2321,11 @@
             }
             .gj-list-item {
                 background: var(--gj-bg-main);
-                padding: 6px 4px; 
+                padding: 6px 4px;
                 cursor: pointer; font-size: 13px; font-weight: 500;
                 color: var(--gj-text-main); display: flex; align-items: center; justify-content: center;
                 white-space: nowrap;
-                overflow: hidden; text-overflow: ellipsis; 
+                overflow: hidden; text-overflow: ellipsis;
             }
             .gj-list-item:hover { background: var(--gj-hover);
             color: var(--gj-hover-text); }
