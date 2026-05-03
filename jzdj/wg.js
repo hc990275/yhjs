@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       2.5.3
+// @version       2.6.0
 // @description   【三界面独立面板】订单管理默认收起，指派/司机界面默认展开，三界面独立存储互不干扰。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
@@ -79,8 +79,6 @@
         isScrapingEnabled: GM_getValue('scrapeEnabled', false),
         autoRemark: GM_getValue('autoRemark', false), // [新增] 自动备注拉群
         debugMode: GM_getValue('debugMode', false), // [持久化] 调试模式
-        driverApiDark: GM_getValue('driverApiDark', false), // [持久化] 司机页原生地图黑夜模式
-        driverCssDark: GM_getValue('driverCssDark', false), // [持久化] 司机页滤镜黑夜模式
         debugTimer: null,
 
         refreshInterval: 20,
@@ -613,7 +611,9 @@
             headers: { "Content-Type": "text/plain" },
             onload: function (response) {
                 if (response.status === 200) {
-                    log('✅ 上传成功！云端已更新为最新清洗版', 'success');
+                    const msg = '✅ 上传成功！云端已更新为最新清洗版。';
+                    log(msg, 'success');
+                    alert(msg);
                 } else {
                     alert('❌ 上传失败: ' + response.responseText);
                 }
@@ -683,22 +683,6 @@
                 hasDriver = false;
             } else {
                 let driverFoundWithin3km = false;
-                let minStraight = 999;
-                let minActual = 999;
-                let minDriverName = '未知';
-
-                // 辅助函数：从文本提取2~4个汉字的姓名
-                const extractName = (text) => {
-                    const matches = text.match(/[\u4e00-\u9fa5]{2,4}/g);
-                    if (matches) {
-                        for (let n of matches) {
-                            if (!["未服务", "听单中", "抢单中", "刚接单", "前往接驾", "等待中", "途中", "中途等待", "支付方式", "当前在线", "实时监控", "空闲师傅", "干活中", "即将完成", "自动备注", "直线", "实际", "距离", "推荐", "服务", "人员", "搜索", "半径", "默认", "全天"].includes(n)) {
-                                return n;
-                            }
-                        }
-                    }
-                    return '未知';
-                };
 
                 const items = document.querySelectorAll('div, li, tr');
                 for (let el of items) {
@@ -710,12 +694,6 @@
                     if (distMatch) {
                         const straight = parseFloat(distMatch[1]);
                         const actual = parseFloat(distMatch[2]);
-                        if (straight < minStraight || actual < minActual) {
-                            // 距离更近，更新距离和姓名
-                            if (straight < minStraight) minStraight = straight;
-                            if (actual < minActual) minActual = actual;
-                            minDriverName = extractName(t);
-                        }
                         if (straight < 3 || actual < 3) {
                             driverFoundWithin3km = true;
                         }
@@ -723,67 +701,14 @@
                         const singleMatch = t.match(/([\d.]+)\s*km/);
                         if (singleMatch) {
                             const dist = parseFloat(singleMatch[1]);
-                            if (dist < minStraight || dist < minActual) {
-                                if (dist < minStraight) minStraight = dist;
-                                if (dist < minActual) minActual = dist;
-                                minDriverName = extractName(t);
-                            }
                             if (dist < 3) driverFoundWithin3km = true;
                         }
                     }
                 }
                 hasDriver = driverFoundWithin3km;
-
-                // [新增] 将最近司机距离输出到控制台（助手日志栏 / 缩放栏旁边）
-                if (minStraight !== 999) {
-                    const distMsg = `🚖 最优司机: ${minDriverName} - 直线: ${minStraight}km, 实际: ${minActual === 999 ? '--' : minActual}km`;
-                    const label = document.querySelector('#gj-shortest-distance');
-                    if (label) {
-                        label.textContent = distMsg;
-                    } else {
-                        const bottomCtrl = document.querySelector('.gj-bottom-controls');
-                        if (bottomCtrl) {
-                            const newLabel = document.createElement('span');
-                            newLabel.id = 'gj-shortest-distance';
-                            newLabel.style.fontSize = '12px';
-                            newLabel.style.fontWeight = 'bold';
-                            newLabel.style.color = '#F56C6C';
-                            newLabel.style.marginRight = 'auto';
-                            newLabel.textContent = distMsg;
-                            bottomCtrl.insertBefore(newLabel, bottomCtrl.firstChild);
-                        }
-                    }
-                }
             }
 
-            if (!hasDriver) {
-                if (window._gjDispatchState.lastMode !== 'NoDriverSwitch') {
-                    setDispatchMode(['普通指派', '常规指派']);
-                    setTimeout(() => setSliderValue(20), 500);
-                    log('👀 检测到暂无司机数据，执行自动改派: [普通指派] + [20公里] + [实际距离]', 'warning');
-                    window._gjDispatchState.lastMode = 'NoDriverSwitch';
-                    setTimeout(() => {
-                        const allEls = document.querySelectorAll('button, span, div, label');
-                        for (let el of allEls) {
-                            if (el.innerText && el.innerText.trim() === '实际距离') {
-                                try { el.click(); } catch (e) { }
-                                const parentBtn = el.closest('button, .el-radio-button, .el-button');
-                                if (parentBtn) {
-                                    try { parentBtn.click(); } catch (e) { }
-                                }
-                                break;
-                            }
-                        }
-                    }, 1000);
-                }
-            } else {
-                if (window._gjDispatchState.lastMode !== 'HasDriver') {
-                    setDispatchMode(['AI智能', 'AI智能指派', '智能指派', 'AI指派']);
-                    setTimeout(() => setSliderValue(defaultTargetKm), 500);
-                    log(`✅ 检测到附近有司机，保持/恢复 [AI智能] 模式和默认距离 ${defaultTargetKm}km`, 'success');
-                    window._gjDispatchState.lastMode = 'HasDriver';
-                }
-            }
+            // [已删除] 根据司机距离自动切换模式的逻辑
         }
     };
 
@@ -914,24 +839,39 @@
 
     const scanDrivers = () => {
         let currentScan = {};
+        let soonFinishedDrivers = []; // [新增] 即将完成的司机列表
         const now = Date.now();
         const candidates = document.querySelectorAll('div, li, tr');
 
         for (let el of candidates) {
             let text = el.innerText || "";
             text = text.trim();
-            if (text.includes("刚接单") && !text.includes("刚接单 -") && !text.includes("当前在线") && text.length > 5 && text.length < 100) {
-                let phoneMatch = text.match(/1[3-9]\d{9}/);
+
+            // 提取逻辑复用
+            const extractDriverInfo = (txt) => {
+                let phoneMatch = txt.match(/1[3-9]\d{9}/);
                 let phone = phoneMatch ? phoneMatch[0] : "";
                 let name = "未知";
-                let nameMatches = text.match(/[\u4e00-\u9fa5]{2,4}/g);
+                let nameMatches = txt.match(/[\u4e00-\u9fa5]{2,4}/g);
                 if (nameMatches) {
                     for (let n of nameMatches) {
                         if (!excludeWords.includes(n)) { name = n; break; }
                     }
                 }
-                let key = name + phone;
-                if (key !== "未知") currentScan[key] = { name: name, phone: phone };
+                return { name, phone };
+            };
+
+            // 1. 扫描刚接单 (现有逻辑)
+            if (text.includes("刚接单") && !text.includes("刚接单 -") && !text.includes("当前在线") && text.length > 5 && text.length < 100) {
+                const info = extractDriverInfo(text);
+                let key = info.name + info.phone;
+                if (key !== "未知") currentScan[key] = info;
+            }
+
+            // 2. [新增] 扫描即将完成 (待选支付方式)
+            if (text.includes("待选支付方式") && !text.includes("待选支付方式 -") && text.length > 5 && text.length < 100) {
+                const info = extractDriverInfo(text);
+                if (info.name !== "未知") soonFinishedDrivers.push(info);
             }
         }
 
@@ -946,7 +886,8 @@
         for (let key in justAcceptedTracker) {
             if ((now - justAcceptedTracker[key].startTime) > 5000) overtimeDrivers.push(justAcceptedTracker[key]);
         }
-        return overtimeDrivers;
+
+        return { overtimeDrivers, soonFinishedDrivers };
     };
 
     const startDriverRefresh = () => {
@@ -1493,7 +1434,7 @@
                 const daiXuan = getVal("待选支付方式");
                 const working = getVal("抢单中") + getVal("刚接单") + getVal("前往接驾") + getVal("等待中") + getVal("途中") + getVal("中途等待");
                 const totalOnline = tingDan + working + daiXuan;
-                const overtimeDrivers = scanDrivers();
+                const { overtimeDrivers, soonFinishedDrivers } = scanDrivers();
 
                 html = `
                     <style>
@@ -1504,10 +1445,13 @@
                         }
                     </style>
                     <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>🟢 空闲师傅:</span><b style="color:#ff4444; font-size:16px;">${tingDan}</b></div>
-                    <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>🔵 即将完成:</span><b style="color:#ff4444;">${daiXuan}</b></div>
+                    <div style="display:flex; flex-direction:column; margin-bottom:5px;">
+                        <div style="display:flex; justify-content:space-between;"><span>🔵 即将完成:</span><b style="color:#ff4444;">${daiXuan}</b></div>
+                        ${soonFinishedDrivers.length > 0 ? `<div style="font-size:12px; color:#409EFF; text-align:left; padding-left:14px; margin-top:2px;">• ${soonFinishedDrivers.map(d => d.name).join(' ')}</div>` : ''}
+                    </div>
                     <div style="display:flex; justify-content:space-between; margin-bottom:5px;"><span>🔴 干活中:</span><b style="color:#ff4444;">${working}</b></div>
-                    <div style="margin-top:8px; padding-top:8px; border-top:1px dashed #555; font-size:11px; color:#aaa; text-align:left;">
-                        总上线(活跃): ${totalOnline} 人
+                    <div style="margin-top:8px; padding-top:8px; border-top:1px dashed #555; font-size:12px; color:#ff4444; text-align:left; font-weight:bold;">
+                        🔥 总上线(活跃): ${totalOnline} 人
                     </div>
                 `;
 
@@ -1572,11 +1516,6 @@
             ).join('');
 
             html = `
-                <div style="display:flex; justify-content:center; align-items:center; margin-bottom:10px; gap: 8px;">
-                    <button id="gj-btn-theme-dark" class="gj-btn-icon" style="flex:1; background:#2c2c2c; color:#fff; border:1px solid #444; border-radius:4px; padding:4px;" title="切换为高德黑夜底图">🌙 黑夜</button>
-                    <button id="gj-btn-theme-light" class="gj-btn-icon" style="flex:1; background:#f5f5f5; color:#333; border:1px solid #ddd; border-radius:4px; padding:4px;" title="切换为高德标准底图">☀️ 标准</button>
-                </div>
-
                 <div style="display:flex;gap:10px;margin-bottom:10px;height:40px;position:relative;">
                     <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
                     <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
@@ -1705,54 +1644,8 @@
         document.getElementById('btn-cloud-push')?.addEventListener('click', pushToCloud);
         document.getElementById('gj-file-import')?.addEventListener('change', handleFileImport);
 
-        // [新增] 订单指派页面主题按键代理：触发官方按钮的点击
+        // [已删除] 订单指派页面主题按键代理相关逻辑
         if (isDispatchPage()) {
-            const triggerAmapTheme = (themeName) => {
-                const targetText = themeName === 'dark' ? '黑夜' : '标准';
-                let found = false;
-
-                // 检索页面上不是我们自己添加的所有 button 与 span
-                document.querySelectorAll('button').forEach(btn => {
-                    // 忽略助手面板内的控件
-                    if (btn.id.includes('gj-btn') || btn.closest('#gj-widget-main')) return;
-
-                    if (btn.name === `amap://styles/${themeName}` || btn.innerText.includes(targetText)) {
-                        found = true;
-                        // 暴力触发法：原生点击 + 模拟鼠标事件 + 对其内部元素同样触发
-                        try {
-                            btn.click();
-
-                            const spans = btn.querySelectorAll('span');
-                            spans.forEach(span => span.click());
-
-                            const mousedown = new MouseEvent('mousedown', { view: window, bubbles: true, cancelable: true });
-                            const mouseup = new MouseEvent('mouseup', { view: window, bubbles: true, cancelable: true });
-                            const clickEv = new MouseEvent('click', { view: window, bubbles: true, cancelable: true });
-
-                            btn.dispatchEvent(mousedown);
-                            btn.dispatchEvent(mouseup);
-                            btn.dispatchEvent(clickEv);
-
-                            if (spans.length > 0) {
-                                spans[0].dispatchEvent(mousedown);
-                                spans[0].dispatchEvent(mouseup);
-                                spans[0].dispatchEvent(clickEv);
-                            }
-                        } catch (e) {
-                            // 静默处理
-                        }
-                    }
-                });
-
-                if (found) {
-                    log(`已强制触发官方的【${targetText}】主题切换`, 'success');
-                } else {
-                    log(`未在页面找到官方的主题切换按钮特征 (amap://styles/${themeName} 或文本匹配)`, 'warning');
-                }
-            };
-            document.getElementById('gj-btn-theme-dark')?.addEventListener('click', () => triggerAmapTheme('dark'));
-            document.getElementById('gj-btn-theme-light')?.addEventListener('click', () => triggerAmapTheme('normal'));
-
             document.querySelectorAll('.btn-preset').forEach(btn =>
                 btn.addEventListener('click', (e) => setSliderValue(parseInt(e.target.dataset.val)))
             );
@@ -1812,103 +1705,8 @@
             };
             setTimeout(watchDispatchPhone, 1500);
 
-            // [新增/移动] 自动备注切换绑定 (指派页面)
+            // [已删除] 自动备注切换绑定 (指派页面)
             const chkAutoRemark = document.getElementById('gj-chk-auto-remark');
-            if (chkAutoRemark) {
-                chkAutoRemark.addEventListener('change', (e) => {
-                    state.autoRemark = e.target.checked;
-                    GM_setValue('autoRemark', state.autoRemark);
-                });
-            }
-
-            const chkDebug = document.getElementById('gj-chk-debug');
-            if (chkDebug) {
-                chkDebug.addEventListener('change', (e) => {
-                    state.debugMode = e.target.checked;
-                    GM_setValue('debugMode', state.debugMode);
-                    updateUI(); // 重新渲染时显示或隐藏面板
-                });
-            }
-
-            // [新增] 动态追加变化记录的调试分析面板
-            if (state.debugMode) {
-                let lastDebugHash = ''; // 用于对比 HTML 变化
-                let recordCounter = 1;
-
-                const updateDebugPanel = () => {
-                    if (!state.debugMode) return;
-                    const panel = document.getElementById('gj-debug-panel') || document.getElementById('gj-debug-console');
-                    if (panel) {
-                        try {
-                            const possibleHeader = document.querySelector('.el-header') || document.querySelector('.header') || document.querySelector('.navbar') || document.querySelector('header');
-                            let debugHtml = '';
-                            let fallbacks = '';
-
-                            if (!possibleHeader) {
-                                // 备选查找整个页面的主题按钮
-                                fallbacks = Array.from(document.querySelectorAll('.el-switch, .el-radio-group, button')).map(el => {
-                                    if (el.innerText.includes('黑夜') || el.innerText.includes('主题') || el.innerText.includes('标准') || (el.name && el.name.includes('amap'))) {
-                                        return `\n疑似按钮: "${el.innerText.trim()}" | class: "${el.className}" | html: ${el.outerHTML}`;
-                                    }
-                                    return '';
-                                }).filter(Boolean).join('');
-                                if (!fallbacks) {
-                                    // 第三层暴力查找所有包含相关文本的任意元素
-                                    const textWalker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, null, false);
-                                    let node;
-                                    let texts = [];
-                                    while (node = textWalker.nextNode()) {
-                                        if (node.nodeValue.includes('黑夜') || node.nodeValue.includes('标准')) {
-                                            let parent = node.parentElement;
-                                            if (parent) {
-                                                texts.push(`\n文本节点: "${node.nodeValue.trim()}" | 父级class: "${parent.className}" | html: ${parent.outerHTML.substring(0, 150)}`);
-                                            }
-                                        }
-                                    }
-                                    fallbacks = texts.slice(0, 10).join('');
-                                }
-                            } else {
-                                const allTexts = Array.from(possibleHeader.querySelectorAll('div, span, i, button, li')).map(el => {
-                                    if (el.children.length === 0 && el.textContent.trim().length > 0 && el.textContent.trim().length < 10) {
-                                        return `\n文字: "${el.textContent.trim()}" | class: "${el.className.trim()}" | html: ${el.outerHTML}`;
-                                    }
-                                    if (el.name && el.name.includes('amap')) {
-                                        return `\n地图切换特征: name="${el.name}" | class: "${el.className}" | html: ${el.outerHTML}`;
-                                    }
-                                    return '';
-                                }).filter(Boolean).join('');
-
-                                debugHtml = `[Header节点特征]:${allTexts || '无独立文字'}`;
-                            }
-
-                            const currentHtmlStr = (debugHtml + fallbacks).replace(/</g, '&lt;').replace(/>/g, '&gt;').trim();
-
-                            // 判断当前抓取到的特征是否变动，有变动则向顶部继续追加（不覆盖原来内容）
-                            if (currentHtmlStr !== lastDebugHash && currentHtmlStr.length > 0) {
-                                lastDebugHash = currentHtmlStr;
-                                const timeStr = new Date().toLocaleTimeString();
-                                const newRecord = `==========\n⏰ [${recordCounter}] 时间: ${timeStr} 👇发生变动👇\n${currentHtmlStr}\n\n`;
-
-                                // 追加，保证最新记录在最上面
-                                if (recordCounter === 1) {
-                                    panel.innerHTML = `⚠️ 请在这个面板出现信息后，去【点击官方的主题按钮】，有任何内容追加出来，都可以全选复制发给我：\n\n` + newRecord;
-                                } else {
-                                    panel.innerHTML = newRecord + panel.innerHTML;
-                                }
-                                recordCounter++;
-                            } else if (recordCounter === 1 && currentHtmlStr.length === 0) {
-                                panel.innerHTML = `⚠️ 未找到任何特征信息，请确认页面是否已完全加载，或者您是否在带有地图和【官方黑夜】主题按钮的页面中。`;
-                            }
-                        } catch (e) {
-                            if (recordCounter === 1) panel.innerText = `提取错误: ${e.message}`;
-                        }
-                    }
-                };
-
-                if (window._gjDebugDispatchLoop) clearInterval(window._gjDebugDispatchLoop);
-                window._gjDebugDispatchLoop = setInterval(updateDebugPanel, 1500); // 提升频率快速捕捉变化
-                setTimeout(updateDebugPanel, 500);
-            }
             if (window._gjDispatchLoop) clearInterval(window._gjDispatchLoop);
             window._gjDispatchLoop = setInterval(() => {
                 if (!isDispatchPage()) return;
