@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       2.6.1
-// @description   2026.5.4
+// @version       2.6.0
+// @description   【三界面独立面板】订单管理默认收起，指派/司机界面默认展开，三界面独立存储互不干扰。
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -1645,6 +1645,9 @@
                     <button id="btn-quick-dispatch" class="gj-btn" style="background:#67c23a; color:#fff;">⚡ 一键派单</button>
                     <button id="btn-hall-dispatch" class="gj-btn" style="background:#e6a23c; color:#fff;">🏠 放入大厅</button>
                 </div>
+                <div style="margin-bottom:8px;">
+                    <button id="btn-clear-form" class="gj-btn" style="background:linear-gradient(135deg,#ff6b6b,#ee5a24);color:#fff;height:34px;font-size:13px;">🗑️ 一键清空地址&amp;电话</button>
+                </div>
                 <!-- [移动] 自动备注开关到指派页面 -->
                 <div class="gj-control-row" style="margin-top:6px; justify-content:center; gap:10px;">
                      <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;color:var(--gj-text-sec);" title="新客户自动备注拉群">
@@ -1657,9 +1660,6 @@
                 </div>
                 <div class="gj-grid-btns">${buttonsHtml}</div>
 
-                <div class="gj-bottom-controls" style="justify-content: flex-end;">
-                    <span style="font-size:10px;color:var(--gj-text-mute);">缩放: ${(state.uiScale * 100).toFixed(0)}%</span>
-                </div>
 
                 <div id="gj-inline-addr-container" style="margin-top: 10px; border-top: 1px dashed var(--gj-border); padding-top: 10px;">
                     <div class="gj-tabs" style="justify-content: center; margin-bottom: 8px;">
@@ -1800,6 +1800,36 @@
             });
             document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
                 processClipboard('phone');
+            });
+
+            document.getElementById('btn-clear-form')?.addEventListener('click', () => {
+                const fireEvents = (el) => {
+                    el.value = '';
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                    // 触发 Vue/ElementUI 的清空事件
+                    el.dispatchEvent(new Event('compositionend', { bubbles: true }));
+                };
+                let cleared = 0;
+                // 清空地址输入框
+                const addrInput = document.getElementById('tipinput');
+                if (addrInput) { fireEvents(addrInput); cleared++; }
+                // 备选：.input-place 里的所有文本输入
+                document.querySelectorAll('.input-place input.el-input__inner').forEach(el => {
+                    if (el.value) { fireEvents(el); cleared++; }
+                });
+                // 清空电话输入框
+                document.querySelectorAll('input').forEach(el => {
+                    if (el.closest('.gj-window')) return;
+                    const ph = (el.placeholder || '');
+                    if ((ph.includes('用户电话') || ph.includes('电话')) && el.value) {
+                        fireEvents(el); cleared++;
+                    }
+                });
+                // 清空结果提示框
+                const resultDiv = document.getElementById('gj-user-check-result');
+                if (resultDiv) resultDiv.style.display = 'none';
+                log(`🗑️ 已清空 ${cleared} 个输入框`, 'success');
             });
 
             document.getElementById('btn-quick-dispatch')?.addEventListener('click', () => {
