@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name          代驾调度系统助手
 // @namespace     http://tampermonkey.net/
-// @version       2.6.0
-// @description   【三界面独立面板】订单管理默认收起，指派/司机界面默认展开，三界面独立存储互不干扰。
+// @version       2.6.1
+// @description   2026.5.4
 // @author        郭
 // @match         https://admin.v3.jiuzhoudaijiaapi.cn/*
 // @connect       txt.abcai.online
@@ -14,6 +14,7 @@
 // @grant         GM_xmlhttpRequest
 // @grant         GM_info
 // @grant         GM_openInTab
+// @grant         GM_setClipboard
 // @grant         unsafeWindow
 // @require       https://cdn.jsdelivr.net/npm/pinyin-match/dist/main.js
 // ==/UserScript==
@@ -947,27 +948,156 @@
         return hasUpdate;
     };
 
+    const showPhoneAlert = (msg, originalText, badPhone) => {
+        let overlay = document.getElementById('gj-phone-alert');
+        if (overlay) overlay.remove();
+
+        overlay = document.createElement('div');
+        overlay.id = 'gj-phone-alert';
+        overlay.style.cssText = `
+            position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0,0,0,0.5); z-index: 999999;
+            display: flex; align-items: center; justify-content: center;
+        `;
+
+        const box = document.createElement('div');
+        box.style.cssText = `
+            background: #fff; border-radius: 8px; padding: 20px; width: 300px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2); text-align: center; color: #333;
+        `;
+
+        const displayPhone = badPhone || originalText;
+        box.innerHTML = `
+            <div style="font-size:18px; color:#F56C6C; font-weight:bold; margin-bottom:10px;">☎️ 电话错误</div>
+            <div style="font-size:14px; margin-bottom:10px;">${msg}</div>
+            <div style="font-size:13px; color:#F56C6C; font-weight:bold; margin-bottom:8px; background:#fff0f0; padding:8px; border-radius:4px; word-break:break-all; border:1px solid #ffccc7;">
+                ${displayPhone}
+            </div>
+            <div style="font-size:11px; color:#999; margin-bottom:15px;">点击下方按钮将复制上方号码</div>
+            <button id="gj-phone-alert-btn" style="
+                background: #409EFF; color: #fff; border: none; padding: 8px 20px;
+                border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: bold;
+                width: 100%; transition: background 0.2s;
+            ">确认复制信息并关闭</button>
+        `;
+
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+
+        document.getElementById('gj-phone-alert-btn').addEventListener('click', () => {
+            const copyText = msg;
+            try {
+                if (typeof GM_setClipboard !== 'undefined') {
+                    GM_setClipboard(copyText, 'text');
+                } else {
+                    const textArea = document.createElement("textarea");
+                    textArea.value = copyText;
+                    textArea.style.position = "fixed";
+                    textArea.style.left = "-999999px";
+                    textArea.style.top = "-999999px";
+                    document.body.appendChild(textArea);
+                    textArea.focus();
+                    textArea.select();
+                    document.execCommand('copy');
+                    textArea.remove();
+                }
+            } catch (err) {
+                console.error('Copy failed', err);
+            }
+            overlay.remove();
+        });
+    };
+
     const processClipboard = async (fillTarget = null) => {
-        log(`[流程开始] 准备从剪贴板填充: ${fillTarget === 'address' ? '地址' : '电话'}`, 'info');
+        log(`[流程开始] 准备从剪贴板填充: ${fillTarget === 'address' ? '地址' : fillTarget === 'phone' ? '电话' : '自动'}`, 'info');
         reloadDB();
 
+        let clipText = '';
         try {
-            const text = await navigator.clipboard.readText();
-            log(`📋 剪贴板读取成功: "${text.substring(0, 50)}${text.length > 50 ? '...' : ''}"`, 'success');
-
-            const hasUpdate = parseTextToDB(text);
-            updateListsUI();
-            log(`📊 [本地库统计] 📍地址: ${state.db.addrs.length} | 📞电话: ${state.db.phones.length}`, 'info');
-
+            clipText = await navigator.clipboard.readText();
+            log(`📋 剪贴板读取成功: "${clipText.substring(0, 50)}${clipText.length > 50 ? '...' : ''}"`, 'success');
         } catch (e) {
-            log(`❌ 剪贴板读取失败 (可能是权限问题): ${e.message}`, 'error');
-            log('🔄 将尝试使用本地库中已有的最新数据进行填充...', 'info');
+            log(`❌ 剪贴板读取失败: ${e.message}`, 'error');
         }
 
-        if (fillTarget === 'address' && state.db.addrs && state.db.addrs.length > 0) {
-            fillInput('address', state.db.addrs[0]);
-        } else if (fillTarget === 'phone' && state.db.phones && state.db.phones.length > 0) {
-            fillInput('phone', state.db.phones[0]);
+        // ── 填入地址 ──────────────────────────────────────────────
+        if (fillTarget === 'address') {
+            // 判断剪贴板是否包含有效地址：含中文字符且不是纯数字串
+            const hasChinese = /[\u4e00-\u9fa5]/.test(clipText);
+            const isOnlyDigits = /^\d+$/.test(clipText.trim());
+            // 如果剪贴板有含中文的地址信息，就解析入库再填入
+            if (clipText && hasChinese && !isOnlyDigits) {
+                parseTextToDB(clipText);
+                updateListsUI();
+            }
+            // 填入本地库最新地址（第一条 = 最新录入）
+            if (state.db.addrs && state.db.addrs.length > 0) {
+                fillInput('address', state.db.addrs[0]);
+            } else {
+                log('📍 本地地址库为空，无法自动填入', 'info');
+            }
+            return;
+        }
+
+        // ── 填入电话 ──────────────────────────────────────────────
+        if (fillTarget === 'phone') {
+            // 第一优先：原始文本中直接有11位连续手机号
+            let validMatch = clipText.match(/(?:^|[^\d])(1\d{10})(?:$|[^\d])/);
+            let phoneToFill = validMatch ? validMatch[1] : null;
+
+            // 第二优先：去除所有空格后检测（支持 "135 6366 4166" 等带空格格式）
+            if (!phoneToFill) {
+                const noSpaceText = clipText.replace(/\s+/g, '');
+                const noSpaceMatch = noSpaceText.match(/(?:^|[^\d])(1\d{10})(?:$|[^\d])/);
+                if (noSpaceMatch) {
+                    phoneToFill = noSpaceMatch[1];
+                }
+            }
+
+            if (phoneToFill) {
+                // 有合法11位手机号，直接填入（不需要再解析入库）
+                fillInput('phone', phoneToFill);
+                // 顺带把干净号码存入本地库
+                parseTextToDB(phoneToFill);
+                updateListsUI();
+            } else {
+                // 没有合法手机号——检查是否有"接近手机号"的数字串（去除空格后判断），提示错误
+                const cleanDigits = clipText.replace(/\D/g, '');
+                const possiblePhones = clipText.match(/\b1[\d ]{9,14}\b/g) || [];
+                let invalidNum = '';
+
+                // 优先取去空格后的数字串（如 "133 3333 3333" → "13333333333" 但位数仍不对时）
+                if (cleanDigits.startsWith('1') && cleanDigits.length >= 7 && cleanDigits.length <= 15) {
+                    invalidNum = cleanDigits;
+                } else if (possiblePhones.length > 0) {
+                    invalidNum = possiblePhones[0].replace(/\s+/g, '');
+                } else if (cleanDigits.length >= 7 && cleanDigits.length <= 15 && cleanDigits.length / (clipText.length || 1) > 0.4) {
+                    invalidNum = cleanDigits;
+                }
+
+                if (invalidNum) {
+                    const diff = invalidNum.length - 11;
+                    const diffMsg = diff > 0 ? `多${diff}位` : `少${Math.abs(diff)}位`;
+                    showPhoneAlert(`您的电话号码${diffMsg}，请您核查电话信息。`, clipText, invalidNum);
+                    return;
+                }
+
+                // 剪贴板无任何数字电话信息 → 回退到本地库最新电话
+                if (state.db.phones && state.db.phones.length > 0) {
+                    log('📞 剪贴板无有效电话，使用本地库最新电话', 'info');
+                    fillInput('phone', state.db.phones[0]);
+                } else {
+                    log('📞 本地电话库为空，无法自动填入', 'info');
+                }
+            }
+            return;
+        }
+
+        // ── 无指定目标（自动/后台调用）：仅解析入库，不触发填入也不弹窗 ──
+        if (clipText) {
+            parseTextToDB(clipText);
+            updateListsUI();
+            log(`📊 [本地库统计] 📍地址: ${state.db.addrs.length} | 📞电话: ${state.db.phones.length}`, 'info');
         }
     };
 
@@ -1206,15 +1336,19 @@
         applyPos(widget, state.posMain);
         widget.style.transform = `scale(${state.uiScale})`;
         widget.style.transformOrigin = 'top left';
+        // 恢复上次保存的主窗口宽度
+        const mainSizeKey = state.posKey + '_size';
+        const savedMainSize = safeParse(mainSizeKey, 'null');
+        if (savedMainSize && savedMainSize.w) widget.style.width = savedMainSize.w + 'px';
 
         widget.innerHTML = `
             <div class="gj-header"></div>
             <div id="gj-main-content" style="display: ${getCollapsed() ? 'none' : 'block'}"></div>
-            <div id="gj-scale-handle" class="gj-resize-handle" title="拖拽缩放"></div>
+            <div id="gj-scale-handle" class="gj-resize-handle" title="拖拽调整宽高"></div>
         `;
         document.body.appendChild(widget);
         setupDrag(widget, state.posKey);
-        setupScaleDrag(widget);
+        setupScaleDrag(widget, state.posKey);
         return widget;
     };
 
@@ -1340,8 +1474,8 @@
     };
 
     const updateUI = () => {
-        let mainWidget = document.getElementById('gj-widget-main');
-        if (!mainWidget) mainWidget = createMainWidget();
+        // [修复] 始终重建 widget，确保 setupDrag 闭包中的 posKey 与当前页面一致
+        let mainWidget = createMainWidget();
 
         const header = mainWidget.querySelector('.gj-header');
         if (header) {
@@ -1384,31 +1518,15 @@
             bindHeaderEvents(mainWidget);
         }
 
-        let addrWidget = document.getElementById('gj-widget-addr');
-        if (isDispatchPage()) {
-            if (!addrWidget) {
-                addrWidget = createAddrWidget();
-                updateListsUI();
-                applyLayout();
-            } else {
-                addrWidget.querySelectorAll('.gj-tab').forEach(el => {
-                    if (el.dataset.tab === state.viewTab) el.classList.add('active-tab');
-                    else el.classList.remove('active-tab');
-                });
-            }
-        } else if (!isDispatchPage() && addrWidget) {
-            addrWidget.remove();
-        }
-
         const cls = state.theme === 'dark' ? 'gj-dark gj-window' : 'gj-light gj-window';
         if (mainWidget) mainWidget.className = cls + (isDriverPage() ? ' gj-driver-style' : '');
-        if (addrWidget) addrWidget.className = cls;
 
         const mainContent = document.getElementById('gj-main-content');
         const scaleHandle = document.getElementById('gj-scale-handle');
         if (mainContent) mainContent.style.display = getCollapsed() ? 'none' : 'block';
         if (scaleHandle) scaleHandle.style.display = getCollapsed() ? 'none' : 'block';
         if (mainContent) renderMainContent(mainContent);
+        if (isDispatchPage()) updateListsUI();
         updateStatusText();
     };
 
@@ -1515,11 +1633,17 @@
                 `<button class="btn-preset" data-val="${num}">${num}</button>`
             ).join('');
 
+            const activeTabClass = (tab) => state.viewTab === tab ? 'active-tab' : '';
+
             html = `
                 <div style="display:flex;gap:10px;margin-bottom:10px;height:40px;position:relative;">
                     <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
                     <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
                     <div id="gj-user-check-result" style="display:none; position:absolute; left:-240px; top: 0px; width: 220px; padding: 10px; font-size:13px; text-align:center; border-radius:8px; box-shadow:0 4px 12px var(--gj-shadow); z-index:99999; background:#fff;"></div>
+                </div>
+                <div style="display:flex;gap:10px;margin-bottom:10px;height:40px;">
+                    <button id="btn-quick-dispatch" class="gj-btn" style="background:#67c23a; color:#fff;">⚡ 一键派单</button>
+                    <button id="btn-hall-dispatch" class="gj-btn" style="background:#e6a23c; color:#fff;">🏠 放入大厅</button>
                 </div>
                 <!-- [移动] 自动备注开关到指派页面 -->
                 <div class="gj-control-row" style="margin-top:6px; justify-content:center; gap:10px;">
@@ -1536,6 +1660,22 @@
                 <div class="gj-bottom-controls" style="justify-content: flex-end;">
                     <span style="font-size:10px;color:var(--gj-text-mute);">缩放: ${(state.uiScale * 100).toFixed(0)}%</span>
                 </div>
+
+                <div id="gj-inline-addr-container" style="margin-top: 10px; border-top: 1px dashed var(--gj-border); padding-top: 10px;">
+                    <div class="gj-tabs" style="justify-content: center; margin-bottom: 8px;">
+                        <span class="gj-tab inline-tab ${activeTabClass('address')}" data-tab="address" style="font-size:11px;">📍 地址库 <b style="color:#f56c6c;">(${state.db.addrs ? state.db.addrs.length : 0})</b></span>
+                        <span class="gj-tab inline-tab ${activeTabClass('phone')}" data-tab="phone" style="font-size:11px;">📞 电话库 <b style="color:#f56c6c;">(${state.db.phones ? state.db.phones.length : 0})</b></span>
+                    </div>
+                    <div class="gj-toolbar" style="margin-bottom: 5px; border-radius: 4px;">
+                        <input type="text" id="gj-search-input" placeholder="输入搜索..." value="${state.searchText}">
+                        <span id="gj-btn-clear" class="btn-clear" title="清空搜索" style="display:${state.searchText ? 'block' : 'none'}">✕</span>
+                    </div>
+                    <div class="gj-list-body" id="list-addr-body" style="height: 180px; resize: vertical; overflow-y: auto; --gj-col-width:${state.colWidth}px;"></div>
+                    <div style="padding:5px 8px; font-size:11px; display:flex; align-items:center; gap:5px; margin-top: 5px;">
+                        <span style="color:var(--gj-text-mute);white-space:nowrap;">列宽:</span>
+                        <input type="range" id="gj-col-slider" min="50" max="250" value="${state.colWidth}" style="flex:1;" title="拖动改变显示字数">
+                    </div>
+                </div>
             `;
         } else {
             html = `<div style="padding:20px;color:var(--gj-text-mute);text-align:center;font-size:13px;">💤 非工作区域</div>`;
@@ -1548,9 +1688,14 @@
         const addrBody = document.getElementById('list-addr-body');
         if (!addrBody) return;
 
+        const tabAddrs = document.querySelector('.inline-tab[data-tab="address"]');
+        if (tabAddrs) tabAddrs.innerHTML = `📍 地址库 <b style="color:#f56c6c;">(${state.db.addrs ? state.db.addrs.length : 0})</b>`;
+        const tabPhones = document.querySelector('.inline-tab[data-tab="phone"]');
+        if (tabPhones) tabPhones.innerHTML = `📞 电话库 <b style="color:#f56c6c;">(${state.db.phones ? state.db.phones.length : 0})</b>`;
+
         // --- 性能优化：只有在搜索时才渲染列表 ---
         if (!state.searchText) {
-            addrBody.innerHTML = `<div class="gj-empty">请尝试输入汉字或拼音进行搜索<br>(当前库地址: ${state.db.addrs.length} / 电话: ${state.db.phones.length})</div>`;
+            addrBody.innerHTML = `<div class="gj-empty">请尝试输入汉字或拼音进行搜索</div>`;
             return;
         }
 
@@ -1656,6 +1801,77 @@
             document.getElementById('btn-auto-phone')?.addEventListener('click', () => {
                 processClipboard('phone');
             });
+
+            document.getElementById('btn-quick-dispatch')?.addEventListener('click', () => {
+                const createBtn = Array.from(document.querySelectorAll('button')).find(btn => btn.innerText.includes('创建订单'));
+                if (createBtn) {
+                    createBtn.click();
+                    log('🚀 一键派单：已点击创建订单', 'success');
+                } else {
+                    log('❌ 找不到创建订单按钮', 'error');
+                }
+            });
+
+            document.getElementById('btn-hall-dispatch')?.addEventListener('click', () => {
+                const modeLabels = Array.from(document.querySelectorAll('label.el-radio-button'));
+                const hallBtn = modeLabels.find(label => label.innerText.includes('抢单大厅'));
+                if (hallBtn) hallBtn.click();
+
+                setTimeout(() => {
+                    const createBtn = Array.from(document.querySelectorAll('button')).find(btn => btn.innerText.includes('创建订单'));
+                    if (createBtn) createBtn.click();
+
+                    setTimeout(() => {
+                        const aiBtn = modeLabels.find(label => label.innerText.includes('AI智能'));
+                        if (aiBtn) aiBtn.click();
+                        log('🏠 放入大厅完成并切回AI智能', 'success');
+                    }, 500);
+                }, 300);
+            });
+
+            document.querySelectorAll('.inline-tab').forEach(tab => {
+                tab.addEventListener('click', (e) => {
+                    state.viewTab = e.target.dataset.tab;
+                    GM_setValue('viewTab', state.viewTab);
+
+                    document.querySelectorAll('.inline-tab').forEach(el => {
+                        if (el.dataset.tab === state.viewTab) el.classList.add('active-tab');
+                        else el.classList.remove('active-tab');
+                    });
+                    updateListsUI();
+                });
+            });
+
+            const searchInput = document.getElementById('gj-search-input');
+            const clearBtn = document.getElementById('gj-btn-clear');
+            if (searchInput) {
+                searchInput.addEventListener('input', (e) => {
+                    state.searchText = e.target.value;
+                    if (clearBtn) clearBtn.style.display = state.searchText ? 'block' : 'none';
+                    updateListsUI();
+                });
+            }
+            if (clearBtn) {
+                clearBtn.addEventListener('click', () => {
+                    state.searchText = '';
+                    if (searchInput) searchInput.value = '';
+                    clearBtn.style.display = 'none';
+                    updateListsUI();
+                    if (searchInput) searchInput.focus();
+                });
+            }
+
+            const colSlider = document.getElementById('gj-col-slider');
+            if (colSlider) {
+                colSlider.addEventListener('input', (e) => {
+                    state.colWidth = parseInt(e.target.value);
+                    const listBody = document.getElementById('list-addr-body');
+                    if (listBody) listBody.style.setProperty('--gj-col-width', state.colWidth + 'px');
+                });
+                colSlider.addEventListener('change', (e) => {
+                    GM_setValue('addrColWidth', state.colWidth);
+                });
+            }
 
             // 回收旧的 observer
             if (window._gjDispatchObserver) {
@@ -1880,33 +2096,35 @@
         });
     };
 
-    const setupScaleDrag = (el) => {
+    const setupScaleDrag = (el, posKey) => {
+        // 左右拖变宽、上下拖变高；用独立 key 保存，不污染 state.layout
         const handle = el.querySelector('#gj-scale-handle');
         if (!handle) return;
-        let isResizing = false, startY, startScale;
+        const sizeKey = (posKey || state.posKey) + '_size';
+        let isResizing = false, startX, startY, startW, startH;
         handle.addEventListener('mousedown', e => {
             e.stopPropagation(); e.preventDefault();
-            isResizing = true; startY = e.clientY; startScale = state.uiScale;
+            isResizing = true;
+            startX = e.clientX; startY = e.clientY;
+            startW = el.offsetWidth;
+            startH = el.offsetHeight;
             document.body.style.cursor = 'nwse-resize';
         });
         document.addEventListener('mousemove', e => {
             if (!isResizing) return;
-            const dy = e.clientY - startY;
-            let newScale = startScale + (dy * 0.005);
-            if (newScale < 0.5) newScale = 0.5;
-            if (newScale > 3.0) newScale = 3.0;
-            state.uiScale = newScale;
-            const mainW = document.getElementById('gj-widget-main');
-            const addrW = document.getElementById('gj-widget-addr');
-            if (mainW) mainW.style.transform = `scale(${newScale})`;
-            if (addrW) addrW.style.transform = `scale(${newScale})`;
-            const label = document.querySelector('.gj-bottom-controls span');
-            if (label) label.textContent = `缩放: ${(newScale * 100).toFixed(0)}%`;
+            const dx = (e.clientX - startX) / state.uiScale;
+            const dy = (e.clientY - startY) / state.uiScale;
+            let newW = startW + dx;
+            let newH = startH + dy;
+            if (newW < 150) newW = 150;
+            if (newH < 80) newH = 80;
+            el.style.width = newW + 'px';
+            el.style.minHeight = newH + 'px';
         });
         document.addEventListener('mouseup', () => {
             if (isResizing) {
                 isResizing = false; document.body.style.cursor = 'default';
-                GM_setValue(state.scaleKey, state.uiScale);
+                GM_setValue(sizeKey, JSON.stringify({ w: Math.round(el.offsetWidth), h: Math.round(el.offsetHeight) }));
             }
         });
     };
