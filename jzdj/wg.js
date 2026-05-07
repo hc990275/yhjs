@@ -1521,10 +1521,38 @@
         const cls = state.theme === 'dark' ? 'gj-dark gj-window' : 'gj-light gj-window';
         if (mainWidget) mainWidget.className = cls + (isDriverPage() ? ' gj-driver-style' : '');
 
+        if (isDispatchPage() && !getCollapsed()) {
+            mainWidget.style.background = 'transparent';
+            mainWidget.style.pointerEvents = 'none';
+            if (header) {
+                header.style.pointerEvents = 'auto';
+                header.style.borderRadius = '12px 12px 0 0';
+            }
+        } else {
+            mainWidget.style.background = '';
+            mainWidget.style.pointerEvents = '';
+            if (header) {
+                header.style.pointerEvents = '';
+                header.style.borderRadius = '';
+            }
+        }
+
         const mainContent = document.getElementById('gj-main-content');
         const scaleHandle = document.getElementById('gj-scale-handle');
-        if (mainContent) mainContent.style.display = getCollapsed() ? 'none' : 'block';
-        if (scaleHandle) scaleHandle.style.display = getCollapsed() ? 'none' : 'block';
+        if (mainContent) {
+            mainContent.style.display = getCollapsed() ? 'none' : 'block';
+            if (isDispatchPage() && !getCollapsed()) {
+                mainContent.style.padding = '0';
+                mainContent.style.background = 'transparent';
+            } else {
+                mainContent.style.padding = '';
+                mainContent.style.background = '';
+            }
+        }
+        if (scaleHandle) {
+            scaleHandle.style.display = getCollapsed() ? 'none' : 'block';
+            scaleHandle.style.pointerEvents = 'auto';
+        }
         if (mainContent) renderMainContent(mainContent);
         if (isDispatchPage()) updateListsUI();
         updateStatusText();
@@ -1636,36 +1664,36 @@
             const activeTabClass = (tab) => state.viewTab === tab ? 'active-tab' : '';
 
             html = `
-                <div style="display:flex;gap:10px;margin-bottom:10px;height:40px;position:relative;">
-                    <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
-                    <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
-                    <div id="gj-user-check-result" style="display:none; position:absolute; left:-240px; top: 0px; width: 220px; padding: 10px; font-size:13px; text-align:center; border-radius:8px; box-shadow:0 4px 12px var(--gj-shadow); z-index:99999; background:#fff;"></div>
-                </div>
-                <div style="display:flex;gap:10px;margin-bottom:10px;height:40px;">
-                    <button id="btn-quick-dispatch" class="gj-btn" style="background:#67c23a; color:#fff;">⚡ 一键派单</button>
-                    <button id="btn-hall-dispatch" class="gj-btn" style="background:#e6a23c; color:#fff;">🏠 放入大厅</button>
-                </div>
-                <div style="margin-bottom:8px;">
-                    <button id="btn-clear-form" class="gj-btn" style="background:linear-gradient(135deg,#ff6b6b,#ee5a24);color:#fff;height:34px;font-size:13px;">🗑️ 一键清空地址&amp;电话</button>
-                </div>
-                <!-- [移动] 自动备注开关到指派页面 -->
-                <div class="gj-control-row" style="margin-top:6px; justify-content:center; gap:10px;">
-                     <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;color:var(--gj-text-sec);" title="新客户自动备注拉群">
-                        <input type="checkbox" id="gj-chk-auto-remark" ${state.autoRemark ? 'checked' : ''} style="margin-right:4px;">
-                        📝 自动备注
-                     </label>
-                </div>
-                <div class="gj-divider">
-                    <span class="gj-label-sm">AI 距离 (全天默认 3km)</span>
-                </div>
-                <div class="gj-grid-btns">${buttonsHtml}</div>
-
-
-                <div id="gj-inline-addr-container" style="margin-top: 10px; border-top: 1px dashed var(--gj-border); padding-top: 10px;">
-                    <div class="gj-tabs" style="justify-content: center; margin-bottom: 8px;">
-                        <span class="gj-tab inline-tab ${activeTabClass('address')}" data-tab="address" style="font-size:11px;">📍 地址库 <b style="color:#f56c6c;">(${state.db.addrs ? state.db.addrs.length : 0})</b></span>
-                        <span class="gj-tab inline-tab ${activeTabClass('phone')}" data-tab="phone" style="font-size:11px;">📞 电话库 <b style="color:#f56c6c;">(${state.db.phones ? state.db.phones.length : 0})</b></span>
+                <div style="background: var(--gj-bg-main); padding: 0 16px 16px 16px; border-radius: 0 0 12px 12px; pointer-events: auto;">
+                    <div style="display:flex;gap:10px;margin-bottom:10px;height:40px;position:relative;">
+                        <button id="btn-auto-addr" class="gj-btn btn-green">📌 填最新地址</button>
+                        <button id="btn-auto-phone" class="gj-btn btn-blue">📞 填最新电话</button>
+                        <div id="gj-user-check-result" style="display:none; position:absolute; left:-240px; top: 0px; width: 220px; padding: 10px; font-size:13px; text-align:center; border-radius:8px; box-shadow:0 4px 12px var(--gj-shadow); z-index:99999; background:#fff;"></div>
                     </div>
+                    <div style="display:flex;gap:10px;margin-bottom:10px;height:40px;">
+                        <button id="btn-quick-dispatch" class="gj-btn" style="background:#67c23a; color:#fff;">⚡ 一键派单</button>
+                        <button id="btn-hall-dispatch" class="gj-btn" style="background:#e6a23c; color:#fff;">🏠 放入大厅</button>
+                    </div>
+                    <div style="margin-bottom:8px;">
+                        <button id="btn-clear-form" class="gj-btn" style="background:linear-gradient(135deg,#ff6b6b,#ee5a24);color:#fff;height:34px;font-size:13px;">🗑️ 一键清空地址&amp;电话</button>
+                    </div>
+                    <!-- [移动] 自动备注开关到指派页面 -->
+                    <div class="gj-control-row" style="margin-top:6px; justify-content:center; gap:10px;">
+                         <label style="font-size:12px;display:flex;align-items:center;cursor:pointer;color:var(--gj-text-sec);" title="新客户自动备注拉群">
+                            <input type="checkbox" id="gj-chk-auto-remark" ${state.autoRemark ? 'checked' : ''} style="margin-right:4px;">
+                            📝 自动备注
+                         </label>
+                    </div>
+                    <div class="gj-divider">
+                        <span class="gj-label-sm">AI 距离 (全天默认 3km)</span>
+                    </div>
+                    <div class="gj-grid-btns">${buttonsHtml}</div>
+                </div>
+
+                <!-- 镂空透明区域 -->
+                <div style="height: 65px; background: transparent; pointer-events: none;"></div>
+
+                <div id="gj-inline-addr-container" style="background: var(--gj-bg-main); padding: 16px; border-radius: 12px; pointer-events: auto;">
                     <div class="gj-toolbar" style="margin-bottom: 5px; border-radius: 4px;">
                         <input type="text" id="gj-search-input" placeholder="输入搜索..." value="${state.searchText}">
                         <span id="gj-btn-clear" class="btn-clear" title="清空搜索" style="display:${state.searchText ? 'block' : 'none'}">✕</span>
@@ -1688,14 +1716,15 @@
         const addrBody = document.getElementById('list-addr-body');
         if (!addrBody) return;
 
-        const tabAddrs = document.querySelector('.inline-tab[data-tab="address"]');
-        if (tabAddrs) tabAddrs.innerHTML = `📍 地址库 <b style="color:#f56c6c;">(${state.db.addrs ? state.db.addrs.length : 0})</b>`;
-        const tabPhones = document.querySelector('.inline-tab[data-tab="phone"]');
-        if (tabPhones) tabPhones.innerHTML = `📞 电话库 <b style="color:#f56c6c;">(${state.db.phones ? state.db.phones.length : 0})</b>`;
-
         // --- 性能优化：只有在搜索时才渲染列表 ---
         if (!state.searchText) {
-            addrBody.innerHTML = `<div class="gj-empty">请尝试输入汉字或拼音进行搜索</div>`;
+            addrBody.innerHTML = `
+                <div style="display:flex; justify-content:center; gap:20px; margin-bottom: 20px; padding-bottom: 15px; border-bottom: 1px dashed var(--gj-border);">
+                    <span style="font-size:13px; font-weight:bold; color:var(--gj-text-regular);">📍 地址库 <b style="color:#f56c6c;">(${state.db.addrs ? state.db.addrs.length : 0})</b></span>
+                    <span style="font-size:13px; font-weight:bold; color:var(--gj-text-regular);">📞 电话库 <b style="color:#f56c6c;">(${state.db.phones ? state.db.phones.length : 0})</b></span>
+                </div>
+                <div class="gj-empty">请尝试输入汉字或拼音进行搜索</div>
+            `;
             return;
         }
 
@@ -1832,11 +1861,22 @@
                 log(`🗑️ 已清空 ${cleared} 个输入框`, 'success');
             });
 
+            const searchInput = document.getElementById('gj-search-input');
+            const clearBtn = document.getElementById('gj-btn-clear');
+
+            const clearSearch = () => {
+                state.searchText = '';
+                if (searchInput) searchInput.value = '';
+                if (clearBtn) clearBtn.style.display = 'none';
+                updateListsUI();
+            };
+
             document.getElementById('btn-quick-dispatch')?.addEventListener('click', () => {
                 const createBtn = Array.from(document.querySelectorAll('button')).find(btn => btn.innerText.includes('创建订单'));
                 if (createBtn) {
                     createBtn.click();
                     log('🚀 一键派单：已点击创建订单', 'success');
+                    clearSearch(); // [新增] 派单后自动清空搜索
                 } else {
                     log('❌ 找不到创建订单按钮', 'error');
                 }
@@ -1849,7 +1889,10 @@
 
                 setTimeout(() => {
                     const createBtn = Array.from(document.querySelectorAll('button')).find(btn => btn.innerText.includes('创建订单'));
-                    if (createBtn) createBtn.click();
+                    if (createBtn) {
+                        createBtn.click();
+                        clearSearch(); // [新增] 派单后自动清空搜索
+                    }
 
                     setTimeout(() => {
                         const aiBtn = modeLabels.find(label => label.innerText.includes('AI智能'));
@@ -1859,21 +1902,6 @@
                 }, 300);
             });
 
-            document.querySelectorAll('.inline-tab').forEach(tab => {
-                tab.addEventListener('click', (e) => {
-                    state.viewTab = e.target.dataset.tab;
-                    GM_setValue('viewTab', state.viewTab);
-
-                    document.querySelectorAll('.inline-tab').forEach(el => {
-                        if (el.dataset.tab === state.viewTab) el.classList.add('active-tab');
-                        else el.classList.remove('active-tab');
-                    });
-                    updateListsUI();
-                });
-            });
-
-            const searchInput = document.getElementById('gj-search-input');
-            const clearBtn = document.getElementById('gj-btn-clear');
             if (searchInput) {
                 searchInput.addEventListener('input', (e) => {
                     state.searchText = e.target.value;
@@ -1883,10 +1911,7 @@
             }
             if (clearBtn) {
                 clearBtn.addEventListener('click', () => {
-                    state.searchText = '';
-                    if (searchInput) searchInput.value = '';
-                    clearBtn.style.display = 'none';
-                    updateListsUI();
+                    clearSearch();
                     if (searchInput) searchInput.focus();
                 });
             }
