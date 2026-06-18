@@ -92,8 +92,19 @@ fi
 echo -e "\033[33m[进度] 正在测试 Nginx 配置...\033[0m"
 if nginx -t; then
     systemctl restart nginx
-    echo -e "\033[32m[成功] Nginx 已成功重启，Minecraft 反向代理已生效！\033[0m"
-    echo -e "\033[36m[提示] 反代服务器当前监听 25565(TCP) 和 19132(UDP)，流量将直达 $TARGET_IP。\033[0m"
+    
+    # 获取外网 IP
+    echo -e "\033[33m[进度] 正在获取服务器外网 IP...\033[0m"
+    PUBLIC_IP=$(curl -s --max-time 3 ipv4.icanhazip.com || curl -s --max-time 3 ifconfig.me || echo "你的服务器公网IP")
+    
+    echo -e "\n\033[32m========================================================\033[0m"
+    echo -e "\033[1;32m🎉 部署成功！Nginx 反向代理已生效。\033[0m"
+    echo -e "\033[32m目标源站: \033[1;36m$TARGET_IP\033[0m"
+    echo -e "\033[32m========================================================\033[0m"
+    echo -e "\033[36m请通知玩家使用以下地址连接游戏：\033[0m"
+    echo -e "\033[1;33m▶ Minecraft Java版 (TCP)  :  ${PUBLIC_IP}:25565\033[0m"
+    echo -e "\033[1;33m▶ Minecraft 基岩版 (UDP)  :  ${PUBLIC_IP}:19132\033[0m"
+    echo -e "\033[32m========================================================\033[0m\n"
 else
     echo -e "\033[31m[错误] Nginx 配置文件语法有误，请检查错误信息！\033[0m"
     exit 1
