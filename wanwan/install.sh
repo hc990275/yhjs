@@ -92,6 +92,8 @@ fi
 echo -e "\033[33m[进度] 正在测试 Nginx 配置...\033[0m"
 if nginx -t; then
     systemctl restart nginx
+    systemctl enable nginx >/dev/null 2>&1
+    echo -e "\033[32m[信息] 已设置 Nginx 开机自启动。\033[0m"
     
     # 获取外网 IP
     echo -e "\033[33m[进度] 正在获取服务器外网 IP...\033[0m"
