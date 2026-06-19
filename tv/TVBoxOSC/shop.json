@@ -1,0 +1,22 @@
+{
+  "name": "yhjs TVBoxOSC 下载商城",
+  "url": "https://ghproxy.com/https://raw.githubusercontent.com/hc990275/yhjs/main/tv/TVBoxOSC",
+  "version": "1.0",
+  "update": "https://ghproxy.com/https://raw.githubusercontent.com/hc990275/yhjs/main/tv/TVBoxOSC/tvbox/api.json",
+  "author": "yhjs",
+  "sites": [
+    {
+      "key": "yhjs_TVBoxOSC",
+      "name": "yhjs TVBoxOSC 完整包",
+      "type": 3,
+      "api": "csp_Config",
+      "searchable": 0,
+      "changeable": 0,
+      "ext": "https://ghproxy.com/https://raw.githubusercontent.com/hc990275/yhjs/main/tv/TVBoxOSC/tvbox/api.json"
+    }
+  ],
+  "check": {
+    "url": "https://ghproxy.com/https://raw.githubusercontent.com/hc990275/yhjs/main/tv/TVBoxOSC/更新.sh",
+    "info": "yhjs TVBoxOSC 下载商城"
+  }
+}
