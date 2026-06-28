@@ -21,3 +21,6 @@ vmess://ewogICJ2IjogIjIiLAogICJwcyI6ICJKUC1PcmFjbGVfQ2xvdWQiLAogICJhZGQiOiAiY2Yu
 hysteria2://f0fe7c66-e02e-4074-8b52-b9cf3b1126c3@161.33.10.177:18003/?sni=www.bing.com&insecure=1&alpn=h3&obfs=none#JP-Oracle_Cloud
 
 tuic://f0fe7c66-e02e-4074-8b52-b9cf3b1126c3:HzAEHolVpV9b79h47ABGgno2@161.33.10.177:18004?sni=www.bing.com&congestion_control=bbr&udp_relay_mode=native&alpn=h3&allow_insecure=1#JP-Oracle_Cloud
+
+
+vless://540fbc09-4a07-401b-99c0-e91254094454@152.228.135.195:2053?path=%2Fproxyip%3Dtw.william.us.ci%3Fuuid%3D98dd9c1c-5e83-45f1-9fbf-2b18aafdd2a0&security=tls&encryption=none&insecure=0&host=sni.868001.xyz&fp=chrome&ech=cloudflare-ech.com%2Bhttps%3A%2F%2Fodvr.nic.cz%2Fdoh&type=ws&allowInsecure=0&sni=sni.868001.xyz#%F0%9F%87%AB%F0%9F%87%B7%20%E6%B3%95%E5%9B%BD%2001
