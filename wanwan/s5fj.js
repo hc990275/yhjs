@@ -217,4 +217,174 @@ function handleSocks5(socket, initialBuffer) {
           return socket.destroy();
         }
 
-    
+        dstPort = data.readUInt16BE(offset);
+        socket.removeListener('data', onData);
+
+        const connectTarget = (resolvedIp) => {
+          const target = net.connect({ port: dstPort, host: resolvedIp, allowHalfOpen: false });
+
+          target.setNoDelay(true);
+          socket.setNoDelay(true);
+          target.setKeepAlive(true, 15000);
+          socket.setKeepAlive(true, 15000);
+
+          try { target._readableState.highWaterMark = 1048576; } catch (e) { }
+          try { target._writableState.highWaterMark = 1048576; } catch (e) { }
+          try { socket._readableState.highWaterMark = 1048576; } catch (e) { }
+          try { socket._writableState.highWaterMark = 1048576; } catch (e) { }
+
+          target.setTimeout(30000);
+
+          target.once('timeout', () => target.destroy());
+
+          target.once('connect', () => {
+            target.setTimeout(0);
+            socket.setTimeout(0);
+            socket.write(Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0, 0]));
+
+            target.pipe(socket);
+            socket.pipe(target);
+
+            if (authUser) {
+              let lastSockRead = socket.bytesRead || 0;
+              let lastTargetRead = 0;
+
+              const recordTraffic = (added) => {
+                if (added <= 0) return;
+                authUser.trafficUsed += added;
+                const currentDelta = trafficDelta.get(authUser.username) || 0;
+                trafficDelta.set(authUser.username, currentDelta + added);
+                
+                if (authUser.trafficUsed >= authUser.trafficLimit) {
+                  socket.destroy(); target.destroy();
+                }
+              };
+
+              const trafficTimer = setInterval(() => {
+                if (socket.destroyed && target.destroyed) return clearInterval(trafficTimer);
+                const curSock = socket.bytesRead || 0;
+                const curTarget = target.bytesRead || 0;
+                const added = (curSock - lastSockRead) + (curTarget - lastTargetRead);
+
+                if (added > 0) {
+                  recordTraffic(added);
+                  lastSockRead = curSock;
+                  lastTargetRead = curTarget;
+                }
+              }, 2000);
+
+              const onEnd = () => {
+                clearInterval(trafficTimer);
+                const curSock = socket.bytesRead || 0;
+                const curTarget = target.bytesRead || 0;
+                const added = Math.max(0, curSock - lastSockRead) + Math.max(0, curTarget - lastTargetRead);
+                recordTraffic(added);
+                if (!target.destroyed) target.end();
+                if (!socket.destroyed) socket.end();
+              };
+
+              socket.on('close', onEnd);
+              target.on('close', onEnd);
+              socket.on('error', () => { socket.destroy(); target.destroy(); });
+              target.on('error', () => { target.destroy(); socket.destroy(); });
+            } else {
+              socket.on('end', () => target.end());
+              target.on('end', () => socket.end());
+              socket.on('error', () => { socket.destroy(); target.destroy(); });
+              target.on('error', () => { target.destroy(); socket.destroy(); });
+            }
+          });
+
+          target.on('error', () => {
+            try { socket.write(Buffer.from([0x05, 0x05, 0x00, 0x01, 0, 0, 0, 0, 0, 0])); } catch (e) { }
+            socket.destroy();
+          });
+        }; 
+
+        if (atyp === 0x01 || atyp === 0x04) {
+          connectTarget(dstAddr);
+        } else {
+          extremeResolveDns(dstAddr).then(connectTarget).catch(() => {
+            try { socket.write(Buffer.from([0x05, 0x04, 0x00, 0x01, 0, 0, 0, 0, 0, 0])); } catch (e) { }
+            socket.destroy();
+          });
+        }
+      }
+    } catch (err) { socket.destroy(); }
+  };
+
+  socket.on('data', onData);
+  socket.on('error', () => { });
+  if (initialBuffer) onData(initialBuffer);
+}
+
+// ========== 极简 HTTP 接口用于接收推送 ==========
+const httpServer = http.createServer((req, res) => {
+  // 健康度探活接口
+  if (req.method === 'GET' && req.url === '/api/health') {
+    let totalActive = 0;
+    for (const count of userConnCount.values()) totalActive += count;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({ status: 'ok', uptime: process.uptime(), connections: totalActive, activeUsers: userConnCount.size }));
+  }
+
+  if (req.method === 'POST' && req.url === '/api/s5-sync') {
+    const token = req.headers['authorization'];
+    if (token !== SLAVE_PASSWORD) {
+      res.writeHead(401, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ success: false, msg: '未授权' }));
+    }
+
+    let body = '';
+    req.on('data', chunk => {
+      body += chunk.toString();
+    });
+    req.on('end', () => {
+      try {
+        const payload = JSON.parse(body);
+        
+        // 提取并保存数据
+        fs.writeFileSync(dataFile, JSON.stringify(payload.accounts || payload, null, 2));
+        globalAccounts = payload.accounts || payload;
+        
+        if (payload.masterUrl) masterUrl = payload.masterUrl;
+        if (payload.masterToken) masterToken = payload.masterToken;
+        
+        rebuildIndex();
+        console.log(`[数据接收] 成功接收主机推送，更新了 ${globalAccounts.length} 个账号。`);
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: true }));
+      } catch (e) {
+        console.error('处理同步数据失败:', e.message);
+        res.writeHead(500, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ success: false, msg: e.message }));
+      }
+    });
+  } else {
+    res.writeHead(404);
+    res.end('Not Found');
+  }
+});
+
+// ========== 端口复用网关 ==========
+const mainServer = net.createServer((socket) => {
+  socket.once('data', (buffer) => {
+    if (buffer[0] === 0x05) {
+      handleSocks5(socket, buffer);
+    } else {
+      httpServer.emit('connection', socket);
+      socket.pause();
+      socket.unshift(buffer);
+      socket.resume();
+    }
+  });
+  socket.on('error', () => {});
+});
+
+mainServer.listen(PORT, '0.0.0.0', () => {
+  console.log(`===========================================`);
+  console.log(`🚀 S5 分机节点启动成功!`);
+  console.log(`🔌 监听端口: ${PORT}`);
+  console.log(`📡 准备接收主机数据...`);
+  console.log(`===========================================`);
+});
